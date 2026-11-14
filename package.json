@@ -1,0 +1,44 @@
+{
+  "name": "local-tool-manage",
+  "productName": "LocalToolManage",
+  "version": "0.1.0",
+  "private": true,
+  "description": "个人本地图库管理工具",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.16",
+    "@electric-sql/pglite-pgvector": "0.0.17",
+    "ali-oss": "^6.23.0",
+    "drizzle-orm": "^0.45.4",
+    "onnxruntime-node": "^1.31.1",
+    "openai": "^7.57.0",
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "@types/ali-oss": "^6.16.11",
+    "@types/node": "^22.15.0",
+    "@vitejs/plugin-vue": "^6.0.11",
+    "drizzle-kit": "^0.31.11",
+    "electron": "^45.3.2",
+    "electron-vite": "^6.0.0",
+    "element-plus": "^2.14.8",
+    "pinia": "^4.1.0",
+    "sass-embedded": "^1.93.0",
+    "tsx": "^4.20.0",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.8",
+    "vue": "^3.5.45",
+    "vue-router": "^5.5.1",
+    "vue-tsc": "^3.3.14"
+  }
+}
