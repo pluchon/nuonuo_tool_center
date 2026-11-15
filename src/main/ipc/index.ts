@@ -1,9 +1,10 @@
 import { BrowserWindow, dialog } from 'electron'
-import { IpcChannel } from '@shared/api'
+import { IpcChannel, type ThemeMode } from '@shared/api'
 import type { DataPaths } from '../config/paths'
 import { BizError } from '../common/bizError'
 import { addRoot, listRoots } from '../services/libraryService'
 import { getSystemInfo } from '../services/systemService'
+import { applyTitleBarTheme } from '../window/titleBar'
 import { handle } from './handle'
 
 // 注册全部 IPC 处理器：只做参数绑定与调用服务
@@ -18,5 +19,14 @@ export function registerIpcHandlers(paths: DataPaths): void {
       throw new BizError('CANCELLED', '已取消选择')
     }
     return addRoot(picked.filePaths[0])
+  })
+  handle(IpcChannel.windowSetTheme, async (event, theme: ThemeMode) => {
+    if (theme !== 'light' && theme !== 'dark') {
+      throw new BizError('BAD_REQUEST', '未知主题')
+    }
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (win) {
+      applyTitleBarTheme(win, theme)
+    }
   })
 }

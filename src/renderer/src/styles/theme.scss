@@ -1,0 +1,85 @@
+// 诺诺主题：配色取自诺诺的雨天书屋插画（紫阳花紫、发饰樱粉、灯笼暖橙、木质暖褐）
+
+$rain-light: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='240'%3E%3Cg stroke='%238E8AB8' stroke-opacity='0.45' stroke-width='1' stroke-linecap='round'%3E%3Cline x1='18' y1='8' x2='14' y2='38'/%3E%3Cline x1='64' y1='120' x2='60' y2='146'/%3E%3Cline x1='102' y1='40' x2='98' y2='74'/%3E%3Cline x1='146' y1='170' x2='142' y2='196'/%3E%3Cline x1='188' y1='70' x2='184' y2='100'/%3E%3Cline x1='40' y1='200' x2='37' y2='224'/%3E%3Cline x1='128' y1='96' x2='125' y2='118'/%3E%3C/g%3E%3C/svg%3E";
+$rain-dark: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='240'%3E%3Cg stroke='white' stroke-opacity='0.32' stroke-width='1' stroke-linecap='round'%3E%3Cline x1='18' y1='8' x2='14' y2='38'/%3E%3Cline x1='64' y1='120' x2='60' y2='146'/%3E%3Cline x1='102' y1='40' x2='98' y2='74'/%3E%3Cline x1='146' y1='170' x2='142' y2='196'/%3E%3Cline x1='188' y1='70' x2='184' y2='100'/%3E%3Cline x1='40' y1='200' x2='37' y2='224'/%3E%3Cline x1='128' y1='96' x2='125' y2='118'/%3E%3C/g%3E%3C/svg%3E";
+
+// 浅色：雨天午后
+:root {
+  --nn-font: 'Nunito', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
+
+  --nn-tint: rgba(246, 241, 252, 0.5);
+  --nn-glass: rgba(255, 255, 255, 0.6);
+  --nn-glass-strong: rgba(255, 255, 255, 0.82);
+  --nn-glass-edge: rgba(255, 255, 255, 0.75);
+  --nn-line: rgba(130, 108, 200, 0.18);
+  --nn-shadow: 0 10px 30px rgba(96, 76, 160, 0.14);
+
+  --nn-text: #43354f;
+  --nn-text-2: #74668a;
+  --nn-text-3: #a497b6;
+
+  --nn-primary: #9b87d9;
+  --nn-primary-ink: #5e4aa6;
+  --nn-primary-soft: rgba(155, 135, 217, 0.18);
+  --nn-sakura: #ef93ae;
+  --nn-sakura-ink: #b04b6c;
+  --nn-sakura-soft: rgba(239, 147, 174, 0.18);
+  --nn-lantern: #e8964a;
+  --nn-lantern-ink: #9a5516;
+  --nn-lantern-soft: rgba(232, 150, 74, 0.16);
+  --nn-mint-ink: #2f7a66;
+  --nn-mint-soft: rgba(92, 190, 165, 0.18);
+
+  --nn-art-filter: blur(24px) saturate(1.15) brightness(1.04);
+  --nn-glow: radial-gradient(circle at 88% 12%, rgba(255, 214, 170, 0.35), transparent 42%);
+  --nn-rain: url("#{$rain-light}");
+
+  // Element Plus 主色映射到紫阳花紫
+  --el-color-primary: #9b87d9;
+  --el-color-primary-light-3: #b9abe4;
+  --el-color-primary-light-5: #cdc3ec;
+  --el-color-primary-light-7: #e1dbf4;
+  --el-color-primary-light-8: #ebe7f7;
+  --el-color-primary-light-9: #f5f3fb;
+  --el-color-primary-dark-2: #7c6cae;
+  --el-border-radius-base: 10px;
+  --el-font-family: var(--nn-font);
+}
+
+// 深色：夜雨灯笼
+html.dark {
+  --nn-tint: rgba(20, 16, 34, 0.58);
+  --nn-glass: rgba(36, 30, 56, 0.62);
+  --nn-glass-strong: rgba(42, 35, 64, 0.86);
+  --nn-glass-edge: rgba(255, 255, 255, 0.08);
+  --nn-line: rgba(190, 170, 240, 0.16);
+  --nn-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+
+  --nn-text: #efe7f8;
+  --nn-text-2: #bbaed0;
+  --nn-text-3: #8a7da0;
+
+  --nn-primary: #b7a4f0;
+  --nn-primary-ink: #d9cefc;
+  --nn-primary-soft: rgba(183, 164, 240, 0.18);
+  --nn-sakura: #f4a9c0;
+  --nn-sakura-ink: #ffc9da;
+  --nn-sakura-soft: rgba(244, 169, 192, 0.16);
+  --nn-lantern: #f2b062;
+  --nn-lantern-ink: #ffd29c;
+  --nn-lantern-soft: rgba(242, 176, 98, 0.16);
+  --nn-mint-ink: #a6ead7;
+  --nn-mint-soft: rgba(111, 214, 191, 0.14);
+
+  --nn-art-filter: blur(24px) saturate(1.1) brightness(0.5);
+  --nn-glow: radial-gradient(circle at 88% 12%, rgba(242, 176, 98, 0.22), transparent 45%);
+  --nn-rain: url("#{$rain-dark}");
+
+  --el-color-primary: #b7a4f0;
+  --el-color-primary-light-3: #8676b0;
+  --el-color-primary-light-5: #6a5d8e;
+  --el-color-primary-light-7: #4d446a;
+  --el-color-primary-light-8: #3f3858;
+  --el-color-primary-light-9: #312b46;
+  --el-color-primary-dark-2: #cdbff5;
+}

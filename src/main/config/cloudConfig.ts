@@ -6,10 +6,10 @@ export const OSS_CONFIG = {
   signedUrlTtlSeconds: 600
 } as const
 
-// 百炼 OpenAI 兼容端点与默认模型（模型名以 /models 实际返回为准）
+// 百炼 OpenAI 兼容端点与默认模型（模型名以 /models 实际返回为准；以图搜图用 flash，max 单次要 1~3 分钟）
 export const BAILIAN_CONFIG = {
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-  visionSearchModel: 'qwen3.8-max',
+  visionSearchModel: 'qwen3.8-flash',
   requestTimeoutMs: 300_000
 } as const
 

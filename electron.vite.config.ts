@@ -29,6 +29,8 @@ export default defineConfig({
         '@shared': resolve('src/shared')
       }
     },
+    // 本机 localhost 会被 Vite 解析成 ::1，而 Electron 按 127.0.0.1 去连，开发模式会白屏；固定监听 IPv4
+    server: { host: '127.0.0.1' },
     plugins: [vue()]
   }
 })

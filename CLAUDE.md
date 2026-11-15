@@ -7,6 +7,7 @@
 - 开发：`npm run dev`；类型检查：`npm run typecheck`；构建：`npm run build`；改了 `src/main/db/schema.ts` 后执行 `npm run db:generate` 生成新迁移（只往前加，不改历史迁移）。
 - 数据目录：`%APPDATA%\LocalToolManage`（`pgdata`、`thumbs`、`models`）。PGlite 只有一条连接：应用运行时不要用脚本去开同一个 pgdata。
 - 关闭应用要走正常退出（关窗口），确保数据库落盘；不要用 `taskkill /F` 杀进程。
+- 桌面快捷方式 `LocalToolManage.lnk` 指向 `node_modules\electron\dist\electron.exe <项目目录>`，跑的是 `out/` 构建产物：改完代码要 `npm run build` 才生效。应用有单实例锁，开发模式和快捷方式不能同时开（后开的只会唤起已有窗口）。
 
 ## 本机资源（核显笔记本，曾整机卡死）
 
@@ -23,7 +24,7 @@
 
 - 凭证只从用户环境变量读取：`DASHSCOPE_API_KEY`、`ALIYUN_ACCESS_KEY_ID`、`ALIYUN_ACCESS_KEY_SECRET`。不打印、不落库、不写日志。
 - OSS：bucket `zlhimage`（`oss-cn-guangzhou`），临时前缀 `local_image_temp/`。`local_image_temp/` 这个 0 字节对象是控制台的目录占位，清理时不能删。临时对象私有 ACL 上传，用完在 `finally` 里删除。
-- 百炼：OpenAI 兼容端点 `https://dashscope.aliyuncs.com/compatible-mode/v1`，以图搜图用 Responses API + `image_search` 工具。模型用最新可用的 Qwen（以 `/v1/models` 实际返回为准）。客户端必须 `maxRetries: 0`。
+- 百炼：OpenAI 兼容端点 `https://dashscope.aliyuncs.com/compatible-mode/v1`，以图搜图用 Responses API + `image_search` 工具。以图搜图用 `qwen3.8-flash`（用户指定，max 太慢）；其他场景用最新可用的 Qwen（以 `/v1/models` 实际返回为准）。客户端必须 `maxRetries: 0`。
 - 以图搜图的出处只采用工具返回的结果，不采用模型自己写的链接。
 
 ## Codex CLI（生图、写代码）

@@ -1,17 +1,46 @@
+@use './theme.scss';
+
 html,
 body,
 #app {
   margin: 0;
   height: 100%;
+  overflow: hidden;
 }
 
 body {
-  background: var(--el-bg-color-page);
-  color: var(--el-text-color-primary);
-  font-family:
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    'Microsoft YaHei',
-    sans-serif;
+  background: #efe9f7;
+  color: var(--nn-text);
+  font-family: var(--nn-font);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+html.dark body {
+  background: #17132a;
+}
+
+// 深色主题的主色偏浅，主按钮文字改用深紫，白字对比度不够
+html.dark .el-button--primary {
+  --el-button-text-color: #251d3d;
+  --el-button-hover-text-color: #251d3d;
+  --el-button-active-text-color: #251d3d;
+}
+
+// 半透明“玻璃”面板：背景插画已模糊过，这里不用 backdrop-filter，避免雨滴动画让核显逐帧重算
+.nn-glass {
+  background: var(--nn-glass);
+  border: 1px solid var(--nn-glass-edge);
+  border-radius: 18px;
+  box-shadow: var(--nn-shadow);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--nn-primary-soft);
+  border-radius: 999px;
 }

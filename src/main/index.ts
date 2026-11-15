@@ -5,6 +5,7 @@ import { resolveDataPaths } from './config/paths'
 import { closeDatabase, openDatabase } from './db/client'
 import { registerIpcHandlers } from './ipc'
 import { handleLtmProtocol, registerLtmSchemePrivileges } from './protocol/ltmProtocol'
+import { initialTitleBarOverlay } from './window/titleBar'
 
 const currentDir = fileURLToPath(new URL('.', import.meta.url))
 
@@ -19,6 +20,10 @@ function createMainWindow(): BrowserWindow {
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
+    title: '诺诺的图书馆',
+    backgroundColor: '#EFE9F7',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: initialTitleBarOverlay(),
     webPreferences: {
       preload: join(currentDir, '../preload/index.cjs'),
       contextIsolation: true,
@@ -57,7 +62,21 @@ async function bootstrap(): Promise<void> {
   createMainWindow()
 }
 
-app.whenReady().then(bootstrap)
+// 单实例：PGlite 只允许一个进程打开数据目录（开发模式与桌面快捷方式共用），第二个实例只负责唤起已有窗口
+if (app.requestSingleInstanceLock()) {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (win) {
+      if (win.isMinimized()) {
+        win.restore()
+      }
+      win.focus()
+    }
+  })
+  app.whenReady().then(bootstrap)
+} else {
+  app.exit(0)
+}
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {

@@ -1,32 +1,52 @@
 <template>
   <div class="home">
-    <header class="home__header">
-      <h1>本地图库</h1>
-      <el-button type="primary" :loading="store.importing" @click="onImport">导入目录</el-button>
-    </header>
+    <div v-if="store.loading" class="home__panel nn-glass">
+      <el-skeleton :rows="5" animated />
+    </div>
 
-    <div v-if="store.loading" v-loading="true" class="home__state" />
-    <el-result v-else-if="store.error" icon="error" title="加载失败" :sub-title="store.error">
-      <template #extra>
-        <el-button @click="store.load()">重试</el-button>
-      </template>
-    </el-result>
+    <div v-else-if="store.error" class="home__panel home__panel--center nn-glass">
+      <NonoBubble message="呜…书架没打开，是不是哪里出问题了？" />
+      <p class="home__error">{{ store.error }}</p>
+      <el-button round @click="store.load()">重试</el-button>
+    </div>
+
+    <section v-else-if="store.roots.length === 0" class="home__welcome nn-glass">
+      <img class="home__art" :src="nonoArt" alt="雨天里撑着透明伞的诺诺" />
+      <div class="home__intro">
+        <p class="home__kicker">Rainy day library</p>
+        <h1 class="home__title">欢迎来到诺诺的图书馆</h1>
+        <p class="home__desc">把图片目录交给诺诺：她会帮你整理、打标签、查出处。删掉的图先进回收站，所有整理都能撤销。</p>
+        <div class="home__tags">
+          <span class="home__tag home__tag--lilac">只在本机运行</span>
+          <span class="home__tag home__tag--sakura">删除可找回</span>
+          <span class="home__tag home__tag--lantern">敏感图你说了算</span>
+        </div>
+        <el-button type="primary" size="large" round :loading="store.importing" @click="onImport">
+          导入图片目录
+        </el-button>
+      </div>
+    </section>
+
     <template v-else>
-      <el-empty v-if="store.roots.length === 0" description="还没有导入任何目录" />
-      <el-table v-else :data="store.roots" class="home__table">
-        <el-table-column prop="name" label="名称" width="220" />
-        <el-table-column prop="path" label="路径" />
-      </el-table>
-
-      <el-descriptions v-if="store.systemInfo" title="运行环境" :column="2" border class="home__info">
-        <el-descriptions-item label="数据库">{{ dbSummary }}</el-descriptions-item>
-        <el-descriptions-item label="扩展">{{ store.systemInfo.database.extensions.join(', ') }}</el-descriptions-item>
-        <el-descriptions-item label="百炼密钥">{{ yesNo(store.systemInfo.credentials.dashscope) }}</el-descriptions-item>
-        <el-descriptions-item label="阿里云 AccessKey">
-          {{ yesNo(store.systemInfo.credentials.aliyunAccessKey) }}
-        </el-descriptions-item>
-        <el-descriptions-item label="数据目录" :span="2">{{ store.systemInfo.dataDir }}</el-descriptions-item>
-      </el-descriptions>
+      <header class="home__header">
+        <div>
+          <h1 class="home__title home__title--small">全部图片</h1>
+          <p class="home__sub">已导入 {{ store.roots.length }} 个目录</p>
+        </div>
+        <el-button type="primary" round :loading="store.importing" @click="onImport">导入目录</el-button>
+      </header>
+      <div class="home__roots">
+        <article v-for="root in store.roots" :key="root.id" class="home__root nn-glass">
+          <div class="home__root-icon"><el-icon><FolderOpened /></el-icon></div>
+          <div class="home__root-text">
+            <strong>{{ root.name }}</strong>
+            <span>{{ root.path }}</span>
+          </div>
+        </article>
+      </div>
+      <div class="home__tip nn-glass">
+        <NonoBubble compact message="扫描和缩略图还在做哦，做好以后图片会排在这里～" />
+      </div>
     </template>
   </div>
 </template>

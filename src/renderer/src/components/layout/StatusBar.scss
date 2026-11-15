@@ -1,0 +1,41 @@
+.status-bar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 28px;
+  padding: 0 16px;
+  font-size: 11px;
+  color: var(--nn-text-2);
+
+  &__item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  &__paw {
+    color: var(--nn-sakura);
+  }
+
+  &__spacer {
+    flex: 1;
+  }
+
+  &__chip {
+    padding: 1px 9px;
+    border-radius: 999px;
+    font-weight: 700;
+
+    &--ok {
+      background: var(--nn-mint-soft);
+      color: var(--nn-mint-ink);
+    }
+
+    &--off {
+      background: var(--nn-lantern-soft);
+      color: var(--nn-lantern-ink);
+    }
+  }
+}

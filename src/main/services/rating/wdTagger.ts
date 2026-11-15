@@ -119,7 +119,12 @@ export class WdTagger {
   }
 }
 
-// 上云闸门：只有模型判定为 general 且 general 分数不低于阈值才放行
-export function isCloudAllowed(prediction: WdPrediction, minGeneralScore = 0.5): boolean {
-  return prediction.rating === 'general' && prediction.ratingScores.general >= minGeneralScore
+// 模型判定为“明显敏感”：questionable 与 explicit 分数之和达到阈值；轻微的 sensitive 不算
+export function isObviouslyNsfw(prediction: WdPrediction, threshold = 0.5): boolean {
+  return prediction.ratingScores.questionable + prediction.ratingScores.explicit >= threshold
+}
+
+// 上云闸门（仅模型分级时使用）：只拦明显敏感的图；用户手动分级优先于此结果
+export function isCloudAllowed(prediction: WdPrediction, threshold = 0.5): boolean {
+  return !isObviouslyNsfw(prediction, threshold)
 }

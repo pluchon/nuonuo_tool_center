@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IpcChannel, type ApiResponse, type LibraryRootVO, type SystemInfoVO } from '@shared/api'
+import { IpcChannel, type ApiResponse, type LibraryRootVO, type SystemInfoVO, type ThemeMode } from '@shared/api'
 
 // 暴露给渲染进程的接口：只开放具体方法，不暴露 ipcRenderer 本身
 const api = {
@@ -9,6 +9,9 @@ const api = {
   library: {
     listRoots: (): Promise<ApiResponse<LibraryRootVO[]>> => ipcRenderer.invoke(IpcChannel.libraryListRoots),
     addRoot: (): Promise<ApiResponse<LibraryRootVO>> => ipcRenderer.invoke(IpcChannel.libraryAddRoot)
+  },
+  window: {
+    setTheme: (theme: ThemeMode): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.windowSetTheme, theme)
   }
 }
 

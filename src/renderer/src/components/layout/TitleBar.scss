@@ -1,0 +1,60 @@
+.title-bar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 0 0 14px;
+  // 系统窗口按钮区宽度：支持 Window Controls Overlay 时按实际宽度留白，否则按约 140px 留白
+  padding-right: calc(100vw - env(titlebar-area-width, calc(100vw - 140px)) + 8px);
+  -webkit-app-region: drag;
+
+  &__logo {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1.5px solid var(--nn-glass-strong);
+    background-size: 520% auto;
+    background-position: 59% 13%;
+  }
+
+  &__name {
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--nn-text);
+    letter-spacing: 0.5px;
+  }
+
+  &__crumb {
+    font-size: 12px;
+    color: var(--nn-text-3);
+  }
+
+  &__actions {
+    margin-left: auto;
+    display: flex;
+    gap: 4px;
+    -webkit-app-region: no-drag;
+  }
+
+  &__btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 26px;
+    border: none;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--nn-text-2);
+    font-size: 15px;
+    cursor: pointer;
+    transition: background 0.15s;
+
+    &:hover {
+      background: var(--nn-primary-soft);
+      color: var(--nn-primary-ink);
+    }
+  }
+}

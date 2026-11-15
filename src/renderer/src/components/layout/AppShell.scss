@@ -1,0 +1,89 @@
+.app-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+
+  // 背景插画：放大后模糊，只留下紫阳花和灯光的色块氛围
+  &__art {
+    position: absolute;
+    inset: -60px;
+    background-size: cover;
+    background-position: center 30%;
+    filter: var(--nn-art-filter);
+  }
+
+  &__tint {
+    position: absolute;
+    inset: 0;
+    background: var(--nn-glow), var(--nn-tint);
+  }
+
+  // 雨丝：两层不同疏密与速度的平铺图，只用 transform 动画，交给合成层处理
+  &__rain {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+
+    &::before,
+    &::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      background-image: var(--nn-rain);
+      will-change: transform;
+    }
+
+    &::before {
+      top: -240px;
+      bottom: 0;
+      animation: nn-rain-fall 1.6s linear infinite;
+    }
+
+    &::after {
+      top: -360px;
+      bottom: 0;
+      background-size: 330px 360px;
+      opacity: 0.6;
+      animation: nn-rain-fall-far 2.6s linear infinite;
+    }
+  }
+
+  &__body {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: 12px;
+    padding: 4px 12px 0;
+  }
+
+  &__main {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+  }
+}
+
+@keyframes nn-rain-fall {
+  to {
+    transform: translateY(240px);
+  }
+}
+
+@keyframes nn-rain-fall-far {
+  to {
+    transform: translateY(360px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell__rain::before,
+  .app-shell__rain::after {
+    animation: none;
+  }
+}

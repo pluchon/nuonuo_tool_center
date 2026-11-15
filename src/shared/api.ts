@@ -10,8 +10,12 @@ export type ApiErrorCode = 'BAD_REQUEST' | 'NOT_FOUND' | 'CONFLICT' | 'CANCELLED
 export const IpcChannel = {
   systemGetInfo: 'system:getInfo',
   libraryListRoots: 'library:listRoots',
-  libraryAddRoot: 'library:addRoot'
+  libraryAddRoot: 'library:addRoot',
+  windowSetTheme: 'window:setTheme'
 } as const
+
+// 界面主题：雨天午后（浅色）/ 夜雨灯笼（深色）
+export type ThemeMode = 'light' | 'dark'
 
 // 系统信息：版本、数据目录、数据库状态与凭证是否就绪（只给布尔值，不给内容）
 export interface SystemInfoVO {
