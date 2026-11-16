@@ -1,0 +1,125 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Main.dc.html": {
+      "h": 820,
+      "is_interactive": true,
+      "title": "应用原型",
+      "w": 1280,
+      "x": 0,
+      "y": 0
+    },
+    "State-Broken.dc.html": {
+      "h": 820,
+      "is_interactive": true,
+      "title": "单张图异常：生成中 / 无法预览 / 文件不见了",
+      "w": 1280,
+      "x": 4080,
+      "y": 1340
+    },
+    "State-DbError.dc.html": {
+      "h": 820,
+      "is_interactive": true,
+      "title": "图库数据打不开",
+      "w": 1280,
+      "x": 2720,
+      "y": 2280
+    },
+    "State-First.dc.html": {
+      "h": 820,
+      "is_interactive": true,
+      "title": "第一次打开：还没有任何图片",
+      "w": 1280,
+      "x": 0,
+      "y": 1340
+    },
+    "State-NoResult.dc.html": {
+      "h": 820,
+      "is_interactive": true,
+      "title": "搜索没有结果",
+      "w": 1280,
+      "x": 0,
+      "y": 2280
+    },
+    "State-Offline.dc.html": {
+      "h": 820,
+      "is_interactive": true,
+      "title": "源目录找不到（移动硬盘没接）",
+      "w": 1280,
+      "x": 2720,
+      "y": 1340
+    },
+    "State-OpFail.dc.html": {
+      "h": 820,
+      "is_interactive": true,
+      "title": "操作失败提示",
+      "w": 1280,
+      "x": 1360,
+      "y": 2280
+    },
+    "State-Scanning.dc.html": {
+      "h": 820,
+      "is_interactive": true,
+      "title": "导入后正在扫描",
+      "w": 1280,
+      "x": 1360,
+      "y": 1340
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-11-15T03:10:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "noteOrder": [
+    "rowTitle",
+    "feedback",
+    "stateTitle"
+  ],
+  "notes": {
+    "feedback": {
+      "fill": "purple",
+      "text": "主画板是完整原型\n点左侧导航切换图库、目录、R-18 和标签管理\n图库里可以点选、多选（Ctrl / Shift）、改标签、开关 R-18\n目录右键有菜单；图片可拖到源目录\n删除直接进系统回收站，不设回收站页面\n所有 AI 功能暂不出现；看板娘位置留空等新角色。",
+      "w": 360,
+      "x": 1477,
+      "y": 0
+    },
+    "rowTitle": {
+      "kind": "title1",
+      "maxW": 2640,
+      "text": "诺诺的图床 · 本地版",
+      "w": 240,
+      "x": 0,
+      "y": -135
+    },
+    "stateTitle": {
+      "kind": "title1",
+      "maxW": 5360,
+      "text": "特殊状态与异常状态",
+      "w": 240,
+      "x": 0,
+      "y": 1060
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "State-First.dc.html",
+    "State-Scanning.dc.html",
+    "State-Offline.dc.html",
+    "State-Broken.dc.html",
+    "State-NoResult.dc.html",
+    "State-OpFail.dc.html",
+    "State-DbError.dc.html"
+  ],
+  "pages": [
+    {
+      "id": "page-1",
+      "name": "图床_本地非AI"
+    }
+  ],
+  "title": "诺诺的图床 本地版界面"
+}
