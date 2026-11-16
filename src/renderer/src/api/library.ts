@@ -1,12 +1,12 @@
-import type { LibraryRootVO } from '@shared/api'
+import type { LibraryOverviewVO, LibraryRootVO } from '@shared/api'
 import { unwrap } from './request'
 
-// 列出已导入的图库目录
-export function fetchLibraryRoots(): Promise<LibraryRootVO[]> {
-  return unwrap(window.api.library.listRoots())
+// 侧栏和底栏需要的数据：计数、源目录、顶层类目录
+export function fetchLibraryOverview(): Promise<LibraryOverviewVO> {
+  return unwrap(window.api.library.getOverview())
 }
 
-// 弹出目录选择框并导入所选目录
-export function importLibraryRoot(): Promise<LibraryRootVO> {
+// 选择文件夹并导入为源目录
+export function importSourceRoot(): Promise<LibraryRootVO> {
   return unwrap(window.api.library.addRoot())
 }

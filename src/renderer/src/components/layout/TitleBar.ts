@@ -1,29 +1,21 @@
-import { computed, defineComponent } from 'vue'
-import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { Moon, Sunny } from '@element-plus/icons-vue'
-import nonoArt from '@/assets/nono/nono-rain.webp'
-import { useThemeStore } from '@/stores/theme'
+import { defineComponent } from 'vue'
+import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '@/api/window'
+import brandAvatar from '@/assets/nono/brand-avatar.webp'
 
-// 自绘标题栏：整条可拖动窗口，右侧留出系统窗口按钮的位置
+// 自绘标题栏：左边品牌和设置，右边三颗窗口按钮；整条可拖动窗口
 export default defineComponent({
   name: 'TitleBar',
-  components: { Moon, Sunny },
   setup() {
-    const route = useRoute()
-    const theme = useThemeStore()
-
-    const pageTitle = computed(() => (route.meta.title as string | undefined) ?? '')
-    const logoStyle = { backgroundImage: `url(${nonoArt})` }
-
-    const onToggleTheme = async (): Promise<void> => {
-      try {
-        await theme.toggle()
-      } catch (err) {
-        ElMessage.error(err instanceof Error ? err.message : String(err))
-      }
+    // 窗口按钮失败（窗口正在关闭）时没有可补救的操作，忽略即可
+    const onMinimize = (): void => {
+      minimizeWindow().catch(() => undefined)
     }
-
-    return { theme, pageTitle, logoStyle, onToggleTheme }
+    const onToggleMaximize = (): void => {
+      toggleMaximizeWindow().catch(() => undefined)
+    }
+    const onClose = (): void => {
+      closeWindow().catch(() => undefined)
+    }
+    return { brandAvatar, onMinimize, onToggleMaximize, onClose }
   }
 })

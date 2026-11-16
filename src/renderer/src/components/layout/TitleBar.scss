@@ -1,60 +1,92 @@
+// 标题栏：不画底色，直接落在背景上（照原型）
 .title-bar {
   position: relative;
-  z-index: 2;
+  z-index: 6;
+  height: 42px;
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 0 0 14px;
-  // 系统窗口按钮区宽度：支持 Window Controls Overlay 时按实际宽度留白，否则按约 140px 留白
-  padding-right: calc(100vw - env(titlebar-area-width, calc(100vw - 140px)) + 8px);
+  gap: 10px;
+  padding: 0 0 0 20px;
   -webkit-app-region: drag;
 
-  &__logo {
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    border: 1.5px solid var(--nn-glass-strong);
-    background-size: 520% auto;
-    background-position: 59% 13%;
+  // 品牌头像：诺诺的大头（透明底）
+  &__brand {
+    width: 24px;
+    height: 24px;
+    object-fit: contain;
+    pointer-events: none;
   }
 
   &__name {
-    font-weight: 700;
-    font-size: 13px;
-    color: var(--nn-text);
-    letter-spacing: 0.5px;
+    font-weight: 800;
+    font-size: 14px;
+    letter-spacing: 0.6px;
+    color: var(--c-i-2E2440);
   }
 
-  &__crumb {
-    font-size: 12px;
-    color: var(--nn-text-3);
-  }
-
-  &__actions {
-    margin-left: auto;
-    display: flex;
-    gap: 4px;
-    -webkit-app-region: no-drag;
-  }
-
-  &__btn {
+  &__gear {
+    width: 26px;
+    height: 26px;
+    margin-left: -4px;
+    padding: 0;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--c-i-7F7494);
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 30px;
-    height: 26px;
-    border: none;
-    border-radius: 9px;
-    background: transparent;
-    color: var(--nn-text-2);
-    font-size: 15px;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: background 0.15s, color 0.15s;
+    -webkit-app-region: no-drag;
 
-    &:hover {
-      background: var(--nn-primary-soft);
-      color: var(--nn-primary-ink);
+    &:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--a) 12%, transparent);
+      color: var(--a-ink);
+    }
+
+    &:disabled {
+      cursor: default;
+    }
+  }
+
+  &__controls {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 42px;
+    padding-right: 14px;
+  }
+
+  &__win {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    -webkit-app-region: no-drag;
+
+    &--min {
+      border: 1px solid var(--a-line);
+      background: var(--a-soft);
+      color: var(--a);
+    }
+
+    &--max {
+      border: 1px solid var(--c-b-BFE3D6);
+      background: var(--c-b-E2F4EE);
+      color: var(--c-i-3F8F7B);
+    }
+
+    &--close {
+      border: 1px solid var(--c-b-F2C6D4);
+      background: var(--c-b-FCE7EE);
+      color: var(--c-i-C25B85);
     }
   }
 }

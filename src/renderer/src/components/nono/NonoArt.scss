@@ -1,0 +1,15 @@
+.nono-art {
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+
+  &--normal {
+    width: 200px;
+    height: 200px;
+  }
+
+  &--large {
+    width: 240px;
+    height: 240px;
+  }
+}

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm'
 import {
   bigint,
+  boolean,
   index,
   integer,
   jsonb,
@@ -22,10 +23,10 @@ export const EMBEDDING_DIMENSIONS = 1024
 export const ratingEnum = pgEnum('rating', ['UNKNOWN', 'GENERAL', 'SENSITIVE', 'QUESTIONABLE', 'EXPLICIT'])
 // 分级来源：模型判定或手动指定
 export const ratingSourceEnum = pgEnum('rating_source', ['MODEL', 'MANUAL'])
-// 文件位置状态
-export const fileStatusEnum = pgEnum('file_status', ['NORMAL', 'MISSING', 'TRASHED'])
-// 标签分类
-export const tagCategoryEnum = pgEnum('tag_category', ['GENERAL', 'CHARACTER', 'SERIES', 'ARTIST', 'OTHER'])
+// 文件位置状态：DELETED 表示已删进系统回收站
+export const fileStatusEnum = pgEnum('file_status', ['NORMAL', 'MISSING', 'DELETED'])
+// 目录类型：源目录（导入的原始目录）或类目录（应用管理的图库文件夹，只有一条）
+export const rootKindEnum = pgEnum('root_kind', ['SOURCE', 'CATEGORY'])
 // 标签来源：手动或云端视觉模型
 export const tagSourceEnum = pgEnum('tag_source', ['MANUAL', 'VLM'])
 // 标签状态：AI 给出的先是建议，确认后才生效
@@ -37,7 +38,7 @@ export const fileOpOriginEnum = pgEnum('file_op_origin', ['USER', 'AI'])
 // 文件整理批次状态
 export const fileOpBatchStatusEnum = pgEnum('file_op_batch_status', ['PLANNED', 'APPLYING', 'APPLIED', 'UNDONE', 'FAILED'])
 // 文件操作类型
-export const fileOpTypeEnum = pgEnum('file_op_type', ['MOVE', 'RENAME', 'TRASH', 'RESTORE', 'PURGE'])
+export const fileOpTypeEnum = pgEnum('file_op_type', ['MOVE', 'COPY', 'RENAME', 'DELETE'])
 // 单步文件操作状态
 export const fileOpStatusEnum = pgEnum('file_op_status', ['PENDING', 'DONE', 'FAILED', 'REVERTED'])
 // 助手消息角色
@@ -56,16 +57,19 @@ function baseColumns() {
   }
 }
 
-// 导入的图库目录
+// 图库目录：导入的源目录，以及类目录所在的图库文件夹
 export const libraryRoot = pgTable(
   'library_root',
   {
     ...baseColumns(),
+    kind: rootKindEnum('kind').notNull().default('SOURCE'),
     name: text('name').notNull(),
-    path: text('path').notNull(),
-    trashDir: text('trash_dir').notNull()
+    path: text('path').notNull()
   },
-  (t) => [uniqueIndex('uk_library_root_path').on(t.path).where(sql`${t.deleteState} = 0`)]
+  (t) => [
+    uniqueIndex('uk_library_root_path').on(sql`lower(${t.path})`).where(sql`${t.deleteState} = 0`),
+    uniqueIndex('uk_library_root_category').on(t.kind).where(sql`${t.deleteState} = 0 and ${t.kind} = 'CATEGORY'`)
+  ]
 )
 
 // 按内容去重的图片，标签、描述、分级都挂在内容上
@@ -83,6 +87,11 @@ export const image = pgTable(
     rating: ratingEnum('rating').notNull().default('UNKNOWN'),
     ratingSource: ratingSourceEnum('rating_source'),
     ratingScores: jsonb('rating_scores'),
+    // R-18 开关：用户手动标记，打开后网格里遮挡
+    isR18: boolean('is_r18').notNull().default(false),
+    // 拍摄时间与拍摄信息（机身、镜头、焦距、光圈、快门、ISO），没有 EXIF 时为空
+    takenAt: timestamp('taken_at', { withTimezone: true }),
+    exif: jsonb('exif'),
     thumbReady: smallint('thumb_ready').notNull().default(0)
   },
   (t) => [uniqueIndex('uk_image_content_hash').on(t.contentHash), index('idx_image_rating').on(t.rating)]
@@ -109,15 +118,48 @@ export const imageFile = pgTable(
   ]
 )
 
-// 标签字典，name 规范化（去空格、小写）后唯一
+// 标签分类：用户维护，colorIndex 是 12 色调色板的序号
+export const tagCategory = pgTable(
+  'tag_category',
+  {
+    ...baseColumns(),
+    name: text('name').notNull(),
+    colorIndex: smallint('color_index').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0)
+  },
+  (t) => [uniqueIndex('uk_tag_category_name').on(sql`lower(${t.name})`).where(sql`${t.deleteState} = 0`)]
+)
+
+// 标签字典：保存时去掉首尾空格，按不区分大小写唯一
 export const tag = pgTable(
   'tag',
   {
     ...baseColumns(),
     name: text('name').notNull(),
-    category: tagCategoryEnum('category').notNull().default('GENERAL')
+    categoryId: bigint('category_id', { mode: 'number' })
+      .notNull()
+      .references(() => tagCategory.id)
   },
-  (t) => [uniqueIndex('uk_tag_name').on(t.name).where(sql`${t.deleteState} = 0`)]
+  (t) => [
+    uniqueIndex('uk_tag_name').on(sql`lower(${t.name})`).where(sql`${t.deleteState} = 0`),
+    index('idx_tag_category').on(t.categoryId)
+  ]
+)
+
+// 标签别名：加标签时按名字和别名一起匹配，按不区分大小写唯一
+export const tagAlias = pgTable(
+  'tag_alias',
+  {
+    ...baseColumns(),
+    tagId: bigint('tag_id', { mode: 'number' })
+      .notNull()
+      .references(() => tag.id),
+    name: text('name').notNull()
+  },
+  (t) => [
+    uniqueIndex('uk_tag_alias_name').on(sql`lower(${t.name})`).where(sql`${t.deleteState} = 0`),
+    index('idx_tag_alias_tag').on(t.tagId)
+  ]
 )
 
 // 图片与标签关联

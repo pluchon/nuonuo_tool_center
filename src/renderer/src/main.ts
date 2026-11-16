@@ -6,8 +6,9 @@ import 'element-plus/theme-chalk/dark/css-vars.css'
 import '@fontsource/nunito/400.css'
 import '@fontsource/nunito/600.css'
 import '@fontsource/nunito/700.css'
+import '@fontsource/nunito/800.css'
+import '@fontsource-variable/noto-sans-sc'
 import App from './App.vue'
-import { router } from './router'
 import './styles/global.scss'
 
-createApp(App).use(createPinia()).use(router).use(ElementPlus).mount('#app')
+createApp(App).use(createPinia()).use(ElementPlus).mount('#app')

@@ -1,0 +1,15 @@
+// 整窗：默认背景是主题色淡染，字体和字号照原型
+.app-root {
+  position: relative;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: var(--look-root-bg);
+  // 中文字体随应用打包（原型从网上加载 Noto Sans SC，应用离线也要一致）
+  font-family: Nunito, 'Noto Sans SC Variable', 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif;
+  font-size: 13px;
+  color: var(--c-i-3B3047);
+  overflow: hidden;
+  isolation: isolate;
+}

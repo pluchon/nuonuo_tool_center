@@ -50,11 +50,12 @@
 
 | 表 | 作用 | 关键字段 / 约束 |
 |---|---|---|
-| `library_root` | 导入的目录 | `path`（规范化后加唯一索引）、`name` |
-| `image` | **按内容去重的图片**，标签和描述挂在这里 | `content_hash`（sha256，唯一）、宽高、格式、`display_name`（AI 或手动起的名字，只存在库里）、`description`、`rating`、`rating_source`（MODEL/MANUAL）、`rating_scores jsonb` |
+| `library_root` | 图库目录 | `kind`（SOURCE 源目录 / CATEGORY 类目录所在的图库文件夹，后者只有一条）、`path`（不区分大小写唯一）、`name` |
+| `image` | **按内容去重的图片**，标签和描述挂在这里 | `content_hash`（sha256，唯一）、宽高、格式、`display_name`（AI 或手动起的名字，只存在库里）、`description`、`rating`（默认 UNKNOWN，云端闸门只放行 GENERAL）、`rating_source`（MODEL/MANUAL）、`rating_scores jsonb`、`is_r18`（手动开关）、`taken_at`、`exif jsonb` |
 | `image_file` | 图片在磁盘上的位置，同一内容可以有多个位置 | `image_id`、`root_id`、`rel_path`；`(root_id, rel_path)` 在未删除记录内唯一；`status`（NORMAL/MISSING/DELETED） |
-| `tag_category` | 标签分类（用户在标签管理里维护） | `name`（唯一）、`color`、`sort_order`；默认四个：角色、作品、画师、主题；还有标签在用的分类不能删 |
+| `tag_category` | 标签分类（用户在标签管理里维护） | `name`（不区分大小写唯一）、`color_index`（12 色调色板序号）、`sort_order`；预设 8 个：角色、作品、画师、主题、地点、人物、器材、风格；还有标签在用的分类不能删 |
 | `tag` | 标签字典 | `name`（去空格、统一大小写后唯一）、`category_id`（引用 `tag_category`） |
+| `tag_alias` | 标签别名 | `tag_id`、`name`（不区分大小写唯一）；加标签时按名字和别名一起匹配 |
 | `image_tag` | 图片和标签的关联 | `source`（MANUAL/VLM）、`status`（ACCEPTED/SUGGESTED/REJECTED）；AI 给的标签先是 SUGGESTED，你确认后才生效 |
 | `image_ai_result` | 每次云端分析的完整结果 | `kind`（IDENTIFY/DESCRIBE/NAME）、`model`、`result jsonb`（含出处链接、角色、作品）、`usage jsonb` |
 | `image_embedding` | 语义向量 | `image_id`、`model`、`embedding vector(1024)` |
@@ -129,11 +130,11 @@ OSS 用 bucket `zlhimage`（`oss-cn-guangzhou`），沿用现有 AccessKey，不
 
 ## 6.5 界面风格：诺诺的图床（2026-11-15 由“诺诺的图书馆”改名）
 
-- 主题角色是用户自己设计的诺诺（猫耳、淡紫长发、透明雨伞）。插画放在 `src/renderer/src/assets/nono/`，配色都从插画里取：
+- 主题角色是用户自己设计的诺诺，设定以个人网站 `personal_website/nuonuo_role` 为准（白色长发、紫瞳、只有头顶一对猫耳、画面左侧的粉色花夹和淡紫发带、白色卷尾系粉铃铛、白紫水手服）。插画放在 `src/renderer/src/assets/nono/`，配色都从插画里取：
   - 主色：紫阳花紫；
   - 点缀：发饰的樱粉、灯笼的暖橙；
   - 文字：木色暖褐。
-- 窗口不用系统标题栏（`titleBarStyle: 'hidden'`），标题栏由界面自己画。系统的最小化、最大化、关闭按钮保留，按主题换颜色。
+- 窗口不用系统标题栏（`titleBarStyle: 'hidden'`），标题栏由界面自己画；最小化、最大化、关闭三颗按钮也照原型自己画（2026-11-16 按原型改，不再用系统按钮）。
 - 背景是放大后模糊的插画，叠一层色调和雨丝动画。面板是半透明的“玻璃”效果。
   - 面板不用 `backdrop-filter`：背景已经模糊过了，再加的话，雨丝每动一帧核显都要重新算一次模糊。
   - 以上插画背景是旧方案，已被设置里的背景（默认 / Halftone / Plotter / Paper / 自定义）取代；界面以 `docs/prototype/` 的应用原型为准。
@@ -149,12 +150,8 @@ OSS 用 bucket `zlhimage`（`oss-cn-guangzhou`），沿用现有 AccessKey，不
   - 标签选中时底色在深色下用分类圆点色（不用深字色），数量小框用半透明黑。
   - 图片本身不跟深色变（缩略图、预览、R-18 模糊图都按原图显示）；大图查看器的舞台换成深色衬底。
   - 状态：扫描中、找不到目录、无法预览、文件不见了、操作失败提示、图库打不开、各种对话框都有深色版本。
-- 诺诺本人是看板娘：侧边栏底部放她的头像（从插画里裁出来的）和对话气泡，用来播报状态、空状态和错误。
-- 待补的素材，用 Codex 生成，需要用户确认：
-  - 诺诺的 Q 版表情（开心、思考、困、出错）；
-  - 应用图标；
-  - 夜景版插画；
-  - 原图的高清版。
+- 诺诺出现在 4 个位置（2026-11-16 用 Codex 按 `nuonuo_role` 绘制，用户已确认，透明底，不跟深色模式变色）：标题栏品牌头像、第一次打开（挥手抱空白相册）、空状态和没有结果（往空纸箱里看）、图库打不开和读不出来（抱着上锁的相册）。侧栏不放看板娘和对话气泡。
+- 应用图标用个人网站的猫尾巴图标（`resources/icon.png`，拷自 `personal_website/public/icon-180.png`）。
 
 ### 画布定下的功能约定（2026-11-15）
 - “全部图片”只显示打过标签的图；没标签的图只在“还没打标签”里。另有“最近导入”。
@@ -252,9 +249,9 @@ local_tool_manage/
   test-output/   临时脚本和截图（加入 .gitignore）
 ```
 
-模型文件（WD onnx，约 450MB）首次运行时下载到应用数据目录，不进仓库。数据库目录在 `%APPDATA%\LocalToolManage\pgdata`。
+模型文件（WD onnx，约 450MB）首次运行时下载到应用数据目录，不进仓库。数据目录固定为 `%APPDATA%\LocalToolManage`（数据库 `pgdata`、缩略图、模型、日志、锁文件），不随 productName 变；设了环境变量 `LTM_DATA_DIR` / `LTM_CATEGORY_HOME` 时开发和测试用各自的目录。
 
-桌面快捷方式不打包：直接用项目里的 `electron.exe` 启动构建产物（`out/`），所以改完代码要先 `npm run build` 快捷方式才会生效。开发模式和快捷方式共用同一个数据目录，靠单实例锁保证同一时间只有一个进程打开 PGlite。
+桌面快捷方式不打包：直接用项目里的 `electron.exe` 启动构建产物（`out/`），所以改完代码要先 `npm run build` 快捷方式才会生效。开发模式默认用 `D:\ltm-dev` 下的隔离目录。同一个数据目录只允许一个进程：单实例锁按数据目录区分，另外用应用自己的锁文件 `ltm.lock`（记真实 PID）判断“图库数据被占用”。
 
 ## 8. 范围与阶段
 
@@ -276,7 +273,7 @@ local_tool_manage/
 
 **由 V4 带来的设计约束**：“让 AI 看看”必须是后台任务队列。并发上限 2，单次超时 5 分钟，客户端不自动重试（openai SDK 默认会重试 2 次，已关掉）。界面上显示“分析中”，完成后通知；超时由用户手动重试。超时那次服务端是否已经计费还不清楚，要对一下百炼账单。
 
-**当前顺序（用户决定，2026-11-15）**：先把纯本地、非 AI 的页面和功能做完，再做其他功能。界面上暂不出现任何 AI 功能（识图、建议标签、模型分级都不出现），标签和敏感度全部靠手动。诺诺不沿用现在这张图，之后用 Codex 画新角色。
+**当前顺序（用户决定，2026-11-15）**：先把纯本地、非 AI 的页面和功能做完，再做其他功能。界面上暂不出现任何 AI 功能（识图、建议标签、模型分级都不出现），标签和敏感度全部靠手动。诺诺插画已按 `nuonuo_role` 重画（见 6.5）。
 
 **P0**：导入、扫描、缩略图、网格浏览；手动标签和名字；手动敏感度标记；文件操作服务（移动、复制、删除进系统回收站、崩溃对账）；关键词搜索。
 **P1**：让 AI 看看（出处、角色、描述、起名）；语义搜索；额度控制。
