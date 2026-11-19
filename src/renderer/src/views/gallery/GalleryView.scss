@@ -20,8 +20,16 @@
     gap: 16px;
   }
 
-  // 主区：横幅在上，下面占满剩余高度
+  // 主区：左边一列（筛选栏、横幅、网格），右边详情面板
   &--main {
+    min-height: 0;
+    display: flex;
+    gap: 14px;
+  }
+
+  &__column {
+    flex: 1;
+    min-width: 0;
     min-height: 0;
     display: flex;
     flex-direction: column;

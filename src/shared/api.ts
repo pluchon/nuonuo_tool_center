@@ -1,5 +1,5 @@
 // 主进程与渲染进程共用的 IPC 契约：统一响应结构、通道名与数据类型
-import type { AppSettings } from './settings'
+import type { AppSettings, ScanFormat, SortKey } from './settings'
 
 // 统一响应：成功带 data，失败带错误码与可展示的信息
 export type ApiResponse<T> = { ok: true; data: T } | { ok: false; code: ApiErrorCode; message: string }
@@ -20,6 +20,10 @@ export const IpcChannel = {
   scanStart: 'scan:start',
   scanStop: 'scan:stop',
   scanGetState: 'scan:getState',
+  galleryList: 'gallery:list',
+  galleryDetail: 'gallery:detail',
+  fileShowInFolder: 'file:showInFolder',
+  fileOpen: 'file:open',
   windowSetTheme: 'window:setTheme',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',
@@ -122,6 +126,94 @@ export interface LibraryRootVO {
   name: string
   path: string
   createTime: string
+}
+
+// 图库视图：全部图片（打过标签的）/ 还没打标签 / 最近导入 / R-18 图 / 某个源目录 / 某个类目录
+export type GalleryViewKey = 'all' | 'untagged' | 'recent' | 'r18' | 'source' | 'category'
+
+// 网格查询条件
+export interface GalleryQueryDTO {
+  view: GalleryViewKey
+  // view = source 时的源目录 id
+  sourceId?: number
+  // view = category 时的顶层类目录名
+  category?: string
+  // 按图片名（全部图片、R-18、类目录里还按标签名）搜索
+  q?: string
+  sort: SortKey
+  // 只看 R-18（全部图片、类目录）
+  onlyR18?: boolean
+  // 只看当前目录，不含子目录（源目录、类目录）
+  onlyHere?: boolean
+}
+
+// 缩略图状态：已生成 / 还没生成 / 生成失败（无法预览）
+export type ThumbState = 'READY' | 'PENDING' | 'FAILED'
+
+// 网格里的一张图（同一内容在当前视图里有多个位置也只出一张）
+export interface GalleryItemVO {
+  imageId: number
+  // 代表这张图的文件位置（优先正常、目录在线的那个）
+  fileId: number
+  name: string
+  format: ScanFormat
+  width: number | null
+  height: number | null
+  byteSize: number
+  // 缩略图文件名用的内容哈希
+  hash: string
+  thumb: ThumbState
+  // 文件不见了 / 所在源目录找不到
+  missing: boolean
+  offline: boolean
+  isR18: boolean
+  tagged: boolean
+  importedAt: string
+  takenAt: string | null
+}
+
+// 网格数据：已经按条件过滤、按排序排好
+export interface GalleryListVO {
+  items: GalleryItemVO[]
+}
+
+// 一张图在磁盘上的一个位置
+export interface ImageLocationVO {
+  fileId: number
+  path: string
+  missing: boolean
+  offline: boolean
+}
+
+// 详情面板：一张图的完整信息
+export interface ImageDetailVO {
+  imageId: number
+  name: string
+  format: ScanFormat
+  width: number | null
+  height: number | null
+  byteSize: number
+  hash: string
+  thumb: ThumbState
+  isR18: boolean
+  importedAt: string
+  takenAt: string | null
+  exif: ExifInfoVO | null
+  locations: ImageLocationVO[]
+}
+
+// 拍摄信息（没有的项不出现）
+export interface ExifInfoVO {
+  make?: string
+  model?: string
+  lens?: string
+  // 焦距（毫米）
+  focalLength?: number
+  // 光圈 f 值
+  fNumber?: number
+  // 快门（秒）
+  exposureTime?: number
+  iso?: number
 }
 
 export type { AppSettings }

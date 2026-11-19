@@ -190,7 +190,13 @@ function lookVars(accent: string, isDark: boolean, look: GlassLook): Record<stri
     '--look-edge': tint(accent, 0.16),
     '--look-rule': tint(accent, 0.16),
     '--look-shadow': `0 12px 30px -24px ${tint(accent, 0.45)}, 0 1px 0 rgba(var(--w), 0.9) inset`,
-    '--look-active-bg': `linear-gradient(90deg, ${accent}26, ${accent}08)`
+    '--look-active-bg': `linear-gradient(90deg, ${accent}26, ${accent}08)`,
+    // 数量胶囊、月份标题的星星和虚线
+    '--look-chip-bg': tint(accent, 0.1),
+    '--look-star': tint(accent, 0.55),
+    '--look-dash': tint(accent, 0.28),
+    // 缩略图卡片的磨砂底：透明度跟着“组件透明度”走，但保证名字看得清
+    '--look-tile-bg': `rgba(var(--w), ${Math.max(0.12, 0.8 - clr * 0.85).toFixed(2)})`
   }
 }
 

@@ -1,0 +1,311 @@
+// 图片网格（照原型 nn-grid / nn-tile）
+@keyframes tile-shim {
+  0% {
+    background-position: 150% 0;
+  }
+  100% {
+    background-position: -50% 0;
+  }
+}
+
+.image-grid {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 2px 18px 0;
+  outline: none;
+
+  &__group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  // 月份标题：紫粉渐变竖条 + 粗体标题 + 小星星 + 虚线 + 选择本月 + 张数
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 4px 2px 6px;
+  }
+
+  &__bar {
+    width: 5px;
+    height: 20px;
+    flex: none;
+    border-radius: 3px;
+    background: linear-gradient(180deg, var(--a), var(--c-b-D86F95));
+  }
+
+  &__title {
+    margin: 0;
+    flex: none;
+    font-size: 17px;
+    font-weight: 800;
+    color: var(--c-i-2E2440);
+    letter-spacing: 0.5px;
+  }
+
+  &__star {
+    flex: none;
+    margin-left: -4px;
+    fill: var(--look-star);
+  }
+
+  &__dash {
+    flex: 1;
+    min-width: 12px;
+    height: 0;
+    border-top: 1.5px dashed var(--look-dash);
+  }
+
+  &__all {
+    flex: none;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    box-sizing: border-box;
+    border-radius: 50%;
+    border: 2px solid var(--a-mid);
+    background: var(--c-surface);
+    color: #ffffff;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+    cursor: pointer;
+
+    &--on {
+      border-color: var(--a);
+      background: var(--a);
+    }
+  }
+
+  &__count {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: var(--look-chip-bg);
+    color: var(--a-ink);
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__row {
+    display: flex;
+    gap: 8px;
+    padding: 0 2px;
+    content-visibility: auto;
+  }
+}
+
+// 一张缩略图卡片：底下垫一层淡磨砂白，名字落在它上面
+.tile {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 16px;
+  background: var(--look-tile-bg);
+  border: 2px solid rgba(var(--w), 0.55);
+  backdrop-filter: var(--look-blur);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition:
+    transform 0.25s cubic-bezier(0.2, 0.8, 0.3, 1.2),
+    box-shadow 0.25s ease,
+    background-color 0.25s ease;
+
+  &:hover {
+    transform: translateY(-3px);
+    background-color: rgba(var(--w), 0.8);
+    box-shadow: 0 16px 30px -18px rgba(var(--sh), 0.5);
+
+    .tile__chk {
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &:hover {
+      transform: none;
+    }
+  }
+
+  &--on {
+    border-color: var(--a);
+    background: rgba(var(--w), 0.78);
+  }
+
+  // 多选时所有图都显示勾选圈
+  &--multi .tile__chk {
+    opacity: 1;
+  }
+
+  &--multi.tile--on .tile__chk {
+    background: var(--a);
+  }
+
+  &__chk {
+    position: absolute;
+    z-index: 2;
+    right: 11px;
+    top: 11px;
+    width: 20px;
+    height: 20px;
+    box-sizing: border-box;
+    border-radius: 50%;
+    border: 2px solid var(--c-surface);
+    background: rgba(var(--sh), 0.18);
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+    box-shadow: 0 1px 3px rgba(var(--sh), 0.35);
+    opacity: 0;
+    transition: opacity 0.12s;
+    cursor: pointer;
+  }
+
+  &__img {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--c-b-F1EEF6);
+
+    // 源目录找不到：用缓存的缩略图，显示成灰色
+    &--offline {
+      filter: grayscale(1);
+      opacity: 0.55;
+    }
+  }
+
+  &__pic {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+
+    // R-18：模糊遮挡
+    &--masked {
+      transform: scale(1.15);
+      filter: blur(14px);
+    }
+  }
+
+  &__shim {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    background: linear-gradient(100deg, var(--shim1) 30%, var(--shim2) 50%, var(--shim1) 70%);
+    background-size: 200% 100%;
+    animation: tile-shim 1.3s linear infinite;
+
+    @media (prefers-reduced-motion: reduce) {
+      animation: none;
+    }
+  }
+
+  &__bad {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    background: var(--c-b-F1EEF6);
+    color: var(--c-b-6E6280);
+    font-size: 11px;
+    font-weight: 700;
+
+    &--missing {
+      background: repeating-linear-gradient(135deg, var(--c-b-FCEFF3) 0 8px, var(--c-b-F8E3EA) 8px 16px);
+      color: var(--c-b-A23D62);
+    }
+  }
+
+  &__r18 {
+    position: absolute;
+    z-index: 1;
+    left: 6px;
+    top: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: rgba(162, 61, 98, 0.88);
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  // 右下角格式、左下角“全景 / 长图”
+  &__badge {
+    position: absolute;
+    z-index: 1;
+    bottom: 6px;
+    padding: 0 6px;
+    border-radius: 5px;
+    background: rgba(30, 24, 40, 0.42);
+    backdrop-filter: blur(4px);
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 17px;
+    letter-spacing: 0.4px;
+
+    &--fmt {
+      right: 6px;
+    }
+
+    &--crop {
+      left: 6px;
+    }
+  }
+
+  &__foot {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 2px;
+  }
+
+  &__name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--c-i-2E2440);
+  }
+
+  &__dot {
+    width: 7px;
+    height: 7px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--c-b-E8964A);
+  }
+}

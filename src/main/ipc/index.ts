@@ -1,9 +1,10 @@
 import { BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import { IpcChannel, type ThemeMode } from '@shared/api'
+import { IpcChannel, type GalleryQueryDTO, type ThemeMode } from '@shared/api'
 import type { DataPaths } from '../config/paths'
 import { BizError } from '../common/bizError'
 import { bootDatabase, getDbBootState, type DatabaseLocation } from '../services/databaseService'
 import { listFolders } from '../services/folderService'
+import { getImageDetail, listGallery, openFileWithDefault, showFileInFolder } from '../services/galleryService'
 import { addRoot, getOverview, relocateRoot } from '../services/libraryService'
 import { getScanState, startScan, stopScan } from '../services/scan/scanService'
 import { getSettings, updateSettings } from '../services/settingsService'
@@ -68,6 +69,23 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
     return startScan(rootId)
   })
   handle(IpcChannel.scanStop, async () => stopScan())
+
+  handle(IpcChannel.galleryList, async (_event, query: GalleryQueryDTO) => {
+    requireDatabase()
+    return listGallery(query)
+  })
+  handle(IpcChannel.galleryDetail, async (_event, imageId: number) => {
+    requireDatabase()
+    return getImageDetail(imageId)
+  })
+  handle(IpcChannel.fileShowInFolder, async (_event, fileId: number) => {
+    requireDatabase()
+    await showFileInFolder(fileId)
+  })
+  handle(IpcChannel.fileOpen, async (_event, fileId: number) => {
+    requireDatabase()
+    await openFileWithDefault(fileId)
+  })
   handle(IpcChannel.scanGetState, async () => getScanState())
 
   handle(IpcChannel.windowSetTheme, async (event, theme: ThemeMode) => {

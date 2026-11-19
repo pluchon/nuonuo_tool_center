@@ -16,14 +16,24 @@
     <button class="gallery__retry" type="button" :disabled="library.loading" @click="library.load()">重试</button>
   </main>
 
-  <!-- 主区：上方状态横幅，下面是图片（网格在浏览阶段接入）或空状态 -->
-  <main v-else-if="library.overview" class="gallery gallery--main">
-    <StatusBanner />
-    <div v-if="viewCount === 0" class="gallery__empty">
-      <NonoArt pose="empty" />
-      <span class="gallery__text">这里还没有图片</span>
-    </div>
-  </main>
+  <!-- 主区：筛选栏、状态横幅、图片网格；右侧详情面板 -->
+  <div v-else-if="library.overview" class="gallery gallery--main">
+    <main class="gallery__column">
+      <FilterBar />
+      <StatusBanner />
+      <div v-if="gallery.error && gallery.items.length === 0" class="gallery__empty">
+        <NonoArt pose="error" />
+        <span class="gallery__text">图片读不出来</span>
+        <button class="gallery__retry" type="button" :disabled="gallery.loading" @click="gallery.load()">重试</button>
+      </div>
+      <div v-else-if="gallery.loaded && gallery.items.length === 0" class="gallery__empty">
+        <NonoArt pose="empty" />
+        <span class="gallery__text">{{ emptyText }}</span>
+      </div>
+      <ImageGrid v-else-if="gallery.items.length > 0" />
+    </main>
+    <DetailPanel v-if="gallery.items.length > 0" />
+  </div>
 
   <!-- 加载中：先留空，避免闪一下空状态 -->
   <main v-else class="gallery" aria-busy="true" />

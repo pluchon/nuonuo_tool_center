@@ -14,12 +14,10 @@ import {
   updateRootPath
 } from '../repositories/libraryRootRepository'
 import { categoryHomeOf } from './categoryHome'
+import { RECENT_DAYS } from './galleryService'
 import { startScan } from './scan/scanService'
 
 const log = getLogger('library')
-
-// “最近导入”统计的天数
-const RECENT_DAYS = 30
 
 // 列出某个目录下的子文件夹名（跳过隐藏和系统目录）；目录不存在时返回 null，其它读取错误照常抛出
 export async function childDirs(dir: string): Promise<string[] | null> {

@@ -6,6 +6,9 @@ import {
   type AppSettings,
   type DbBootState,
   type FolderNodeVO,
+  type GalleryListVO,
+  type GalleryQueryDTO,
+  type ImageDetailVO,
   type LibraryOverviewVO,
   type LibraryRootVO,
   type ScanStateVO,
@@ -30,6 +33,12 @@ const api = {
       ipcRenderer.invoke(IpcChannel.libraryRelocateRoot, id, path),
     listFolders: (parent: string | null): Promise<ApiResponse<FolderNodeVO[]>> =>
       ipcRenderer.invoke(IpcChannel.libraryListFolders, parent)
+  },
+  gallery: {
+    list: (query: GalleryQueryDTO): Promise<ApiResponse<GalleryListVO>> => ipcRenderer.invoke(IpcChannel.galleryList, query),
+    detail: (imageId: number): Promise<ApiResponse<ImageDetailVO>> => ipcRenderer.invoke(IpcChannel.galleryDetail, imageId),
+    showInFolder: (fileId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.fileShowInFolder, fileId),
+    open: (fileId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.fileOpen, fileId)
   },
   scan: {
     start: (rootId: number | null): Promise<ApiResponse<ScanStateVO>> => ipcRenderer.invoke(IpcChannel.scanStart, rootId),

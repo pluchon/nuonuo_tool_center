@@ -1,43 +1,50 @@
-import { computed, defineComponent } from 'vue'
+import { computed, defineComponent, onMounted, watch } from 'vue'
 import NonoArt from '@/components/nono/NonoArt.vue'
+import DetailPanel from '@/components/gallery/DetailPanel.vue'
+import FilterBar from '@/components/gallery/FilterBar.vue'
+import ImageGrid from '@/components/gallery/ImageGrid.vue'
 import StatusBanner from '@/components/gallery/StatusBanner.vue'
+import { useGalleryStore } from '@/stores/gallery'
 import { useLibraryStore } from '@/stores/library'
 import { usePickerStore } from '@/stores/picker'
 import { useViewStore } from '@/stores/view'
 
-// 主区：第一次打开、读取失败、状态横幅和空状态（图片网格在浏览阶段接入）
+// 主区：第一次打开、读取失败，以及筛选栏 + 状态横幅 + 图片网格 + 详情面板
 export default defineComponent({
   name: 'GalleryView',
-  components: { NonoArt, StatusBanner },
+  components: { NonoArt, DetailPanel, FilterBar, ImageGrid, StatusBanner },
   setup() {
     const library = useLibraryStore()
     const picker = usePickerStore()
     const viewStore = useViewStore()
+    const gallery = useGalleryStore()
 
-    // 当前视图里有多少张图：决定显示空状态还是图片
-    const viewCount = computed(() => {
-      const ov = library.overview
-      if (!ov) {
-        return 0
+    // 空状态的一行字：搜索没结果 / 筛选后没有 / 本来就没有
+    const emptyText = computed(() => {
+      const q = gallery.q.trim()
+      if (q) {
+        return `没有找到「${q}」`
       }
-      const dir = viewStore.dir
-      switch (viewStore.view) {
-        case 'all':
-          return ov.counts.tagged
-        case 'untagged':
-          return ov.counts.untagged
-        case 'recent':
-          return ov.counts.recent
-        case 'r18':
-          return ov.counts.r18
-        default:
-          if (dir?.kind === 'source') {
-            return library.sourceById(dir.id)?.count ?? 0
-          }
-          return ov.categories.find((c) => dir?.kind === 'category' && c.name === dir.name)?.count ?? 0
+      if (gallery.onlyR18 || gallery.onlyHere) {
+        return '没有符合条件的图片'
       }
+      return '这里还没有图片'
     })
 
-    return { library, picker, viewCount }
+    // 切换视图：清掉搜索和开关，重新查
+    watch(
+      () => [viewStore.view, viewStore.dir] as const,
+      () => {
+        gallery.resetFilters()
+        void gallery.load()
+      }
+    )
+
+    onMounted(() => {
+      gallery.resetFilters()
+      void gallery.load()
+    })
+
+    return { library, picker, gallery, emptyText }
   }
 })

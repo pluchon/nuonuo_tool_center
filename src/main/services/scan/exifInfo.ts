@@ -1,18 +1,8 @@
 import exifReader from 'exif-reader'
+import type { ExifInfoVO } from '@shared/api'
 
-// 存进 image.exif 的拍摄信息：详情面板“拍摄信息”一块用到的字段，没有的项不写
-export interface ExifInfo {
-  make?: string
-  model?: string
-  lens?: string
-  // 焦距（毫米）
-  focalLength?: number
-  // 光圈 f 值
-  fNumber?: number
-  // 快门（秒）
-  exposureTime?: number
-  iso?: number
-}
+// 存进 image.exif 的拍摄信息：和详情面板共用一个结构（焦距毫米、光圈 f 值、快门秒）
+export type ExifInfo = ExifInfoVO
 
 // 解析结果：拍摄信息（一项都没有时为空）和拍摄时间
 export interface ParsedExif {

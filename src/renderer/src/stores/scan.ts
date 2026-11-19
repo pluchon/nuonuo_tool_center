@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import type { ScanProgressVO, ScanResultVO, ScanStateVO } from '@shared/api'
 import { fetchScanState, startScan, stopScan, subscribeScanState } from '@/api/scan'
+import { useGalleryStore } from './gallery'
 import { useLibraryStore } from './library'
 import { useToastStore } from './toast'
 
@@ -56,8 +57,10 @@ export const useScanStore = defineStore('scan', {
       this.progress = state.progress
       this.last = state.last
       const library = useLibraryStore()
+      const gallery = useGalleryStore()
       if (finished) {
         void library.load()
+        void gallery.load()
         if (state.last) {
           const { text, error } = resultText(state.last)
           // 启动时的自动扫描默默做完，只有读失败才提示
@@ -70,6 +73,7 @@ export const useScanStore = defineStore('scan', {
       if (state.progress && Date.now() - lastRefresh > REFRESH_INTERVAL) {
         lastRefresh = Date.now()
         void library.load()
+        void gallery.load()
       }
     },
     // 扫描全部目录或某一个源目录
