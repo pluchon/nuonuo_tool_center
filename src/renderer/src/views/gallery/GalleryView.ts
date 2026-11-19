@@ -1,24 +1,43 @@
-import { defineComponent } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, defineComponent } from 'vue'
 import NonoArt from '@/components/nono/NonoArt.vue'
+import StatusBanner from '@/components/gallery/StatusBanner.vue'
 import { useLibraryStore } from '@/stores/library'
+import { usePickerStore } from '@/stores/picker'
+import { useViewStore } from '@/stores/view'
 
-// 主区：第一次打开、空状态、读取失败（图片网格在浏览阶段接入）
+// 主区：第一次打开、读取失败、状态横幅和空状态（图片网格在浏览阶段接入）
 export default defineComponent({
   name: 'GalleryView',
-  components: { NonoArt },
+  components: { NonoArt, StatusBanner },
   setup() {
     const library = useLibraryStore()
+    const picker = usePickerStore()
+    const viewStore = useViewStore()
 
-    // 导入源目录；暂用系统的选择文件夹对话框，按磁盘逐层展开的导入对话框在导入扫描阶段接入
-    const onPick = async (): Promise<void> => {
-      try {
-        await library.importSource()
-      } catch (err) {
-        ElMessage.error(err instanceof Error ? err.message : String(err))
+    // 当前视图里有多少张图：决定显示空状态还是图片
+    const viewCount = computed(() => {
+      const ov = library.overview
+      if (!ov) {
+        return 0
       }
-    }
+      const dir = viewStore.dir
+      switch (viewStore.view) {
+        case 'all':
+          return ov.counts.tagged
+        case 'untagged':
+          return ov.counts.untagged
+        case 'recent':
+          return ov.counts.recent
+        case 'r18':
+          return ov.counts.r18
+        default:
+          if (dir?.kind === 'source') {
+            return library.sourceById(dir.id)?.count ?? 0
+          }
+          return ov.categories.find((c) => dir?.kind === 'category' && c.name === dir.name)?.count ?? 0
+      }
+    })
 
-    return { library, onPick }
+    return { library, picker, viewCount }
   }
 })

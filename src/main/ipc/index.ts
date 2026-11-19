@@ -1,9 +1,11 @@
-import { BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
+import { BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { IpcChannel, type ThemeMode } from '@shared/api'
 import type { DataPaths } from '../config/paths'
 import { BizError } from '../common/bizError'
 import { bootDatabase, getDbBootState, type DatabaseLocation } from '../services/databaseService'
-import { addRoot, getOverview } from '../services/libraryService'
+import { listFolders } from '../services/folderService'
+import { addRoot, getOverview, relocateRoot } from '../services/libraryService'
+import { getScanState, startScan, stopScan } from '../services/scan/scanService'
 import { getSettings, updateSettings } from '../services/settingsService'
 import { applyWindowTheme, toggleMaximize } from '../window/windowControl'
 import { handle } from './handle'
@@ -42,15 +44,31 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
     requireDatabase()
     return getOverview(paths.categoryHomeOverride)
   })
-  handle(IpcChannel.libraryAddRoot, async (event) => {
+  handle(IpcChannel.libraryAddRoot, async (_event, path: string) => {
     requireDatabase()
-    const win = senderWindow(event)
-    const picked = await dialog.showOpenDialog(win, { title: '选择要导入的图片目录', properties: ['openDirectory'] })
-    if (picked.canceled || picked.filePaths.length === 0) {
-      throw new BizError('CANCELLED', '已取消选择')
-    }
-    return addRoot(picked.filePaths[0], paths.categoryHomeOverride)
+    return addRoot(path, paths.categoryHomeOverride)
   })
+  handle(IpcChannel.libraryRelocateRoot, async (_event, id: number, path: string) => {
+    requireDatabase()
+    if (!Number.isInteger(id)) {
+      throw new BizError('BAD_REQUEST', '目录 id 不对')
+    }
+    return relocateRoot(id, path, paths.categoryHomeOverride)
+  })
+  handle(IpcChannel.libraryListFolders, async (_event, parent: string | null) => {
+    requireDatabase()
+    return listFolders(parent, paths.categoryHomeOverride)
+  })
+
+  handle(IpcChannel.scanStart, async (_event, rootId: number | null) => {
+    requireDatabase()
+    if (rootId !== null && !Number.isInteger(rootId)) {
+      throw new BizError('BAD_REQUEST', '目录 id 不对')
+    }
+    return startScan(rootId)
+  })
+  handle(IpcChannel.scanStop, async () => stopScan())
+  handle(IpcChannel.scanGetState, async () => getScanState())
 
   handle(IpcChannel.windowSetTheme, async (event, theme: ThemeMode) => {
     if (theme !== 'light' && theme !== 'dark') {

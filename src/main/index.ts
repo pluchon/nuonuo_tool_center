@@ -1,12 +1,13 @@
 import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { ThemeMode } from '@shared/api'
+import { IpcEvent, type ScanStateVO, type ThemeMode } from '@shared/api'
 import { buildDataPaths, resolveDataRoot } from './config/paths'
 import { getLogger, initLogger } from './common/logger'
 import { registerIpcHandlers } from './ipc'
 import { handleLtmProtocol, registerLtmSchemePrivileges } from './protocol/ltmProtocol'
 import { bootDatabase, shutdownDatabase, type DatabaseLocation } from './services/databaseService'
+import { configureScan, onScanState, startScan, stopScanAndWait } from './services/scan/scanService'
 import { getSettings } from './services/settingsService'
 import { windowBackground } from './window/windowControl'
 
@@ -89,13 +90,38 @@ function createMainWindow(theme: ThemeMode): BrowserWindow {
   return win
 }
 
-// 启动顺序：数据库（打不开也继续，由界面显示原因和“重试”）→ 协议 → IPC → 窗口
+// 扫描状态推给所有窗口
+function broadcastScanState(state: ScanStateVO): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send(IpcEvent.scanState, state)
+    }
+  }
+}
+
+// 设置里开了“启动时自动扫描”就扫一遍全部目录（对账：外部删掉、改名、新增的文件）
+async function autoScanOnStart(): Promise<void> {
+  try {
+    if ((await getSettings()).autoScan) {
+      startScan(null, true)
+    }
+  } catch (err) {
+    log.warn('读取“启动时自动扫描”设置失败，这次不自动扫描', err)
+  }
+}
+
+// 启动顺序：数据库（打不开也继续，由界面显示原因和“重试”）→ 协议 → IPC → 窗口 → 自动扫描
 async function bootstrap(): Promise<void> {
   log.info(`启动，数据目录：${paths.root}`)
   const state = await bootDatabase(dbLocation)
   handleLtmProtocol(paths.thumbs)
+  configureScan({ thumbsDir: paths.thumbs, categoryHomeOverride: paths.categoryHomeOverride })
+  onScanState(broadcastScanState)
   registerIpcHandlers(paths, dbLocation)
   createMainWindow(await initialTheme(state === 'READY'))
+  if (state === 'READY') {
+    await autoScanOnStart()
+  }
 }
 
 // 单实例：同一个数据目录只允许一个进程，第二个实例只负责唤起已有窗口
@@ -126,7 +152,10 @@ app.on('will-quit', (event) => {
   }
   closing = true
   event.preventDefault()
-  void shutdownDatabase(paths.lockFile)
+  // 先让扫描停下（手上的文件写完），再关数据库
+  void stopScanAndWait()
+    .catch((err: unknown) => log.error('停止扫描失败', err))
+    .then(() => shutdownDatabase(paths.lockFile))
     .catch((err: unknown) => log.error('关闭数据库失败', err))
     .finally(() => app.exit(0))
 })

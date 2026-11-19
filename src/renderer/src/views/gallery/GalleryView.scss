@@ -20,6 +20,23 @@
     gap: 16px;
   }
 
+  // 主区：横幅在上，下面占满剩余高度
+  &--main {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__empty {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+  }
+
   &__welcome {
     display: flex;
     flex-direction: column;

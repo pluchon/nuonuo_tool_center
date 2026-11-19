@@ -1,18 +1,11 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ElectronApplication } from 'playwright'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot, shotPrototype, SHOT_DIR } from './support/app'
 import { compareShots } from './support/compare'
+import { pickFolder } from './support/picker'
 
 const diffRatios: Record<string, number> = {}
-
-// 把系统的选择文件夹对话框换成直接返回指定目录（端到端测试里点不了系统对话框）
-async function stubFolderPicker(app: ElectronApplication, folder: string): Promise<void> {
-  await app.evaluate(({ dialog }, picked) => {
-    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [picked] })) as typeof dialog.showOpenDialog
-  }, folder)
-}
 
 beforeAll(() => {
   mkdirSync(join(SHOT_DIR, 'diff'), { recursive: true })
@@ -82,20 +75,27 @@ describe('第二阶段：按画布换主界面', () => {
       'R-18 图'
     ])
 
-    await stubFolderPicker(app, source)
     await page.click('.gallery__pick')
+    await pickFolder(page, source)
+    await page.click('.folder-pick__confirm')
     await page.waitForSelector('.side-nav__label:text-is("pics")')
-    await expect(page.locator('.gallery__text').textContent()).resolves.toBe('这里还没有图片')
-
-    // 点源目录：选中态切到这一行
-    await page.click('.side-nav__label:text-is("pics")')
+    // 导入后直接切到这个源目录，空目录扫完显示空状态
     await expect(page.locator('.side-nav__item--on .side-nav__label').textContent()).resolves.toBe('pics')
+    await page.waitForSelector('.app-toast:has-text("扫描完成")')
+    await expect(page.locator('.gallery__text').textContent()).resolves.toBe('这里还没有图片')
     await shot(page, 'imported-light')
 
-    // 再导入类目录所在的文件夹：拒绝并提示
-    await stubFolderPicker(app, dirs.library)
+    // 再打开导入对话框：图库文件夹和已导入的目录都标出来、不能选
     await page.click('.side-nav__add[aria-label="导入源目录"]')
-    await expect(page.locator('.el-message').first().textContent()).resolves.toContain('和类目录所在的文件夹重叠')
+    await pickFolder(page, source, false)
+    const notes = await page
+      .locator('.folder-pick__row')
+      .evaluateAll((els) => els.map((e) => [e.querySelector('.folder-pick__label')?.textContent, e.querySelector('.folder-pick__note')?.textContent]))
+    expect(notes).toEqual(expect.arrayContaining([['phase2-import', '含已导入'], ['library', '图库文件夹'], ['pics', '已导入']]))
+    // 还没选中能导入的文件夹
+    await expect(page.locator('.folder-pick__confirm').textContent()).resolves.toContain('先选一个文件夹')
+    await page.keyboard.press('Escape')
+    await page.waitForSelector('.folder-pick', { state: 'detached' })
     await app.close()
   })
 })

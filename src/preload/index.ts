@@ -1,11 +1,14 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import {
   IpcChannel,
+  IpcEvent,
   type ApiResponse,
   type AppSettings,
   type DbBootState,
+  type FolderNodeVO,
   type LibraryOverviewVO,
   type LibraryRootVO,
+  type ScanStateVO,
   type ThemeMode
 } from '@shared/api'
 
@@ -22,7 +25,22 @@ const api = {
   },
   library: {
     getOverview: (): Promise<ApiResponse<LibraryOverviewVO>> => ipcRenderer.invoke(IpcChannel.libraryGetOverview),
-    addRoot: (): Promise<ApiResponse<LibraryRootVO>> => ipcRenderer.invoke(IpcChannel.libraryAddRoot)
+    addRoot: (path: string): Promise<ApiResponse<LibraryRootVO>> => ipcRenderer.invoke(IpcChannel.libraryAddRoot, path),
+    relocateRoot: (id: number, path: string): Promise<ApiResponse<LibraryRootVO>> =>
+      ipcRenderer.invoke(IpcChannel.libraryRelocateRoot, id, path),
+    listFolders: (parent: string | null): Promise<ApiResponse<FolderNodeVO[]>> =>
+      ipcRenderer.invoke(IpcChannel.libraryListFolders, parent)
+  },
+  scan: {
+    start: (rootId: number | null): Promise<ApiResponse<ScanStateVO>> => ipcRenderer.invoke(IpcChannel.scanStart, rootId),
+    stop: (): Promise<ApiResponse<ScanStateVO>> => ipcRenderer.invoke(IpcChannel.scanStop),
+    getState: (): Promise<ApiResponse<ScanStateVO>> => ipcRenderer.invoke(IpcChannel.scanGetState),
+    // 订阅扫描状态推送，返回取消订阅的函数
+    onState: (fn: (state: ScanStateVO) => void): (() => void) => {
+      const wrapped = (_event: IpcRendererEvent, state: ScanStateVO): void => fn(state)
+      ipcRenderer.on(IpcEvent.scanState, wrapped)
+      return () => ipcRenderer.removeListener(IpcEvent.scanState, wrapped)
+    }
   },
   window: {
     setTheme: (theme: ThemeMode): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.windowSetTheme, theme),

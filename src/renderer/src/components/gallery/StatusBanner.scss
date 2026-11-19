@@ -1,0 +1,146 @@
+// 状态横幅（照原型 banner：圆角 18、半透明底、白描边，左图标、中间标题和进度条、右边一个按钮）
+@keyframes banner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.status-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  backdrop-filter: var(--look-blur);
+  border: 1px solid rgba(var(--w), 0.9);
+  box-shadow: var(--look-shadow);
+
+  &--scan {
+    background: var(--banner-scan-bg);
+    color: var(--c-i-3F8F7B);
+  }
+
+  &--offline {
+    background: var(--banner-offline-bg);
+    color: var(--c-i-B8732E);
+  }
+
+  &__icon {
+    width: 34px;
+    height: 34px;
+    flex: none;
+    border-radius: 10px;
+    background: var(--c-surface);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__spin {
+    animation: banner-spin 1s linear infinite;
+    transform-origin: 50% 50%;
+
+    @media (prefers-reduced-motion: reduce) {
+      animation: none;
+    }
+  }
+
+  &__body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  &__line {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  &__title {
+    flex: none;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--c-i-2E2440);
+  }
+
+  &__count {
+    margin-left: auto;
+    flex: none;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--c-i-5E5270);
+  }
+
+  &__done,
+  &__slash,
+  &__total {
+    font-family: Georgia, 'Noto Serif SC', serif;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__done {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--c-i-2F7463);
+  }
+
+  &__slash {
+    font-size: 13px;
+    color: var(--c-i-8FB8AA);
+  }
+
+  &__total {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--c-i-5E5270);
+  }
+
+  &__bar {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--c-surface);
+    overflow: hidden;
+  }
+
+  &__fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--c-b-3F8F7B), var(--c-b-86CDB8));
+    transition: width 0.6s ease;
+  }
+
+  &__btn {
+    flex: none;
+    height: 30px;
+    padding: 0 14px;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+  }
+
+  &--scan &__btn {
+    border: 1.5px solid var(--c-b-BFE3D6);
+    background: var(--c-surface);
+    color: var(--c-i-2F7463);
+  }
+
+  &--offline &__btn {
+    border: 1.5px solid var(--c-b-B8732E);
+    background: var(--c-b-B8732E);
+    color: #ffffff;
+  }
+}

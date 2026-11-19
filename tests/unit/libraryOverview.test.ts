@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
 import { addRoot, getOverview } from '../../src/main/services/libraryService'
+import { configureScan, whenScanIdle } from '../../src/main/services/scan/scanService'
 
 let dir: string
 let home: string
@@ -15,6 +16,8 @@ beforeAll(async () => {
   sourceA = join(dir, 'pics')
   mkdirSync(join(sourceA, '2024'), { recursive: true })
   await openDatabase(join(dir, 'pgdata'), resolve('drizzle'))
+  mkdirSync(join(dir, 'thumbs'))
+  configureScan({ thumbsDir: join(dir, 'thumbs'), categoryHomeOverride: null })
 })
 
 afterAll(async () => {
@@ -27,7 +30,8 @@ describe('侧栏概况', () => {
     expect(await getOverview(home)).toEqual({
       counts: { total: 0, tagged: 0, untagged: 0, recent: 0, r18: 0, tags: 0 },
       sources: [],
-      categories: []
+      categories: [],
+      lastScanAt: null
     })
   })
 
@@ -48,6 +52,7 @@ describe('侧栏概况', () => {
     await expect(addRoot(dir, home)).rejects.toThrow('类目录')
     const created = await addRoot(sourceA, home)
     expect(created.name).toBe('pics')
+    await whenScanIdle()
     await expect(addRoot(join(sourceA, '2024'), home)).rejects.toThrow('重叠')
     await expect(addRoot(join(dir, 'missing'), home)).rejects.toThrow('目录不存在')
   })
@@ -65,6 +70,6 @@ describe('侧栏概况', () => {
     `)
     const ov = await getOverview(home)
     expect(ov.counts).toEqual({ total: 2, tagged: 1, untagged: 1, recent: 2, r18: 1, tags: 1 })
-    expect(ov.sources).toEqual([{ id: 1, name: 'pics', path: sourceA, count: 2, hasChildren: true }])
+    expect(ov.sources).toEqual([{ id: 1, name: 'pics', path: sourceA, count: 2, hasChildren: true, offline: false }])
   })
 })

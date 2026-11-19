@@ -1,0 +1,112 @@
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import sharp from 'sharp'
+import { afterEach, describe, expect, it } from 'vitest'
+import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
+import { pickFolder } from './support/picker'
+
+// 生成的测试图数量：够扫上几秒，能看到进度横幅
+const IMAGE_COUNT = 300
+
+afterEach(async () => {
+  await closeLeftoverApps()
+})
+
+// 生成一批互不相同的噪点图（分在三个子文件夹里），外加一个解不开的 HEIC
+async function makeImages(dir: string): Promise<void> {
+  for (const sub of ['2024 收藏', '2025 收藏', '表情包']) {
+    mkdirSync(join(dir, sub), { recursive: true })
+  }
+  const subs = ['2024 收藏', '2025 收藏', '表情包']
+  for (let i = 0; i < IMAGE_COUNT; i++) {
+    await sharp({ create: { width: 640, height: 400 + (i % 5) * 40, channels: 3, background: '#7A63C9', noise: { type: 'gaussian', mean: 120 + (i % 50), sigma: 40 } } })
+      .jpeg({ quality: 90 })
+      .toFile(join(dir, subs[i % 3], `img-${String(i).padStart(3, '0')}.jpg`))
+  }
+  writeFileSync(join(dir, 'broken.heic'), Buffer.from('not a heic'))
+}
+
+// 侧栏某一行的数量文字
+async function countOf(page: import('playwright').Page, label: string): Promise<string | null> {
+  return page.locator('.side-nav__item').filter({ has: page.locator(`.side-nav__label:text-is("${label}")`) }).locator('.side-nav__count').textContent()
+}
+
+describe('第三阶段：导入和扫描', () => {
+  it('导入源目录：对话框选文件夹 → 扫描横幅 → 完成提示；侧栏、底栏计数更新', async () => {
+    const dirs = freshCase('phase3-scan')
+    const source = join(dirs.root, 'pics')
+    await makeImages(source)
+    mkdirSync(join(dirs.library, '猫猫'), { recursive: true })
+    await sharp({ create: { width: 20, height: 20, channels: 3, background: '#FFFFFF' } }).png().toFile(join(dirs.library, '猫猫', 'cat.png'))
+
+    const { app, page } = await launchApp(dirs)
+    await page.waitForSelector('.gallery--welcome')
+    // 启动时自动扫描：类目录里的图被登记；自动扫描不弹提示，还没有源目录时底栏仍是“还没有扫描过”
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('.side-nav__item')].some(
+        (e) => e.querySelector('.side-nav__label')?.textContent === '猫猫' && e.querySelector('.side-nav__count')?.textContent === '1'
+      )
+    )
+    await expect(page.locator('.status-footer').innerText()).resolves.toContain('还没有扫描过')
+    await expect(page.locator('.app-toast').count()).resolves.toBe(0)
+
+    await page.click('.gallery__pick')
+    await shot(page, 'import-dialog-light')
+    await pickFolder(page, source)
+    await expect(page.locator('.folder-pick__confirm').textContent()).resolves.toContain('导入「pics」')
+    await page.click('.folder-pick__confirm')
+
+    await page.waitForSelector('.status-banner--scan')
+    await expect(page.locator('.status-banner__title').textContent()).resolves.toBe('正在扫描「pics」')
+    await expect(countOf(page, 'pics')).resolves.toBe('扫描中')
+    await expect(page.locator('.status-footer').innerText()).resolves.toContain('正在扫描…')
+    await page.waitForFunction(() => Number(document.querySelector('.status-banner__done')?.textContent?.replace(/,/g, '')) > 0)
+    await shot(page, 'scanning-light')
+
+    await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 90_000 })
+    await expect(page.locator('.app-toast').innerText()).resolves.toContain(`「pics」扫描完成，共 ${IMAGE_COUNT + 1} 个文件`)
+    await page.waitForSelector('.status-banner', { state: 'detached' })
+    await expect(countOf(page, 'pics')).resolves.toBe(String(IMAGE_COUNT + 1))
+    await expect(countOf(page, '还没打标签')).resolves.toBe(String(IMAGE_COUNT + 2))
+    const footer = (await page.locator('.status-footer').innerText()).split(/\s+/).filter(Boolean)
+    expect(footer).toEqual([(IMAGE_COUNT + 2).toLocaleString('zh-CN'), '张', '刚刚扫描完成', '重新扫描'])
+    await shot(page, 'scanned-light')
+
+    // 重新扫描：文件都没变，很快结束，计数不变
+    await page.waitForSelector('.app-toast', { state: 'detached' })
+    await page.click('.status-footer__scan')
+    await page.waitForSelector('.app-toast')
+    await expect(page.locator('.app-toast').innerText()).resolves.toBe(`扫描完成，共 ${IMAGE_COUNT + 2} 个文件`)
+    await expect(countOf(page, 'pics')).resolves.toBe(String(IMAGE_COUNT + 1))
+    await app.close()
+
+    // 源目录被挪走：重启后自动扫描不动记录，侧栏标“找不到”，进入后横幅可以重新选择位置
+    const moved = join(dirs.root, 'pics-moved')
+    renameSync(source, moved)
+    const second = await launchApp(dirs)
+    const p2 = second.page
+    await p2.waitForSelector('.side-nav__label:text-is("pics")')
+    await expect(countOf(p2, 'pics')).resolves.toBe('找不到')
+    await p2.click('.side-nav__label:text-is("pics")')
+    await p2.waitForSelector('.status-banner--offline')
+    await expect(p2.locator('.status-banner__title').textContent()).resolves.toBe(`找不到 ${source}`)
+    await shot(p2, 'offline-light')
+    await setAppearance(p2, 'dark')
+    await p2.click('.side-nav__label:text-is("pics")')
+    await p2.waitForSelector('.status-banner--offline')
+    await shot(p2, 'offline-dark')
+
+    await p2.click('.status-banner__btn')
+    await expect(p2.locator('.folder-pick__title').textContent()).resolves.toBe('重新选择「pics」的位置')
+    await pickFolder(p2, moved)
+    await shot(p2, 'relocate-dialog-dark')
+    await p2.click('.folder-pick__confirm')
+    // 文件都没变，改位置后的扫描几乎立刻结束，“已改到”的提示会马上被“扫描完成”替换
+    await p2.waitForSelector('.app-toast:has-text("「pics」扫描完成")', { timeout: 90_000 })
+    const overview = await p2.evaluate(() => window.api.library.getOverview())
+    expect(overview.ok && overview.data.sources[0]).toMatchObject({ path: moved, offline: false })
+    await expect(countOf(p2, 'pics')).resolves.toBe(String(IMAGE_COUNT + 1))
+    await expect(p2.locator('.status-banner').count()).resolves.toBe(0)
+    await second.app.close()
+  })
+})

@@ -1,6 +1,8 @@
 import { computed, defineComponent } from 'vue'
-import { ElMessage } from 'element-plus'
+import type { SourceRootVO } from '@shared/api'
 import { useLibraryStore } from '@/stores/library'
+import { usePickerStore } from '@/stores/picker'
+import { useScanStore } from '@/stores/scan'
 import { useViewStore, type GalleryView } from '@/stores/view'
 import { ICON } from '@/theme/icons'
 
@@ -12,6 +14,9 @@ export interface NavRow {
   icon: string
   // 图标颜色（CSS 值）；选中时统一换成主题深字色
   ink: string
+  // 状态文字（扫描中 / 找不到）的颜色，以及找不到时变灰的名字颜色；没有状态时为空
+  countInk: string
+  labelInk: string
   active: boolean
   // 目录树行：箭头位占位，有子文件夹时显示箭头
   tree: boolean
@@ -36,6 +41,8 @@ export default defineComponent({
   setup() {
     const library = useLibraryStore()
     const viewStore = useViewStore()
+    const picker = usePickerStore()
+    const scan = useScanStore()
 
     const num = (n: number | undefined): string => String(n ?? 0)
     const viewRow = (key: Exclude<GalleryView, 'dir'>, label: string, count: number | undefined, icon: string, ink: string): NavRow => ({
@@ -44,6 +51,8 @@ export default defineComponent({
       count: num(count),
       icon,
       ink,
+      countInk: '',
+      labelInk: '',
       active: viewStore.view === key,
       tree: false,
       hasChildren: false,
@@ -51,12 +60,15 @@ export default defineComponent({
       go: () => viewStore.show(key)
     })
 
-    const onImport = async (): Promise<void> => {
-      try {
-        await library.importSource()
-      } catch (err) {
-        ElMessage.error(err instanceof Error ? err.message : String(err))
+    // 源目录行的状态：正在扫描（绿字“扫描中”）优先，其次找不到（橙字“找不到”、名字变灰）
+    const sourceState = (s: SourceRootVO): Pick<NavRow, 'count' | 'ink' | 'countInk' | 'labelInk'> => {
+      if (scan.isScanning(s.id)) {
+        return { count: '扫描中', ink: 'var(--c-i-3F8F7B)', countInk: 'var(--c-i-3F8F7B)', labelInk: '' }
       }
+      if (s.offline) {
+        return { count: '找不到', ink: 'var(--c-i-B8732E)', countInk: 'var(--c-i-B8732E)', labelInk: 'var(--c-i-8A7F99)' }
+      }
+      return { count: num(s.count), ink: 'var(--c-i-3F8F7B)', countInk: '', labelInk: '' }
     }
 
     const sections = computed<NavSection[]>(() => {
@@ -65,9 +77,8 @@ export default defineComponent({
       const sources: NavRow[] = (ov?.sources ?? []).map((s) => ({
         key: `source:${s.id}`,
         label: s.name,
-        count: num(s.count),
+        ...sourceState(s),
         icon: s.hasChildren ? ICON.folders : ICON.folder,
-        ink: 'var(--c-i-3F8F7B)',
         active: viewStore.view === 'dir' && viewStore.dir?.kind === 'source' && viewStore.dir.id === s.id,
         tree: true,
         hasChildren: s.hasChildren,
@@ -80,6 +91,8 @@ export default defineComponent({
         count: num(d.count),
         icon: d.hasChildren ? ICON.heartFolders : ICON.heartFolder,
         ink: 'var(--c-i-C25B85)',
+        countInk: '',
+        labelInk: '',
         active: viewStore.view === 'dir' && viewStore.dir?.kind === 'category' && viewStore.dir.name === d.name,
         tree: true,
         hasChildren: d.hasChildren,
@@ -101,7 +114,7 @@ export default defineComponent({
         {
           title: '源目录',
           dot: 'var(--c-b-3F8F7B)',
-          add: { label: '导入源目录', run: () => void onImport(), disabled: library.importing },
+          add: { label: '导入源目录', run: () => picker.openImport(), disabled: false },
           rows: sources,
           hint: '还没有源目录'
         },

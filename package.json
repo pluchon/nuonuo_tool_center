@@ -22,6 +22,7 @@
     "@electric-sql/pglite-pgvector": "0.0.17",
     "ali-oss": "^6.23.0",
     "drizzle-orm": "^0.45.4",
+    "exif-reader": "^2.0.3",
     "onnxruntime-node": "^1.31.1",
     "openai": "^7.57.0",
     "sharp": "^0.35.5"

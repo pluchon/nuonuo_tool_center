@@ -15,10 +15,21 @@ export const IpcChannel = {
   settingsUpdate: 'settings:update',
   libraryGetOverview: 'library:getOverview',
   libraryAddRoot: 'library:addRoot',
+  libraryRelocateRoot: 'library:relocateRoot',
+  libraryListFolders: 'library:listFolders',
+  scanStart: 'scan:start',
+  scanStop: 'scan:stop',
+  scanGetState: 'scan:getState',
   windowSetTheme: 'window:setTheme',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',
   windowClose: 'window:close'
+} as const
+
+// 主进程主动推给渲染进程的事件
+export const IpcEvent = {
+  // 扫描状态变化：开始、进度、结束都推同一个结构
+  scanState: 'scan:state'
 } as const
 
 // 实际生效的明暗（“跟随系统”已经解析过）
@@ -45,6 +56,8 @@ export interface SourceRootVO {
   count: number
   // 磁盘上有子文件夹：图标用多文件夹，可以展开
   hasChildren: boolean
+  // 目录找不到（移动硬盘没接、文件夹被移走）
+  offline: boolean
 }
 
 // 侧栏里的一个顶层类目录
@@ -59,6 +72,48 @@ export interface LibraryOverviewVO {
   counts: SidebarCountsVO
   sources: SourceRootVO[]
   categories: CategoryDirVO[]
+  // 最近一次扫描完成的时间（ISO），还没扫描过为空
+  lastScanAt: string | null
+}
+
+// 导入对话框里的一个文件夹（盘符或某一层子文件夹）
+export interface FolderNodeVO {
+  path: string
+  // 显示名：盘符显示成“D: 盘”，其余是文件夹名
+  label: string
+  isDrive: boolean
+  hasChildren: boolean
+  // 不能选的原因：图库文件夹 / 已导入 / 含已导入；能选时为空
+  lock: 'LIBRARY' | 'IMPORTED' | 'HOLDS' | null
+}
+
+// 扫描进度：正在扫描时有值
+export interface ScanProgressVO {
+  // 只扫一个源目录时是它的名字；扫描全部时为空
+  rootName: string | null
+  rootIds: number[]
+  done: number
+  total: number
+  found: number
+}
+
+// 一次扫描的结果：用来弹完成提示、更新底栏
+export interface ScanResultVO {
+  rootName: string | null
+  total: number
+  found: number
+  stopped: boolean
+  // 读失败的文件数（被占用、没权限），这些文件保持原来的状态
+  failed: number
+  // 启动时自动发起的扫描：完成时不弹提示（有读失败的除外）
+  auto: boolean
+  finishedAt: string
+}
+
+// 扫描状态：正在扫描时 progress 有值；last 是上一次扫描的结果
+export interface ScanStateVO {
+  progress: ScanProgressVO | null
+  last: ScanResultVO | null
 }
 
 // 已导入的图库目录

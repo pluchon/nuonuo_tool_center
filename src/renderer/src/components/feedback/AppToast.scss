@@ -1,0 +1,87 @@
+// 顶部提示条（照原型 toast：深色胶囊，下滑弹入）
+@keyframes toast-in {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -18px) scale(0.96);
+  }
+  60% {
+    opacity: 1;
+    transform: translate(-50%, 3px) scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.app-toast {
+  position: fixed;
+  z-index: 90;
+  left: 50%;
+  top: 48px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 40px;
+  padding: 0 8px 0 16px;
+  border-radius: 999px;
+  background: rgba(var(--sh), 0.92);
+  color: #ffffff;
+  font-size: 13px;
+  box-shadow: 0 6px 18px rgba(var(--sh), 0.25);
+  white-space: nowrap;
+  transform: translateX(-50%);
+  animation: toast-in 0.38s cubic-bezier(0.2, 0.8, 0.3, 1.2);
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+
+  &__icon {
+    width: 20px;
+    height: 20px;
+    flex: none;
+    margin-left: -6px;
+    border-radius: 50%;
+    background: var(--c-b-3F8F7B);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &--error &__icon {
+    background: var(--c-b-E0577F);
+  }
+
+  &__sep {
+    width: 1px;
+    height: 16px;
+    margin-right: -8px;
+    background: rgba(var(--w), 0.18);
+  }
+
+  &__btn {
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: none;
+    background: transparent;
+    color: var(--c-i-FFB3C7);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #ffffff;
+    }
+  }
+
+  &__pad {
+    width: 8px;
+  }
+}

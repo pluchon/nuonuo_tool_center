@@ -43,8 +43,8 @@
             >
               <path :d="row.icon" />
             </svg>
-            <span class="side-nav__label">{{ row.label }}</span>
-            <span class="side-nav__count">{{ row.count }}</span>
+            <span class="side-nav__label" :style="row.labelInk ? { color: row.labelInk } : undefined">{{ row.label }}</span>
+            <span class="side-nav__count" :style="row.countInk ? { color: row.countInk } : undefined">{{ row.count }}</span>
           </button>
         </div>
         <span v-if="!sec.rows.length && sec.hint" class="side-nav__hint">{{ sec.hint }}</span>

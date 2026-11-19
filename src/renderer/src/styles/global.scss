@@ -27,3 +27,14 @@ body {
     display: none;
   }
 }
+
+// 状态横幅底色：扫描中（绿）、目录找不到（橙），深色模式换成半透明的同色
+:root {
+  --banner-scan-bg: rgba(234, 246, 241, 0.78);
+  --banner-offline-bg: rgba(253, 243, 231, 0.82);
+}
+
+:root.dark {
+  --banner-scan-bg: rgba(63, 143, 123, 0.18);
+  --banner-offline-bg: rgba(184, 115, 46, 0.18);
+}

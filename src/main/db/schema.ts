@@ -64,7 +64,9 @@ export const libraryRoot = pgTable(
     ...baseColumns(),
     kind: rootKindEnum('kind').notNull().default('SOURCE'),
     name: text('name').notNull(),
-    path: text('path').notNull()
+    path: text('path').notNull(),
+    // 最近一次完整扫描完成的时间；中途停止或目录找不到时不更新
+    lastScanAt: timestamp('last_scan_at', { withTimezone: true })
   },
   (t) => [
     uniqueIndex('uk_library_root_path').on(sql`lower(${t.path})`).where(sql`${t.deleteState} = 0`),

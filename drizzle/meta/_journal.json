@@ -15,6 +15,13 @@
       "when": 1794828091457,
       "tag": "0001_realign_p0",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795053177213,
+      "tag": "0002_scan_state",
+      "breakpoints": true
     }
   ]
 }

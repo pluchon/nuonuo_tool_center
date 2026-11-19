@@ -5,6 +5,8 @@
       <GalleryView />
     </div>
     <StatusFooter />
+    <FolderPickDialog />
+    <AppToast />
   </div>
 </template>
 
