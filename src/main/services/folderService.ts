@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import type { FolderNodeVO } from '@shared/api'
+import type { FolderNodeVO, TransferRootsVO } from '@shared/api'
 import { BizError } from '../common/bizError'
 import { getLogger } from '../common/logger'
 import { isWithin } from '../common/pathUtil'
@@ -63,6 +63,28 @@ export async function listFolders(parent: string | null, categoryHomeOverride: s
       return { path, label: name, isDrive: false, hasChildren: await hasChildDirs(path), lock: lockOf(path, home, sources) }
     })
   )
+}
+
+// 移动 / 复制对话框的顶层：全部源目录（找不到的标出来）、图库文件夹下的顶层类目录
+export async function transferRoots(categoryHomeOverride: string | null): Promise<TransferRootsVO> {
+  const roots = await findActiveRootsByKind('SOURCE')
+  const sources = await Promise.all(
+    roots.map(async (r) => {
+      const online = await stat(r.path)
+        .then((s) => s.isDirectory())
+        .catch(() => false)
+      return { id: r.id, path: r.path, label: r.name, offline: !online, hasChildren: online && (await hasChildDirs(r.path)) }
+    })
+  )
+  const home = await categoryHomeOf(categoryHomeOverride)
+  const names = (await childDirs(home).catch(() => null)) ?? []
+  const categories = await Promise.all(
+    names.map(async (name) => {
+      const path = join(home, name)
+      return { path, label: name, hasChildren: await hasChildDirs(path) }
+    })
+  )
+  return { sources, categories }
 }
 
 // 不能选的原因：就是图库文件夹（或在它里面）/ 在已导入的源目录里 / 包含了已导入的源目录或图库文件夹

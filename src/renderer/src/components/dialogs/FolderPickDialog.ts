@@ -1,19 +1,11 @@
-import { computed, defineComponent, h, markRaw, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, defineComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { FolderNodeVO } from '@shared/api'
+import { ChevronIcon, type TreeNode } from './chevronIcon'
 import { fetchFolders } from '@/api/library'
 import { useLibraryStore } from '@/stores/library'
 import { usePickerStore } from '@/stores/picker'
 import { useToastStore } from '@/stores/toast'
 import { useViewStore } from '@/stores/view'
-
-// el-tree 懒加载节点里我们用到的部分
-export interface TreeNode {
-  level: number
-  data: FolderNodeVO | FolderNodeVO[]
-  expanded: boolean
-  expand: () => void
-  collapse: () => void
-}
 
 // 不能选的原因写在行尾
 const LOCK_NOTE: Record<NonNullable<FolderNodeVO['lock']>, string> = {
@@ -24,27 +16,6 @@ const LOCK_NOTE: Record<NonNullable<FolderNodeVO['lock']>, string> = {
 
 // 打开时默认展开的盘：有 D 盘就展开 D 盘，否则展开第一个盘
 const PREFERRED_DRIVE = 'D:\\'
-
-// 展开箭头：照原型的细线 “›”，展开时由 el-tree 转 90°
-const ChevronIcon = markRaw(defineComponent({
-  name: 'ChevronIcon',
-  render: () =>
-    h(
-      'svg',
-      {
-        width: 12,
-        height: 12,
-        viewBox: '0 0 24 24',
-        fill: 'none',
-        stroke: 'currentColor',
-        'stroke-width': 2.6,
-        'stroke-linecap': 'round',
-        'stroke-linejoin': 'round',
-        'aria-hidden': 'true'
-      },
-      [h('path', { d: 'M9 6l6 6-6 6' })]
-    )
-}))
 
 // 导入源目录 / 重新选择位置：按磁盘逐层展开选一个文件夹（el-tree 懒加载，照原型的导入对话框）
 export default defineComponent({

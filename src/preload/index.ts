@@ -20,6 +20,8 @@ import {
   type CreateTagDTO,
   type DeleteResultVO,
   type FileOpDoneVO,
+  type TransferResultVO,
+  type TransferRootsVO,
   type SaveTagDTO,
   type DirCountVO,
   type ThemeMode
@@ -66,6 +68,12 @@ const api = {
     remove: (query: GalleryQueryDTO, imageIds: number[]): Promise<ApiResponse<DeleteResultVO>> =>
       ipcRenderer.invoke(IpcChannel.fileDelete, query, imageIds),
     undoDelete: (batchId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.fileUndoDelete, batchId),
+    transferRoots: (): Promise<ApiResponse<TransferRootsVO>> => ipcRenderer.invoke(IpcChannel.fileTransferRoots),
+    move: (query: GalleryQueryDTO, imageIds: number[], target: string): Promise<ApiResponse<TransferResultVO>> =>
+      ipcRenderer.invoke(IpcChannel.fileMove, query, imageIds, target),
+    copy: (query: GalleryQueryDTO, imageIds: number[], targets: string[]): Promise<ApiResponse<TransferResultVO>> =>
+      ipcRenderer.invoke(IpcChannel.fileCopy, query, imageIds, targets),
+    undoTransfer: (batchId: number): Promise<ApiResponse<TransferResultVO>> => ipcRenderer.invoke(IpcChannel.fileUndoTransfer, batchId),
     // 订阅文件操作执行完的通知，返回取消订阅的函数
     onDone: (listener: (result: FileOpDoneVO) => void): (() => void) => {
       const handler = (_event: IpcRendererEvent, result: FileOpDoneVO): void => listener(result)

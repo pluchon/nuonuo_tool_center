@@ -1,0 +1,227 @@
+// 文件夹对话框的公共样式（导入源目录、移动到、复制到共用；照原型 dlg：420px，绿紫斜纹外框，白卡片，分组框里是可展开的文件夹树）
+// 用法：.xxx { @include folder-dialog; }，类名按 BEM 写成 xxx__frame、xxx__row 等
+@mixin folder-dialog {
+  $b: &;
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(84, 66, 130, 0.16);
+  backdrop-filter: blur(8px) saturate(1.2);
+
+  &__frame {
+    width: 420px;
+    padding: 6px;
+    border-radius: 22px;
+    background: repeating-linear-gradient(135deg, var(--c-b-E2F4EE) 0 8px, var(--a-soft) 8px 16px);
+  }
+
+  &__card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 17px;
+    background: var(--c-surface);
+    border: 1px solid var(--a-line2);
+    color: var(--c-i-3B3047);
+  }
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--c-i-2E2440);
+  }
+
+  &__close {
+    margin-left: auto;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--c-b-F2C6D4);
+    background: var(--c-b-FCE7EE);
+    color: var(--c-i-C25B85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  &__group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border-radius: 14px;
+    background: var(--c-b-FBF9FE);
+    border: 1px solid var(--a-line2);
+  }
+
+  &__group-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 6px 4px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--c-i-7F7494);
+  }
+
+  &__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--c-b-3F8F7B);
+  }
+
+  // 每组限制可见行数（5 行），多了在框里滚动
+  &__list {
+    max-height: 186px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--a-line) transparent;
+  }
+
+  &__tree {
+    background: transparent;
+    color: inherit;
+    --el-tree-node-hover-bg-color: transparent;
+
+    :deep(.el-tree-node__content) {
+      height: auto;
+      margin-bottom: 4px;
+      background: transparent;
+      cursor: default;
+    }
+
+    :deep(.el-tree-node:focus > .el-tree-node__content) {
+      background: transparent;
+    }
+
+    // 展开箭头：22px 的小按钮位，照原型
+    :deep(.el-tree-node__expand-icon) {
+      flex: none;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      margin-right: 2px;
+      box-sizing: border-box;
+      border-radius: 6px;
+      color: var(--c-i-7F7494);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    :deep(.el-tree-node__expand-icon.is-leaf) {
+      color: transparent;
+      cursor: default;
+    }
+
+    :deep(.el-tree-node__loading-icon) {
+      margin-right: 2px;
+      color: var(--c-i-7F7494);
+    }
+  }
+
+  &__row {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 10px;
+    box-sizing: border-box;
+    border-radius: 10px;
+    border: 1px solid var(--a-line2);
+    background: var(--c-surface);
+    color: var(--c-i-3B3047);
+    cursor: pointer;
+
+    &--locked {
+      background: var(--c-b-F4F0FA);
+      color: var(--c-i-9C90B3);
+      cursor: not-allowed;
+
+      #{$b}__mark {
+        border-color: var(--a-line2);
+        background: var(--c-b-F4F0FA);
+      }
+    }
+
+    &--drive {
+      background: var(--c-surface);
+      color: var(--c-i-3B3047);
+      cursor: default;
+    }
+
+    &--on {
+      background: var(--a08);
+      border: 1.5px solid var(--a);
+
+      #{$b}__mark {
+        border-color: var(--a);
+        background: var(--a);
+      }
+    }
+  }
+
+  &__mark {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    box-sizing: border-box;
+    border-radius: 50%;
+    border: 1.5px solid var(--a-mid);
+    background: var(--c-surface);
+    color: #ffffff;
+    font-size: 11px;
+    line-height: 13px;
+    text-align: center;
+  }
+
+  &__label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__note {
+    flex: none;
+    font-size: 11px;
+    color: var(--c-i-7F7494);
+  }
+
+  &__confirm {
+    width: 100%;
+    height: 40px;
+    border-radius: 999px;
+    border: none;
+    background: var(--a-mid);
+    color: #ffffff;
+    font: inherit;
+    font-weight: 700;
+    cursor: default;
+
+    &--ready {
+      background: var(--a);
+      cursor: pointer;
+    }
+
+    &:disabled {
+      opacity: 1;
+    }
+  }
+}

@@ -1,0 +1,17 @@
+@use '../../styles/folderDialog' as *;
+
+// 移动到… / 复制到…：和导入对话框同一套样式；复制时的勾选框是圆角方块，组内没有目录时一行淡字
+.transfer-dlg {
+  @include folder-dialog;
+
+  &__mark--box {
+    border-radius: 5px;
+  }
+
+  &__empty {
+    display: block;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--c-i-6E6280);
+  }
+}

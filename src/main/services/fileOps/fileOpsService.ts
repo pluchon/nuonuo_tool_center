@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises'
+import { stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { DeleteResultVO, FileOpDoneVO, GalleryQueryDTO } from '@shared/api'
 import { BizError } from '../../common/bizError'
@@ -38,6 +38,11 @@ let deps: FileOpsDeps = {
   onDone: () => undefined
 }
 
+// 放进回收站（撤销复制时删掉复制出来的文件也走这里）
+export function trashPath(path: string): Promise<void> {
+  return deps.trash(path)
+}
+
 // 启动时注入依赖
 export function configureFileOps(next: Partial<FileOpsDeps>): void {
   deps = { ...deps, ...next }
@@ -45,7 +50,7 @@ export function configureFileOps(next: Partial<FileOpsDeps>): void {
 
 // 所有动文件的操作串行执行：上一件做完再做下一件
 let queue: Promise<unknown> = Promise.resolve()
-function enqueue<T>(task: () => Promise<T>): Promise<T> {
+export function enqueue<T>(task: () => Promise<T>): Promise<T> {
   const run = queue.then(task, task)
   queue = run.catch(() => undefined)
   return run
@@ -167,7 +172,8 @@ async function applyBatch(batchId: number): Promise<void> {
   let failed = 0
   let firstError: string | null = null
   for (const op of ops) {
-    const result = await applyDelete(op)
+    // 移动、复制是当场执行的，只有崩溃时才会留下没做完的步骤：按磁盘现状收尾
+    const result = op.opType === 'DELETE' ? await applyDelete(op) : await settleTransferOp(op)
     if (result === null) {
       done += 1
     } else {
@@ -204,6 +210,25 @@ async function applyDelete(op: FileOpEntity): Promise<string | null> {
     })
     return message
   }
+}
+
+// 崩溃后收尾一步移动或复制：目标位置只有占位的空文件（或复制了一半）就删掉，算没做；
+// 目标完整、来源已经不在（移动）或大小一致（复制）就算做完。库里的记录交给随后的扫描对账
+// 日志里没有目标路径说明还没占到位置（或复制没完成），什么都不动
+async function settleTransferOp(op: FileOpEntity): Promise<string | null> {
+  const { db } = getDatabase()
+  if (!op.toPath) {
+    await updateOpStatus(db, op.id, 'REVERTED')
+    return null
+  }
+  const to = await stat(op.toPath).catch(() => null)
+  const from = await stat(op.fromPath).catch(() => null)
+  const complete = !!to && (op.opType === 'MOVE' ? !from : !!from && from.size === to.size)
+  if (to && !complete && from) {
+    await unlink(op.toPath).catch((err: unknown) => log.warn(`清理没做完的目标文件失败：${op.toPath}`, err))
+  }
+  await updateOpStatus(db, op.id, complete ? 'DONE' : 'REVERTED')
+  return null
 }
 
 // 退出前：等着进回收站的删除马上执行

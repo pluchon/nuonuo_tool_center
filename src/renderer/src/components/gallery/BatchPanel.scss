@@ -1,8 +1,34 @@
 // 批量面板（照原型 batch）
 .batch-panel {
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
   gap: 16px;
+
+  // 底部：复制到 / 移动到
+  &__acts {
+    margin-top: auto;
+    display: flex;
+    gap: 8px;
+  }
+
+  &__act {
+    flex: 1;
+    height: 36px;
+    border-radius: 999px;
+    border: 1.5px solid var(--a);
+    background: var(--c-surface);
+    color: var(--a-ink);
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+
+    &--main {
+      border: none;
+      background: var(--a);
+      color: #ffffff;
+    }
+  }
 
   &__head {
     display: flex;

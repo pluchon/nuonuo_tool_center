@@ -103,9 +103,15 @@
         </button>
       </div>
 
-      <div v-if="importText" class="detail-panel__imported">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="导入时间"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 3" /></svg>
-        <span>{{ importText }}</span>
+      <div class="detail-panel__foot">
+        <div class="detail-panel__acts">
+          <button class="detail-panel__act" type="button" :disabled="!canTransfer" @click="transfer.open('copy')">复制到…</button>
+          <button class="detail-panel__act detail-panel__act--main" type="button" :disabled="!canTransfer" @click="transfer.open('move')">移动到…</button>
+        </div>
+        <div v-if="importText" class="detail-panel__imported">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="导入时间"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 3" /></svg>
+          <span>{{ importText }}</span>
+        </div>
       </div>
     </template>
 

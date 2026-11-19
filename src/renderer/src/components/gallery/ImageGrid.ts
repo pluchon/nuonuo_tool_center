@@ -4,6 +4,7 @@ import { thumbUrl } from '@/api/gallery'
 import { useGalleryStore } from '@/stores/gallery'
 import { usePickerStore } from '@/stores/picker'
 import { useSettingsStore } from '@/stores/settings'
+import { useTransferStore } from '@/stores/transfer'
 import { groupConsecutive, layoutRows, monthKey, monthLabel, TILE_GAP, type LayoutRow } from '@/utils/gridLayout'
 
 // 一个月份分组（不分组时只有一组，没有标题）
@@ -27,6 +28,7 @@ export default defineComponent({
     const gallery = useGalleryStore()
     const settings = useSettingsStore()
     const picker = usePickerStore()
+    const transfer = useTransferStore()
     const gridRef = ref<HTMLElement | null>(null)
     const width = ref(0)
 
@@ -116,7 +118,7 @@ export default defineComponent({
     // 网格的键盘操作；焦点在输入框里或对话框开着时不处理
     const onKey = (e: KeyboardEvent): void => {
       const el = e.target as HTMLElement | null
-      if (picker.open || gallery.deleteAsk || (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))) {
+      if (picker.open || gallery.deleteAsk || transfer.mode || (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))) {
         return
       }
       // Delete：删除选中的图（走确认）

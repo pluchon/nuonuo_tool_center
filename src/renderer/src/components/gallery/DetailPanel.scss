@@ -223,8 +223,43 @@
     transition: left 0.15s;
   }
 
-  &__imported {
+  // 底部：复制到 / 移动到，下面是导入时间（“最近导入”里）
+  &__foot {
     margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__acts {
+    display: flex;
+    gap: 8px;
+  }
+
+  &__act {
+    flex: 1;
+    height: 36px;
+    border-radius: 999px;
+    border: 1.5px solid var(--a);
+    background: var(--c-surface);
+    color: var(--a-ink);
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+
+    &--main {
+      border: none;
+      background: var(--a);
+      color: #ffffff;
+    }
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+  }
+
+  &__imported {
     display: flex;
     align-items: center;
     justify-content: center;

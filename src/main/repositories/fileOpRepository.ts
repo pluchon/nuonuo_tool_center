@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from 'drizzle-orm'
+import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import type { AppDatabase } from '../db/client'
 import { getDatabase } from '../db/client'
 import { fileOp, fileOpBatch, imageFile } from '../db/schema'
@@ -92,6 +92,64 @@ export async function restoreImageFiles(dbx: Db, ids: number[], status: 'NORMAL'
 // 文件已经进了回收站：记录逻辑删除（释放“同一位置只有一条记录”的唯一约束，从回收站还原后扫描能重新登记）
 export async function retireImageFile(dbx: Db, id: number): Promise<void> {
   await dbx.update(imageFile).set({ status: 'DELETED', deleteState: 1 }).where(eq(imageFile.id, id))
+}
+
+// 定下实际的目标路径（重名加编号后）
+export async function updateOpToPath(dbx: Db, id: number, toPath: string): Promise<void> {
+  await dbx.update(fileOp).set({ toPath }).where(eq(fileOp.id, id))
+}
+
+// 批次里做完的步骤（撤销用）
+export async function findDoneOps(batchId: number): Promise<FileOpEntity[]> {
+  const { db } = getDatabase()
+  return db
+    .select()
+    .from(fileOp)
+    .where(and(eq(fileOp.batchId, batchId), eq(fileOp.status, 'DONE'), eq(fileOp.deleteState, 0)))
+    .orderBy(asc(fileOp.seq))
+}
+
+// 某个位置上还挂着的旧记录（文件早就不在了）逻辑删除，给新文件腾出位置
+export async function retireRowsAt(dbx: Db, rootId: number, relPath: string): Promise<void> {
+  await dbx
+    .update(imageFile)
+    .set({ deleteState: 1 })
+    .where(and(eq(imageFile.rootId, rootId), sql`lower(${imageFile.relPath}) = ${relPath.toLowerCase()}`, eq(imageFile.deleteState, 0)))
+}
+
+// 文件挪了位置：记录跟着改
+export async function relocateImageFile(dbx: Db, id: number, rootId: number, relPath: string): Promise<void> {
+  await dbx.update(imageFile).set({ rootId, relPath, status: 'NORMAL' }).where(eq(imageFile.id, id))
+}
+
+// 复制出来的新文件：同一张图多一个位置
+export async function insertCopiedFile(dbx: Db, row: { imageId: number; rootId: number; relPath: string; mtime: Date }): Promise<number> {
+  const [created] = await dbx
+    .insert(imageFile)
+    .values({ ...row, status: 'NORMAL' })
+    .returning({ id: imageFile.id })
+  return created.id
+}
+
+// 某张图在某个目录下已有的位置（相对路径，不含子目录）：复制时“已有副本”
+export async function findImagesInDir(dbx: Db, imageIds: number[], rootId: number, relDir: string): Promise<Set<number>> {
+  if (imageIds.length === 0) {
+    return new Set()
+  }
+  const dirExpr = sql`lower(regexp_replace(${imageFile.relPath}, '\\\\?[^\\\\]*$', ''))`
+  const rows = await dbx
+    .select({ imageId: imageFile.imageId })
+    .from(imageFile)
+    .where(
+      and(
+        inArray(imageFile.imageId, imageIds),
+        eq(imageFile.rootId, rootId),
+        eq(imageFile.deleteState, 0),
+        eq(imageFile.status, 'NORMAL'),
+        sql`${dirExpr} = ${relDir.toLowerCase()}`
+      )
+    )
+  return new Set(rows.map((r) => r.imageId))
 }
 
 // 某个目录下正在等着进回收站的文件（相对路径）：扫描时跳过它们

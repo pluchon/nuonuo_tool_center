@@ -2,6 +2,7 @@ import { defineComponent, onBeforeUnmount, onMounted } from 'vue'
 import { onFileOpDone } from '@/api/files'
 import { useGalleryStore } from '@/stores/gallery'
 import FolderPickDialog from '@/components/dialogs/FolderPickDialog.vue'
+import TransferDialog from '@/components/dialogs/TransferDialog.vue'
 import AppToast from '@/components/feedback/AppToast.vue'
 import GalleryView from '@/views/gallery/GalleryView.vue'
 import TagsView from '@/views/tags/TagsView.vue'
@@ -16,7 +17,7 @@ import StatusFooter from './StatusFooter.vue'
 // 主界面外壳：左侧导航卡片、主区（图库或标签管理）、底栏，以及选文件夹对话框和顶部提示条（照原型主画板）
 export default defineComponent({
   name: 'AppShell',
-  components: { SideNav, GalleryView, TagsView, StatusFooter, FolderPickDialog, AppToast },
+  components: { SideNav, GalleryView, TagsView, StatusFooter, FolderPickDialog, TransferDialog, AppToast },
   setup() {
     const library = useLibraryStore()
     const scan = useScanStore()

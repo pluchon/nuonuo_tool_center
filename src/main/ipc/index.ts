@@ -4,7 +4,8 @@ import type { DataPaths } from '../config/paths'
 import { BizError } from '../common/bizError'
 import { bootDatabase, getDbBootState, type DatabaseLocation } from '../services/databaseService'
 import { deleteImages, recoverFileOps, undoDelete } from '../services/fileOps/fileOpsService'
-import { listFolders } from '../services/folderService'
+import { copyImages, moveImages, undoTransfer } from '../services/fileOps/transferService'
+import { listFolders, transferRoots } from '../services/folderService'
 import { getImageDetail, listGallery, listUntaggedDirs, openFileWithDefault, showFileInFolder } from '../services/galleryService'
 import { addTag, getCommonTags, getTagCatalog, removeTag, renameImage, setR18 } from '../services/imageEditService'
 import { addRoot, getOverview, relocateRoot } from '../services/libraryService'
@@ -163,6 +164,22 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   handle(IpcChannel.fileUndoDelete, async (_event, batchId: number) => {
     requireDatabase()
     await undoDelete(batchId)
+  })
+  handle(IpcChannel.fileTransferRoots, async () => {
+    requireDatabase()
+    return transferRoots(paths.categoryHomeOverride)
+  })
+  handle(IpcChannel.fileMove, async (_event, query: GalleryQueryDTO, imageIds: number[], target: string) => {
+    requireDatabase()
+    return moveImages(query, imageIds, target)
+  })
+  handle(IpcChannel.fileCopy, async (_event, query: GalleryQueryDTO, imageIds: number[], targets: string[]) => {
+    requireDatabase()
+    return copyImages(query, imageIds, targets)
+  })
+  handle(IpcChannel.fileUndoTransfer, async (_event, batchId: number) => {
+    requireDatabase()
+    return undoTransfer(batchId)
   })
   handle(IpcChannel.fileOpen, async (_event, fileId: number) => {
     requireDatabase()

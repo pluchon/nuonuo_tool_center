@@ -3,6 +3,7 @@ import { NAME_MAX, type ExifInfoVO, type ImageDetailVO, type ImageLocationVO } f
 import { openFileWithDefault, showFileInFolder, thumbUrl } from '@/api/gallery'
 import { useGalleryStore } from '@/stores/gallery'
 import { useToastStore } from '@/stores/toast'
+import { useTransferStore } from '@/stores/transfer'
 import { useViewStore } from '@/stores/view'
 import BatchPanel from './BatchPanel.vue'
 import TagEditor from './TagEditor.vue'
@@ -69,6 +70,7 @@ export default defineComponent({
     const gallery = useGalleryStore()
     const toast = useToastStore()
     const viewStore = useViewStore()
+    const transfer = useTransferStore()
 
     // 只显示和当前选中一致的详情，避免切换时闪出上一张的信息
     const detail = computed<ImageDetailVO | null>(() =>
@@ -84,6 +86,8 @@ export default defineComponent({
       return d.locations.find((l) => l.fileId === fileId) ?? d.locations[0]
     })
     const fileName = computed(() => location.value?.path.split('\\').pop() ?? '')
+    // 原图打不开（目录找不到、文件不见了）时不能复制、移动
+    const canTransfer = computed(() => !!location.value && !location.value.offline && !location.value.missing)
     const dims = computed(() => (detail.value?.width && detail.value.height ? `${detail.value.width}×${detail.value.height}` : ''))
     const size = computed(() => formatBytes(detail.value?.byteSize ?? 0))
 
@@ -177,6 +181,8 @@ export default defineComponent({
 
     return {
       gallery,
+      transfer,
+      canTransfer,
       detail,
       location,
       fileName,

@@ -7,6 +7,7 @@
     </div>
     <StatusFooter />
     <FolderPickDialog />
+    <TransferDialog />
     <AppToast />
   </div>
 </template>

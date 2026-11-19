@@ -45,6 +45,11 @@
       <button class="batch-panel__r18-btn batch-panel__r18-btn--on" type="button" :disabled="busy" @click="onR18(true)">全部标 R-18</button>
       <button class="batch-panel__r18-btn" type="button" :disabled="busy" @click="onR18(false)">全部取消 R-18</button>
     </div>
+
+    <div class="batch-panel__acts">
+      <button class="batch-panel__act" type="button" @click="transfer.open('copy')">复制到…</button>
+      <button class="batch-panel__act batch-panel__act--main" type="button" @click="transfer.open('move')">移动到…</button>
+    </div>
   </div>
 </template>
 

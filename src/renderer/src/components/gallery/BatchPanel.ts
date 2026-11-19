@@ -3,6 +3,7 @@ import { thumbUrl } from '@/api/gallery'
 import { useGalleryStore } from '@/stores/gallery'
 import { useSettingsStore } from '@/stores/settings'
 import { useTagsStore } from '@/stores/tags'
+import { useTransferStore } from '@/stores/transfer'
 
 // 叠放的缩略图最多显示几张
 const THUMBS_SHOWN = 4
@@ -62,6 +63,7 @@ export default defineComponent({
       void run(() => gallery.setR18(value))
     }
 
-    return { gallery, thumbs, more, blurR18, draft, busy, colorOf, categoryName, thumbUrl, onInput, onEnter, onRemove, onR18 }
+    const transfer = useTransferStore()
+    return { gallery, transfer, thumbs, more, blurR18, draft, busy, colorOf, categoryName, thumbUrl, onInput, onEnter, onRemove, onR18 }
   }
 })

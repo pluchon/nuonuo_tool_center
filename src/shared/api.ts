@@ -40,6 +40,10 @@ export const IpcChannel = {
   tagCategoryDelete: 'tagCategory:delete',
   fileDelete: 'file:delete',
   fileUndoDelete: 'file:undoDelete',
+  fileTransferRoots: 'file:transferRoots',
+  fileMove: 'file:move',
+  fileCopy: 'file:copy',
+  fileUndoTransfer: 'file:undoTransfer',
   windowSetTheme: 'window:setTheme',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',
@@ -314,6 +318,28 @@ export interface DeleteResultVO {
   batchId: number
   images: number
   skipped: number
+}
+
+// 移动 / 复制对话框里一个可以作为目标的文件夹
+export interface TransferFolderVO {
+  path: string
+  label: string
+  hasChildren: boolean
+}
+
+// 移动 / 复制对话框的两组顶层：源目录（带 id，数量从侧栏取）、类目录（图库文件夹下的顶层文件夹）
+export interface TransferRootsVO {
+  sources: Array<TransferFolderVO & { id: number; offline: boolean }>
+  categories: TransferFolderVO[]
+}
+
+// 移动 / 复制的结果：批次 id（撤销用）、做成几步、跳过几步（已经在那里）、失败几步和第一个原因
+export interface TransferResultVO {
+  batchId: number | null
+  done: number
+  skipped: number
+  failed: number
+  error: string | null
 }
 
 // 一批文件操作执行完：成功几步、失败几步、第一个失败原因
