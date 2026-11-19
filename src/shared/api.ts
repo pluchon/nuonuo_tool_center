@@ -13,6 +13,12 @@ export const IpcChannel = {
   systemRetryDatabase: 'system:retryDatabase',
   settingsGet: 'settings:get',
   settingsUpdate: 'settings:update',
+  settingsPickCategoryHome: 'settings:pickCategoryHome',
+  settingsPickBackground: 'settings:pickBackground',
+  systemDataInfo: 'system:dataInfo',
+  systemOpenDataDir: 'system:openDataDir',
+  systemCleanCache: 'system:cleanCache',
+  systemExportBackup: 'system:exportBackup',
   libraryGetOverview: 'library:getOverview',
   libraryAddRoot: 'library:addRoot',
   libraryRelocateRoot: 'library:relocateRoot',
@@ -56,6 +62,23 @@ export const IpcChannel = {
   windowToggleMaximize: 'window:toggleMaximize',
   windowClose: 'window:close'
 } as const
+
+// 设置里“数据与缓存”“关于”要的信息
+export interface DataInfoVO {
+  dataDir: string
+  // 缩略图缓存的总大小（字节）
+  cacheBytes: number
+  version: string
+  // 类目录现在的位置；由环境变量指定时不能在设置里改
+  categoryHome: string
+  categoryHomeLocked: boolean
+}
+
+// 清理缩略图缓存的结果
+export interface CacheCleanVO {
+  removed: number
+  freedBytes: number
+}
 
 // 主进程主动推给渲染进程的事件
 export const IpcEvent = {

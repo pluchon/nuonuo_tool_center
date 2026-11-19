@@ -2,8 +2,17 @@
   <header class="title-bar">
     <img class="title-bar__brand" :src="brandAvatar" alt="" aria-hidden="true" draggable="false" />
     <span class="title-bar__name">诺诺的图床</span>
-    <!-- 设置弹窗在设置阶段接入，现在先占位 -->
-    <button class="title-bar__gear" type="button" aria-label="设置" title="设置" disabled>
+    <!-- 设置：图库数据打开、设置读出来以后才能点 -->
+    <button
+      class="title-bar__gear"
+      :class="{ 'title-bar__gear--on': settings.dialogOpen }"
+      type="button"
+      aria-label="设置"
+      title="设置"
+      :aria-pressed="settings.dialogOpen"
+      :disabled="!settings.loaded"
+      @click="onGear"
+    >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
         <circle cx="12" cy="12" r="3" />

@@ -2,8 +2,8 @@
 
 // 外观模式：浅色 / 深色 / 跟随系统
 export type AppearanceMode = 'light' | 'dark' | 'system'
-// 背景：默认 / 三张主题背景（自定义图片留到设置页阶段再加）
-export type BackgroundKey = 'none' | 'halftone' | 'plotter' | 'paper'
+// 背景：默认 / 三张主题背景 / 自定义图片
+export type BackgroundKey = 'none' | 'halftone' | 'plotter' | 'paper' | 'custom'
 // 关闭窗口时的行为
 export type CloseAction = 'quit' | 'tray'
 // 排序方式
@@ -18,7 +18,10 @@ export const ACCENT_COLORS = ['#7A63C9', '#C25B85', '#3F8F7B', '#4A86C2', '#B873
 export type AccentColor = (typeof ACCENT_COLORS)[number]
 
 export const APPEARANCE_MODES: readonly AppearanceMode[] = ['light', 'dark', 'system']
-export const BACKGROUND_KEYS: readonly BackgroundKey[] = ['none', 'halftone', 'plotter', 'paper']
+export const BACKGROUND_KEYS: readonly BackgroundKey[] = ['none', 'halftone', 'plotter', 'paper', 'custom']
+
+// 自定义背景图存在数据目录 backgrounds 下的文件名（应用自己生成，只认这个格式）
+export const CUSTOM_BACKGROUND_NAME = /^custom-[0-9]{13}\.webp$/
 export const CLOSE_ACTIONS: readonly CloseAction[] = ['quit', 'tray']
 export const SORT_KEYS: readonly SortKey[] = ['new', 'old', 'taken', 'size', 'name']
 export const SKIP_SMALL_OPTIONS: readonly SkipSmall[] = ['none', '10', '50']
@@ -38,6 +41,8 @@ export interface AppSettings {
   accent: AccentColor
   background: BackgroundKey
   backgroundDim: number
+  // 自定义背景图的文件名；还没选过为空
+  customBackground: string | null
   glass: boolean
   glassBlur: number
   panelClarity: number
@@ -62,6 +67,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   accent: '#7A63C9',
   background: 'none',
   backgroundDim: 35,
+  customBackground: null,
   glass: true,
   glassBlur: 22,
   panelClarity: 40,

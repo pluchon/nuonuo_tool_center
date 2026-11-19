@@ -119,6 +119,19 @@ export function startScan(rootId: number | null, auto = false): ScanStateVO {
   return getScanState()
 }
 
+// 文件有变化（实时监听）后重扫一个目录：正在扫的这一轮可能已经走过变化的地方，所以只要队列里还没有就再排一次
+export function requeueScan(rootId: number): void {
+  if (queue.some((j) => j.rootId === null || j.rootId === rootId)) {
+    return
+  }
+  queue.push({ rootId, auto: true })
+  if (!running) {
+    running = drain().finally(() => {
+      running = null
+    })
+  }
+}
+
 // 停止扫描：当前任务处理完手上的文件就结束，排队的任务一并取消；已经找到的图都保留
 export function stopScan(): ScanStateVO {
   if (progress) {

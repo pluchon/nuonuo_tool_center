@@ -41,7 +41,8 @@
     transition: background 0.15s, color 0.15s;
     -webkit-app-region: no-drag;
 
-    &:hover:not(:disabled) {
+    &:hover:not(:disabled),
+    &--on {
       background: color-mix(in srgb, var(--a) 12%, transparent);
       color: var(--a-ink);
     }

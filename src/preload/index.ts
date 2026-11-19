@@ -26,19 +26,27 @@ import {
   type TransferRootsVO,
   type SaveTagDTO,
   type DirCountVO,
-  type ThemeMode
+  type ThemeMode,
+  type DataInfoVO,
+  type CacheCleanVO
 } from '@shared/api'
 
 // 暴露给渲染进程的接口：只开放具体方法，不暴露 ipcRenderer 本身
 const api = {
   system: {
     getBootState: (): Promise<ApiResponse<DbBootState>> => ipcRenderer.invoke(IpcChannel.systemGetBootState),
-    retryDatabase: (): Promise<ApiResponse<DbBootState>> => ipcRenderer.invoke(IpcChannel.systemRetryDatabase)
+    retryDatabase: (): Promise<ApiResponse<DbBootState>> => ipcRenderer.invoke(IpcChannel.systemRetryDatabase),
+    dataInfo: (): Promise<ApiResponse<DataInfoVO>> => ipcRenderer.invoke(IpcChannel.systemDataInfo),
+    openDataDir: (): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.systemOpenDataDir),
+    cleanCache: (): Promise<ApiResponse<CacheCleanVO>> => ipcRenderer.invoke(IpcChannel.systemCleanCache),
+    exportBackup: (): Promise<ApiResponse<string | null>> => ipcRenderer.invoke(IpcChannel.systemExportBackup)
   },
   settings: {
     get: (): Promise<ApiResponse<AppSettings>> => ipcRenderer.invoke(IpcChannel.settingsGet),
     update: (patch: Partial<AppSettings>): Promise<ApiResponse<AppSettings>> =>
-      ipcRenderer.invoke(IpcChannel.settingsUpdate, patch)
+      ipcRenderer.invoke(IpcChannel.settingsUpdate, patch),
+    pickCategoryHome: (): Promise<ApiResponse<AppSettings | null>> => ipcRenderer.invoke(IpcChannel.settingsPickCategoryHome),
+    pickBackground: (): Promise<ApiResponse<AppSettings | null>> => ipcRenderer.invoke(IpcChannel.settingsPickBackground)
   },
   library: {
     getOverview: (): Promise<ApiResponse<LibraryOverviewVO>> => ipcRenderer.invoke(IpcChannel.libraryGetOverview),

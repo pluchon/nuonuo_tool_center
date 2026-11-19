@@ -14,6 +14,8 @@ export interface DataPaths {
   thumbs: string
   models: string
   logs: string
+  // 自定义背景图
+  backgrounds: string
   lockFile: string
   // 环境变量指定的类目录位置；为空时由设置或默认值决定
   categoryHomeOverride: string | null
@@ -44,6 +46,7 @@ export function buildDataPaths(root: string, env: NodeJS.ProcessEnv): DataPaths 
     thumbs: join(root, 'thumbs'),
     models: join(root, 'models'),
     logs: join(root, 'logs'),
+    backgrounds: join(root, 'backgrounds'),
     lockFile: join(root, 'ltm.lock'),
     categoryHomeOverride: resolveCategoryHomeOverride(env)
   }

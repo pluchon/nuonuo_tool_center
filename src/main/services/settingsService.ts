@@ -3,6 +3,7 @@ import {
   ACCENT_COLORS,
   APPEARANCE_MODES,
   BACKGROUND_KEYS,
+  CUSTOM_BACKGROUND_NAME,
   CLOSE_ACTIONS,
   DEFAULT_SETTINGS,
   RANGE_LIMITS,
@@ -57,11 +58,15 @@ const dirPath: Validator = (v) => {
   return isAbsolute(trimmed) ? resolve(trimmed) : undefined
 }
 
+// 自定义背景图文件名：空值表示没有
+const bgName: Validator = (v) => (v === null ? null : typeof v === 'string' && CUSTOM_BACKGROUND_NAME.test(v) ? v : undefined)
+
 const VALIDATORS: Record<SettingKey, Validator> = {
   appearance: oneOf(APPEARANCE_MODES),
   accent: oneOf(ACCENT_COLORS),
   background: oneOf(BACKGROUND_KEYS),
   backgroundDim: intIn(RANGE_LIMITS.backgroundDim),
+  customBackground: bgName,
   glass: bool,
   glassBlur: intIn(RANGE_LIMITS.glassBlur),
   panelClarity: intIn(RANGE_LIMITS.panelClarity),

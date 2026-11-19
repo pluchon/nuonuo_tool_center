@@ -18,6 +18,7 @@ import {
   type FileOpEntity
 } from '../../repositories/fileOpRepository'
 import { filesForAction } from '../galleryService'
+import { muteWhile } from '../scan/watchService'
 
 const log = getLogger('fileOps')
 
@@ -51,7 +52,9 @@ export function configureFileOps(next: Partial<FileOpsDeps>): void {
 // 所有动文件的操作串行执行：上一件做完再做下一件
 let queue: Promise<unknown> = Promise.resolve()
 export function enqueue<T>(task: () => Promise<T>): Promise<T> {
-  const run = queue.then(task, task)
+  // 应用自己改的文件不要让实时监听当成外部变化
+  const muted = (): Promise<T> => muteWhile(task)
+  const run = queue.then(muted, muted)
   queue = run.catch(() => undefined)
   return run
 }

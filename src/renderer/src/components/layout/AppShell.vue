@@ -31,6 +31,7 @@
       @cancel="gallery.cancelDrop()"
     />
     <ImageViewer />
+    <SettingsDialog />
     <AppToast />
   </div>
 </template>

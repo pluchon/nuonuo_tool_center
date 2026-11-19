@@ -12,9 +12,13 @@ import { configureFileOps, flushPendingDeletes, recoverFileOps } from './service
 import { configureTransfer } from './services/fileOps/transferService'
 import { configureFolderOps } from './services/fileOps/folderOpsService'
 import { originalPathOf } from './services/galleryService'
-import { configureScan, onScanState, startScan, stopScanAndWait } from './services/scan/scanService'
+import { configureScan, onScanState, requeueScan, startScan, stopScanAndWait } from './services/scan/scanService'
+import { configureWatch, stopWatching, syncWatching } from './services/scan/watchService'
 import { getSettings } from './services/settingsService'
 import { windowBackground } from './window/windowControl'
+import { attachCloseBehavior, markQuitting } from './window/trayControl'
+import { applySystemSettings } from './window/systemSettings'
+import { pruneBackgrounds } from './services/systemService'
 
 const currentDir = fileURLToPath(new URL('.', import.meta.url))
 
@@ -57,6 +61,7 @@ async function initialTheme(dbReady: boolean): Promise<ThemeMode> {
 
 // 创建主窗口：开启上下文隔离与沙箱，外部链接交给系统浏览器；标题栏和窗口按钮由界面自己画
 function createMainWindow(theme: ThemeMode): BrowserWindow {
+  const iconPath = join(app.getAppPath(), 'resources', 'icon.png')
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -67,7 +72,7 @@ function createMainWindow(theme: ThemeMode): BrowserWindow {
     autoHideMenuBar: true,
     title: '诺诺的图床',
     // 任务栏和窗口图标：个人网站的猫尾巴图标
-    icon: join(app.getAppPath(), 'resources', 'icon.png'),
+    icon: iconPath,
     backgroundColor: windowBackground(theme),
     titleBarStyle: 'hidden',
     webPreferences: {
@@ -78,6 +83,7 @@ function createMainWindow(theme: ThemeMode): BrowserWindow {
     }
   })
   win.once('ready-to-show', () => win.show())
+  attachCloseBehavior(win, iconPath)
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) {
       void shell.openExternal(url)
@@ -140,9 +146,18 @@ async function autoScanOnStart(): Promise<void> {
 async function bootstrap(): Promise<void> {
   log.info(`启动，数据目录：${paths.root}`)
   const state = await bootDatabase(dbLocation)
-  handleLtmProtocol(paths.thumbs, originalPathOf)
+  handleLtmProtocol(paths.thumbs, paths.backgrounds, originalPathOf)
   configureScan({ thumbsDir: paths.thumbs, categoryHomeOverride: paths.categoryHomeOverride })
-  onScanState(broadcastScanState)
+  // 扫描做完（目录可能有增删、移动硬盘接回来了）后重新对一遍监听的目录
+  let scanning = false
+  onScanState((state) => {
+    broadcastScanState(state)
+    if (scanning && !state.progress) {
+      void syncWatching()
+    }
+    scanning = state.progress !== null
+  })
+  configureWatch(requeueScan)
   configureFileOps({ trash: trashFunction(), onDone: broadcastFileOpDone })
   configureTransfer(paths.categoryHomeOverride)
   configureFolderOps(paths.categoryHomeOverride)
@@ -151,9 +166,20 @@ async function bootstrap(): Promise<void> {
     // 上次没做完的文件操作（崩溃、断电）先按日志补做，再扫描
     await recoverFileOps().catch((err: unknown) => log.error('补做上次的文件操作失败', err))
   }
+  if (state === 'READY') {
+    // 关闭窗口时的行为按设置来（开机自动启动只在设置里改的时候才登记，这里不碰）
+    await getSettings()
+      .then(async (s) => {
+        applySystemSettings(s, {})
+        // 上次换背景时还在显示、没删掉的旧图
+        await pruneBackgrounds(paths.backgrounds, s.customBackground)
+      })
+      .catch((err: unknown) => log.warn('读取关闭窗口设置失败，按退出应用处理', err))
+  }
   createMainWindow(await initialTheme(state === 'READY'))
   if (state === 'READY') {
     await autoScanOnStart()
+    await syncWatching()
   }
 }
 
@@ -177,6 +203,9 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
+// 真正要退出了（托盘菜单、系统关机、测试关应用）：关窗口不再藏到托盘
+app.on('before-quit', () => markQuitting())
+
 // 退出前关闭数据库并释放锁，确保写入落盘
 let closing = false
 app.on('will-quit', (event) => {
@@ -186,7 +215,8 @@ app.on('will-quit', (event) => {
   closing = true
   event.preventDefault()
   // 等着进回收站的删除马上执行，再让扫描停下（手上的文件写完），最后关数据库
-  void flushPendingDeletes()
+  void stopWatching()
+    .then(() => flushPendingDeletes())
     .catch((err: unknown) => log.error('退出前执行删除失败', err))
     .then(() => stopScanAndWait())
     .catch((err: unknown) => log.error('停止扫描失败', err))

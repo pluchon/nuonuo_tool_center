@@ -1,4 +1,5 @@
-import { BrowserWindow, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, shell, type IpcMainInvokeEvent } from 'electron'
+import { join } from 'node:path'
 import {
   IpcChannel,
   type AddTagDTO,
@@ -36,6 +37,10 @@ import {
 } from '../services/tagManageService'
 import { getScanState, startScan, stopScan } from '../services/scan/scanService'
 import { getSettings, updateSettings } from '../services/settingsService'
+import { categoryHomeOf, changeCategoryHome } from '../services/categoryHome'
+import { backupFileName, cleanThumbCache, exportBackup, folderBytes, importCustomBackground } from '../services/systemService'
+import { applySystemSettings } from '../window/systemSettings'
+import { syncWatching } from '../services/scan/watchService'
 import { applyWindowTheme, toggleMaximize } from '../window/windowControl'
 import { handle } from './handle'
 
@@ -73,7 +78,70 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   })
   handle(IpcChannel.settingsUpdate, async (_event, patch: unknown) => {
     requireDatabase()
-    return updateSettings(patch)
+    const next = await updateSettings(patch)
+    applySystemSettings(next, patch as Record<string, unknown>)
+    await syncWatching()
+    return next
+  })
+  // 更改类目录保存的位置：系统的选文件夹对话框，取消返回 null
+  handle(IpcChannel.settingsPickCategoryHome, async (event) => {
+    requireDatabase()
+    const picked = await dialog.showOpenDialog(senderWindow(event), { title: '类目录保存的位置', properties: ['openDirectory', 'createDirectory'] })
+    if (picked.canceled || picked.filePaths.length === 0) {
+      return null
+    }
+    await changeCategoryHome(picked.filePaths[0], paths.categoryHomeOverride, paths.root)
+    await syncWatching()
+    return getSettings()
+  })
+  // 自定义背景：选一张图，缩好存进数据目录再换上；取消返回 null
+  handle(IpcChannel.settingsPickBackground, async (event) => {
+    requireDatabase()
+    const picked = await dialog.showOpenDialog(senderWindow(event), {
+      title: '选一张背景图',
+      properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'avif'] }]
+    })
+    if (picked.canceled || picked.filePaths.length === 0) {
+      return null
+    }
+    const name = await importCustomBackground(picked.filePaths[0], paths.backgrounds)
+    return updateSettings({ background: 'custom', customBackground: name })
+  })
+
+  handle(IpcChannel.systemDataInfo, async () => {
+    requireDatabase()
+    return {
+      dataDir: paths.root,
+      cacheBytes: await folderBytes(paths.thumbs),
+      version: app.getVersion(),
+      categoryHome: await categoryHomeOf(paths.categoryHomeOverride),
+      categoryHomeLocked: paths.categoryHomeOverride !== null
+    }
+  })
+  handle(IpcChannel.systemOpenDataDir, async () => {
+    const err = await shell.openPath(paths.root)
+    if (err) {
+      throw new BizError('DEPENDENCY_FAILED', `打不开文件夹：${err}`)
+    }
+  })
+  handle(IpcChannel.systemCleanCache, async () => {
+    requireDatabase()
+    return cleanThumbCache(paths.thumbs)
+  })
+  // 导出备份：系统的保存对话框选位置，取消返回 null
+  handle(IpcChannel.systemExportBackup, async (event) => {
+    requireDatabase()
+    const picked = await dialog.showSaveDialog(senderWindow(event), {
+      title: '导出备份',
+      defaultPath: join(app.getPath('documents'), backupFileName(new Date())),
+      filters: [{ name: '备份', extensions: ['gz'] }]
+    })
+    if (picked.canceled || !picked.filePath) {
+      return null
+    }
+    await exportBackup(picked.filePath)
+    return picked.filePath
   })
 
   handle(IpcChannel.libraryGetOverview, async () => {
@@ -224,6 +292,7 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   handle(IpcChannel.sourceRemove, async (_event, id: number) => {
     requireDatabase()
     await removeSource(id)
+    await syncWatching()
   })
   handle(IpcChannel.fileOpen, async (_event, fileId: number) => {
     requireDatabase()

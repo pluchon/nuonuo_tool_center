@@ -161,7 +161,7 @@ function whiteMix(hex: string, t: number): string {
 }
 
 // 默认背景：只用主题色，接近白的一层淡染、左上角稍亮；深色是深紫黑加一团主题色柔光
-function defaultBackground(accent: string, isDark: boolean): string {
+export function defaultBackground(accent: string, isDark: boolean): string {
   return isDark
     ? `radial-gradient(70% 60% at 0% 0%, ${tint(accent, 0.2)} 0, ${tint(accent, 0)} 75%), linear-gradient(180deg, #1C1926 0%, #15121D 100%)`
     : `radial-gradient(70% 60% at 0% 0%, ${tint(accent, 0.1)} 0, ${tint(accent, 0)} 75%), linear-gradient(180deg, ${whiteMix(accent, 0.05)} 0%, ${whiteMix(accent, 0.1)} 100%)`
@@ -174,9 +174,16 @@ export interface GlassLook {
   glassBlur: number
 }
 
-// 原型 look：侧栏卡片、详情面板、底栏等的玻璃底色、模糊、描边和投影（目前只有默认背景，主题背景在设置阶段接入）
-function lookVars(accent: string, isDark: boolean, look: GlassLook): Record<string, string> {
-  const glassRgb = isDark ? '36, 31, 48' : '255, 255, 255'
+// 窗口背景：默认（主题色淡染），或一张图（主题背景、自定义图片）加淡化；glass 是面板玻璃的颜色（主题背景用它的纸色）
+export type Backdrop =
+  | { kind: 'none' }
+  | { kind: 'image'; layers: string; glass: readonly [number, number, number] | null; dim: number }
+
+// 原型 look：侧栏卡片、详情面板、底栏等的玻璃底色、模糊、描边和投影；有背景图时玻璃用背景的纸色、描边换成白边
+function lookVars(accent: string, isDark: boolean, look: GlassLook, backdrop: Backdrop): Record<string, string> {
+  const sceneGlass = backdrop.kind === 'image' ? backdrop.glass : null
+  const glassRgb = sceneGlass ? sceneGlass.join(', ') : isDark ? '36, 31, 48' : '255, 255, 255'
+  const hasBg = backdrop.kind === 'image'
   const glassOf = (a: number): string => `rgba(${glassRgb}, ${a.toFixed(2)})`
   const clr = look.panelClarity / 100
   const paneA = Math.max(0.06, 1 - clr * 1.15)
@@ -187,8 +194,10 @@ function lookVars(accent: string, isDark: boolean, look: GlassLook): Record<stri
     '--look-field-bg': `rgba(var(--w), ${Math.max(0.3, 1 - clr * 0.85).toFixed(2)})`,
     '--look-foot-bg': glassOf(paneA * 0.7),
     '--look-blur': blur,
-    '--look-edge': tint(accent, 0.16),
-    '--look-rule': tint(accent, 0.16),
+    '--look-edge': hasBg ? 'rgba(var(--w), 0.8)' : tint(accent, 0.16),
+    '--look-rule': hasBg ? 'rgba(var(--w), 0.75)' : tint(accent, 0.16),
+    // 设置弹窗本身的磨砂底
+    '--look-dlg-bg': `${isDark ? 'rgba(34, 30, 44, ' : 'rgba(250, 248, 255, '}${Math.max(0.55, 1 - clr * 0.55).toFixed(2)})`,
     '--look-shadow': `0 12px 30px -24px ${tint(accent, 0.45)}, 0 1px 0 rgba(var(--w), 0.9) inset`,
     '--look-active-bg': `linear-gradient(90deg, ${accent}26, ${accent}08)`,
     // 数量胶囊、月份标题的星星和虚线
@@ -200,13 +209,23 @@ function lookVars(accent: string, isDark: boolean, look: GlassLook): Record<stri
   }
 }
 
+// 整窗背景：图上盖一层同纸色的淡化
+function rootBackground(accent: string, isDark: boolean, backdrop: Backdrop): string {
+  if (backdrop.kind === 'none') {
+    return defaultBackground(accent, isDark)
+  }
+  const rgb = (backdrop.glass ?? (isDark ? [36, 31, 48] : [255, 255, 255])).join(', ')
+  const a = (backdrop.dim / 100).toFixed(2)
+  return `linear-gradient(rgba(${rgb}, ${a}), rgba(${rgb}, ${a})), ${backdrop.layers}`
+}
+
 // 一套完整的主题变量：设到根节点上即可
-export function themeVars(accent: string, isDark: boolean, look: GlassLook): Record<string, string> {
+export function themeVars(accent: string, isDark: boolean, look: GlassLook, backdrop: Backdrop = { kind: 'none' }): Record<string, string> {
   return {
     ...accentVars(accent, isDark),
     ...fixedVars(isDark),
-    ...lookVars(accent, isDark, look),
-    '--look-root-bg': defaultBackground(accent, isDark),
+    ...lookVars(accent, isDark, look, backdrop),
+    '--look-root-bg': rootBackground(accent, isDark, backdrop),
     '--look-brand-line': tint(accent, 0.55),
     'color-scheme': isDark ? 'dark' : 'light'
   }

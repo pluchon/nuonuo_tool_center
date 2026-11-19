@@ -60,3 +60,10 @@ export async function updateImageThumb(id: number, thumbReady: number): Promise<
   const { db } = getDatabase()
   await db.update(image).set({ thumbReady }).where(eq(image.id, id))
 }
+
+// 全部图片的内容哈希（含逻辑删除的：它们还可能被恢复，缩略图留着）
+export async function findAllContentHashes(): Promise<string[]> {
+  const { db } = getDatabase()
+  const rows = await db.select({ h: image.contentHash }).from(image)
+  return rows.map((r) => r.h)
+}

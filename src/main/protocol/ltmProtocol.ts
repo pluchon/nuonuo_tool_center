@@ -1,9 +1,10 @@
 import { net, protocol } from 'electron'
-import { stat } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { CUSTOM_BACKGROUND_NAME } from '@shared/settings'
 
-// 自定义协议名：渲染进程通过 ltm://thumb/{hash}.webp 加载缩略图、ltm://file/{fileId} 加载原图，不经 IPC 传图片数据
+// 自定义协议名：渲染进程通过 ltm://thumb/{hash}.webp 加载缩略图、ltm://file/{fileId} 加载原图、ltm://bg/{名字} 加载自定义背景，不经 IPC 传图片数据
 export const LTM_SCHEME = 'ltm'
 
 // 缩略图文件名只允许 sha256 十六进制加 .webp，防止路径穿越
@@ -22,12 +23,17 @@ export function registerLtmSchemePrivileges(): void {
 }
 
 // app ready 之后注册处理器
-export function handleLtmProtocol(thumbsDir: string, resolveOriginal: OriginalResolver): void {
+export function handleLtmProtocol(thumbsDir: string, backgroundsDir: string, resolveOriginal: OriginalResolver): void {
   protocol.handle(LTM_SCHEME, async (request) => {
     const url = new URL(request.url)
     const name = url.pathname.replace(/^\//, '')
     if (url.host === 'thumb' && THUMB_NAME.test(name)) {
       return net.fetch(pathToFileURL(join(thumbsDir, name)).toString())
+    }
+    // 自定义背景图：只认应用自己生成的文件名；整张读进内存再给（不留文件句柄，换图时旧图马上能删）
+    if (url.host === 'bg' && CUSTOM_BACKGROUND_NAME.test(name)) {
+      const bytes = await readFile(join(backgroundsDir, name)).catch(() => null)
+      return bytes ? new Response(new Uint8Array(bytes), { headers: { 'Content-Type': 'image/webp' } }) : new Response('Not Found', { status: 404 })
     }
     if (url.host === 'file' && FILE_ID.test(name)) {
       // 文件不见了、目录离线时 net.fetch 会一直挂着，先确认文件在，读失败也回 404，界面才能退回缩略图
