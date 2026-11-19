@@ -1,0 +1,165 @@
+// “标签分类”对话框：380px，橙紫斜纹外框，白卡片；每个分类一行（分类底色、圆点、可改的名字、标签数、删除）
+.kind-dlg {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(84, 66, 130, 0.16);
+  backdrop-filter: blur(8px) saturate(1.2);
+
+  &__frame {
+    width: 380px;
+    padding: 6px;
+    border-radius: 22px;
+    background: repeating-linear-gradient(135deg, var(--c-b-FCEEDC) 0 8px, var(--a-soft) 8px 16px);
+  }
+
+  &__card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 17px;
+    background: var(--c-surface);
+    border: 1px solid var(--a-line2);
+    color: var(--c-i-3B3047);
+  }
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--c-i-2E2440);
+  }
+
+  &__close {
+    margin-left: auto;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--c-b-F2C6D4);
+    background: var(--c-b-FCE7EE);
+    color: var(--c-i-C25B85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  &__list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 226px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--a-line) transparent;
+  }
+
+  &__row {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 6px 0 10px;
+    box-sizing: border-box;
+    border-radius: 12px;
+    border: 1px solid transparent;
+  }
+
+  &__dot {
+    width: 9px;
+    height: 9px;
+    flex: none;
+    border-radius: 50%;
+  }
+
+  &__input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    font: inherit;
+    font-weight: 700;
+  }
+
+  // 标签形状的数量：左边尖角，尖角上打一个小孔
+  &__count {
+    flex: none;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    margin-left: 8px;
+    padding: 0 8px 0 6px;
+    border-radius: 0 5px 5px 0;
+    background: var(--c-surface);
+    font-size: 11px;
+    font-weight: 700;
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: -8px;
+      top: 0;
+      width: 8px;
+      height: 20px;
+      background: var(--c-surface);
+      clip-path: polygon(100% 0, 0 50%, 100% 100%);
+    }
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: -2px;
+      top: 8px;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--hole);
+    }
+  }
+
+  &__del {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 8px;
+    border: none;
+    background: var(--c-surface);
+    color: var(--c-b-A23D62);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+
+    &--off {
+      color: var(--a-mid);
+      cursor: not-allowed;
+    }
+  }
+
+  &__add {
+    width: 100%;
+    height: 40px;
+    border-radius: 999px;
+    border: 1.5px dashed var(--a);
+    background: var(--c-surface);
+    color: var(--a-ink);
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+  }
+}

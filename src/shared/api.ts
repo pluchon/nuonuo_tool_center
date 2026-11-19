@@ -31,6 +31,13 @@ export const IpcChannel = {
   imageAddTag: 'image:addTag',
   imageRemoveTag: 'image:removeTag',
   imageCommonTags: 'image:commonTags',
+  tagCreate: 'tag:create',
+  tagSave: 'tag:save',
+  tagDelete: 'tag:delete',
+  tagCategoryCreate: 'tagCategory:create',
+  tagCategoryRename: 'tagCategory:rename',
+  tagCategorySetColor: 'tagCategory:setColor',
+  tagCategoryDelete: 'tagCategory:delete',
   windowSetTheme: 'window:setTheme',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',
@@ -291,8 +298,30 @@ export interface ImageDetailVO {
 export const NAME_MAX = 15
 export const TAGS_PER_IMAGE = 5
 export const FILTER_MAX = 5
-// 标签名最多几个字
-export const TAG_NAME_MAX = 20
+// 标签名、别名最多几个字（照原型标签管理页的 15 字计数）
+export const TAG_NAME_MAX = 15
+// 分类名最多几个字
+export const CATEGORY_NAME_MAX = 6
+// 一次最多把几个标签合并进来
+export const MERGE_MAX = 5
+
+// 新建标签：名字、分类、别名
+export interface CreateTagDTO {
+  name: string
+  categoryId: number
+  aliases: string[]
+}
+
+// 保存标签管理右侧面板：改名、换分类、别名整组替换，可同时合并
+// mergeInto：把这个标签并入另一个标签（这个标签消失）；mergeFrom：把别的标签合并进来（最多 5 个）
+export interface SaveTagDTO {
+  id: number
+  name: string
+  categoryId: number
+  aliases: string[]
+  mergeInto?: number | null
+  mergeFrom?: number[]
+}
 
 // 拍摄信息（没有的项不出现）
 export interface ExifInfoVO {

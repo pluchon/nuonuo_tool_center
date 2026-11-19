@@ -21,7 +21,7 @@ export interface NavRow {
   // 目录树行：箭头位占位，有子文件夹时显示箭头
   tree: boolean
   hasChildren: boolean
-  // 还没接入的入口（标签管理页等）先不可点
+  // 还没接入的入口先不可点
   disabled: boolean
   go: () => void
 }
@@ -45,6 +45,8 @@ export default defineComponent({
     const scan = useScanStore()
 
     const num = (n: number | undefined): string => String(n ?? 0)
+    // 图库页上的视图行才会高亮（在标签管理页时只高亮“标签管理”）
+    const onGallery = (): boolean => viewStore.page === 'gallery'
     const viewRow = (key: Exclude<GalleryView, 'dir'>, label: string, count: number | undefined, icon: string, ink: string): NavRow => ({
       key,
       label,
@@ -53,7 +55,7 @@ export default defineComponent({
       ink,
       countInk: '',
       labelInk: '',
-      active: viewStore.view === key,
+      active: onGallery() && viewStore.view === key,
       tree: false,
       hasChildren: false,
       disabled: false,
@@ -79,7 +81,7 @@ export default defineComponent({
         label: s.name,
         ...sourceState(s),
         icon: s.hasChildren ? ICON.folders : ICON.folder,
-        active: viewStore.view === 'dir' && viewStore.dir?.kind === 'source' && viewStore.dir.id === s.id,
+        active: onGallery() && viewStore.view === 'dir' && viewStore.dir?.kind === 'source' && viewStore.dir.id === s.id,
         tree: true,
         hasChildren: s.hasChildren,
         disabled: false,
@@ -93,7 +95,7 @@ export default defineComponent({
         ink: 'var(--c-i-C25B85)',
         countInk: '',
         labelInk: '',
-        active: viewStore.view === 'dir' && viewStore.dir?.kind === 'category' && viewStore.dir.name === d.name,
+        active: onGallery() && viewStore.view === 'dir' && viewStore.dir?.kind === 'category' && viewStore.dir.name === d.name,
         tree: true,
         hasChildren: d.hasChildren,
         disabled: false,
@@ -131,8 +133,12 @@ export default defineComponent({
           dot: 'var(--c-b-B8732E)',
           add: null,
           rows: [
-            // 标签管理页在编辑阶段接入
-            { ...viewRow('all', '标签管理', c?.tags, ICON.tag, 'var(--c-b-B8732E)'), key: 'tags', active: false, disabled: true, go: () => undefined },
+            {
+              ...viewRow('all', '标签管理', c?.tags, ICON.tag, 'var(--c-b-B8732E)'),
+              key: 'tags',
+              active: viewStore.page === 'tags',
+              go: () => viewStore.showTags()
+            },
             viewRow('r18', 'R-18 图', c?.r18, ICON.lock, 'var(--c-b-C2335A)')
           ],
           hint: ''

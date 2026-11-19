@@ -1,0 +1,82 @@
+// 确认框：380px 白卡片，粉色描边，垃圾桶图标 + 标题，下面两个等宽按钮
+.confirm-dlg {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(84, 66, 130, 0.16);
+  backdrop-filter: blur(8px) saturate(1.2);
+
+  &__card {
+    width: 380px;
+    box-sizing: border-box;
+    padding: 22px;
+    border-radius: 20px;
+    background: var(--c-surface);
+    border: 1.5px solid var(--c-b-F2C6D4);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    color: var(--c-i-3B3047);
+  }
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  &__icon {
+    width: 34px;
+    height: 34px;
+    flex: none;
+    border-radius: 10px;
+    background: var(--c-b-FCE7EE);
+    color: var(--c-i-A23D62);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--c-i-2E2440);
+  }
+
+  &__btns {
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  &__no,
+  &__ok {
+    flex: 1;
+    height: 38px;
+    border-radius: 999px;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  &__no {
+    border: 1.5px solid var(--a);
+    background: var(--c-surface);
+    color: var(--a-ink);
+  }
+
+  &__ok {
+    border: none;
+    background: var(--c-b-B8456E);
+    color: #ffffff;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+  }
+}

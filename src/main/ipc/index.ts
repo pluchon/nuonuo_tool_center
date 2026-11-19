@@ -1,5 +1,5 @@
 import { BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import { IpcChannel, type AddTagDTO, type GalleryQueryDTO, type ThemeMode } from '@shared/api'
+import { IpcChannel, type AddTagDTO, type CreateTagDTO, type GalleryQueryDTO, type SaveTagDTO, type ThemeMode } from '@shared/api'
 import type { DataPaths } from '../config/paths'
 import { BizError } from '../common/bizError'
 import { bootDatabase, getDbBootState, type DatabaseLocation } from '../services/databaseService'
@@ -7,6 +7,15 @@ import { listFolders } from '../services/folderService'
 import { getImageDetail, listGallery, listUntaggedDirs, openFileWithDefault, showFileInFolder } from '../services/galleryService'
 import { addTag, getCommonTags, getTagCatalog, removeTag, renameImage, setR18 } from '../services/imageEditService'
 import { addRoot, getOverview, relocateRoot } from '../services/libraryService'
+import {
+  createCategory,
+  createTag,
+  deleteTag,
+  removeCategory,
+  renameCategory,
+  saveTag,
+  setCategoryColor
+} from '../services/tagManageService'
 import { getScanState, startScan, stopScan } from '../services/scan/scanService'
 import { getSettings, updateSettings } from '../services/settingsService'
 import { applyWindowTheme, toggleMaximize } from '../window/windowControl'
@@ -110,6 +119,34 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   handle(IpcChannel.imageCommonTags, async (_event, imageIds: number[]) => {
     requireDatabase()
     return getCommonTags(imageIds)
+  })
+  handle(IpcChannel.tagCreate, async (_event, dto: CreateTagDTO) => {
+    requireDatabase()
+    return createTag(dto)
+  })
+  handle(IpcChannel.tagSave, async (_event, dto: SaveTagDTO) => {
+    requireDatabase()
+    return saveTag(dto)
+  })
+  handle(IpcChannel.tagDelete, async (_event, id: number) => {
+    requireDatabase()
+    return deleteTag(id)
+  })
+  handle(IpcChannel.tagCategoryCreate, async () => {
+    requireDatabase()
+    return createCategory()
+  })
+  handle(IpcChannel.tagCategoryRename, async (_event, id: number, name: string) => {
+    requireDatabase()
+    return renameCategory(id, name)
+  })
+  handle(IpcChannel.tagCategorySetColor, async (_event, id: number, colorIndex: number) => {
+    requireDatabase()
+    await setCategoryColor(id, colorIndex)
+  })
+  handle(IpcChannel.tagCategoryDelete, async (_event, id: number) => {
+    requireDatabase()
+    await removeCategory(id)
   })
   handle(IpcChannel.fileOpen, async (_event, fileId: number) => {
     requireDatabase()

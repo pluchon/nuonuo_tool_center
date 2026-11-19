@@ -1,7 +1,10 @@
 import { defineStore } from 'pinia'
-import type { TagCategoryVO, TagVO } from '@shared/api'
+import type { CreateTagDTO, SaveTagDTO, TagCategoryVO, TagVO } from '@shared/api'
 import { fetchTagCatalog } from '@/api/edit'
+import { createCategory, createTag, deleteTag, removeCategory, renameCategory, saveTag, setCategoryColor } from '@/api/tags'
 import { tagColor, type TagColor } from '@/theme/tagPalette'
+import { useLibraryStore } from './library'
+import { useToastStore } from './toast'
 
 // 新标签默认放进的分类
 const DEFAULT_CATEGORY = '主题'
@@ -45,6 +48,51 @@ export const useTagsStore = defineStore('tags', {
       this.categories = catalog.categories
       this.tags = catalog.tags
       this.loaded = true
+    },
+    // 执行一次标签管理的修改：成功后刷新标签字典和侧栏计数；失败时提示，返回 null
+    async mutate<T>(run: () => Promise<T>): Promise<T | null> {
+      try {
+        const result = await run()
+        await Promise.all([this.load(), useLibraryStore().load()])
+        return result
+      } catch (err) {
+        useToastStore().show(err instanceof Error ? err.message : String(err), 'error')
+        return null
+      }
+    },
+    // 新建标签，返回新标签 id
+    createTag(dto: CreateTagDTO): Promise<number | null> {
+      return this.mutate(() => createTag({ ...dto, aliases: [...dto.aliases] }))
+    },
+    // 保存标签（改名、分类、别名、合并），返回之后要选中的标签 id
+    saveTag(dto: SaveTagDTO): Promise<number | null> {
+      return this.mutate(() => saveTag({ ...dto, aliases: [...dto.aliases], mergeFrom: dto.mergeFrom ? [...dto.mergeFrom] : undefined }))
+    },
+    // 删除标签
+    async deleteTag(id: number): Promise<boolean> {
+      return (await this.mutate(() => deleteTag(id))) !== null
+    },
+    // 新增分类
+    createCategory(): Promise<TagCategoryVO | null> {
+      return this.mutate(() => createCategory())
+    },
+    // 分类改名
+    async renameCategory(id: number, name: string): Promise<boolean> {
+      return (await this.mutate(() => renameCategory(id, name))) !== null
+    },
+    // 换分类颜色
+    async setCategoryColor(id: number, colorIndex: number): Promise<boolean> {
+      return (await this.mutate(async () => {
+        await setCategoryColor(id, colorIndex)
+        return true
+      })) !== null
+    },
+    // 删除分类
+    async removeCategory(id: number): Promise<boolean> {
+      return (await this.mutate(async () => {
+        await removeCategory(id)
+        return true
+      })) !== null
     },
     // 加标签候选：名字或别名包含关键字，前缀匹配优先，其次按图片数；已经在图上的不列；最多 5 个
     suggest(query: string, excludeIds: number[]): TagSuggestion[] {

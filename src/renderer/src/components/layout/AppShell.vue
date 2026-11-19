@@ -2,7 +2,8 @@
   <div class="app-shell">
     <div class="app-shell__body">
       <SideNav />
-      <GalleryView />
+      <TagsView v-if="viewStore.page === 'tags'" />
+      <GalleryView v-else />
     </div>
     <StatusFooter />
     <FolderPickDialog />

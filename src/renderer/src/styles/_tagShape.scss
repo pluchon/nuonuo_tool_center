@@ -1,0 +1,31 @@
+// 吊牌形状（照原型）：右边圆角，左边一个尖角，尖角上打一个小孔
+// $h 高度、$tip 尖角宽度；底色取 --shape-bg，小孔颜色取 --shape-hole（默认面板底色）
+@mixin tag-shape($h, $tip, $radius: 6px) {
+  position: relative;
+  height: $h;
+  margin-left: $tip;
+  border-radius: 0 $radius $radius 0;
+  background: var(--shape-bg);
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: -$tip;
+    top: 0;
+    width: $tip;
+    height: $h;
+    background: var(--shape-bg);
+    clip-path: polygon(100% 0, 0 50%, 100% 100%);
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: -2px;
+    top: calc(#{$h} / 2 - 2px);
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--shape-hole, var(--c-surface));
+  }
+}

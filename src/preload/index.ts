@@ -16,6 +16,9 @@ import {
   type LibraryRootVO,
   type ScanStateVO,
   type TagCatalogVO,
+  type TagCategoryVO,
+  type CreateTagDTO,
+  type SaveTagDTO,
   type DirCountVO,
   type ThemeMode
 } from '@shared/api'
@@ -56,6 +59,16 @@ const api = {
     removeTag: (imageIds: number[], tagId: number): Promise<ApiResponse<number>> =>
       ipcRenderer.invoke(IpcChannel.imageRemoveTag, imageIds, tagId),
     commonTags: (imageIds: number[]): Promise<ApiResponse<ImageTagVO[]>> => ipcRenderer.invoke(IpcChannel.imageCommonTags, imageIds)
+  },
+  tags: {
+    create: (dto: CreateTagDTO): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.tagCreate, dto),
+    save: (dto: SaveTagDTO): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.tagSave, dto),
+    remove: (id: number): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.tagDelete, id),
+    createCategory: (): Promise<ApiResponse<TagCategoryVO>> => ipcRenderer.invoke(IpcChannel.tagCategoryCreate),
+    renameCategory: (id: number, name: string): Promise<ApiResponse<string>> => ipcRenderer.invoke(IpcChannel.tagCategoryRename, id, name),
+    setCategoryColor: (id: number, colorIndex: number): Promise<ApiResponse<void>> =>
+      ipcRenderer.invoke(IpcChannel.tagCategorySetColor, id, colorIndex),
+    removeCategory: (id: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.tagCategoryDelete, id)
   },
   scan: {
     start: (rootId: number | null): Promise<ApiResponse<ScanStateVO>> => ipcRenderer.invoke(IpcChannel.scanStart, rootId),
