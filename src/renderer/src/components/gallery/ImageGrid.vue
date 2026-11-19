@@ -36,6 +36,7 @@
           :style="{ width: `${t.width}px` }"
           :draggable="!item(t.id).missing && !item(t.id).offline"
           @click="onTileClick($event, t.id)"
+          @dblclick="viewer.show(t.id)"
           @dragstart="onDragStart($event, t.id)"
           @dragend="gallery.endDrag()"
         >

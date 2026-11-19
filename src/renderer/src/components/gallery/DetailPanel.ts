@@ -4,6 +4,7 @@ import { openFileWithDefault, showFileInFolder, thumbUrl } from '@/api/gallery'
 import { useGalleryStore } from '@/stores/gallery'
 import { useToastStore } from '@/stores/toast'
 import { useTransferStore } from '@/stores/transfer'
+import { useViewerStore } from '@/stores/viewer'
 import { useViewStore } from '@/stores/view'
 import BatchPanel from './BatchPanel.vue'
 import TagEditor from './TagEditor.vue'
@@ -68,6 +69,7 @@ export default defineComponent({
   components: { BatchPanel, TagEditor },
   setup() {
     const gallery = useGalleryStore()
+    const viewer = useViewerStore()
     const toast = useToastStore()
     const viewStore = useViewStore()
     const transfer = useTransferStore()
@@ -181,6 +183,7 @@ export default defineComponent({
 
     return {
       gallery,
+      viewer,
       transfer,
       canTransfer,
       detail,

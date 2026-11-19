@@ -68,7 +68,21 @@
   }
 
   // 预览右下角的删除按钮（照原型 nn-del）：半透明白底小方块，鼠标移上去变粉
+  // 盖满预览区的透明按钮：点它看大图（照原型）
+  &__open {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: none;
+    border-radius: 14px;
+    background: transparent;
+    cursor: zoom-in;
+  }
+
   &__del {
+    z-index: 1;
     position: absolute;
     right: 8px;
     bottom: 8px;

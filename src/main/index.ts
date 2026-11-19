@@ -11,6 +11,7 @@ import { bootDatabase, shutdownDatabase, type DatabaseLocation } from './service
 import { configureFileOps, flushPendingDeletes, recoverFileOps } from './services/fileOps/fileOpsService'
 import { configureTransfer } from './services/fileOps/transferService'
 import { configureFolderOps } from './services/fileOps/folderOpsService'
+import { originalPathOf } from './services/galleryService'
 import { configureScan, onScanState, startScan, stopScanAndWait } from './services/scan/scanService'
 import { getSettings } from './services/settingsService'
 import { windowBackground } from './window/windowControl'
@@ -139,7 +140,7 @@ async function autoScanOnStart(): Promise<void> {
 async function bootstrap(): Promise<void> {
   log.info(`启动，数据目录：${paths.root}`)
   const state = await bootDatabase(dbLocation)
-  handleLtmProtocol(paths.thumbs)
+  handleLtmProtocol(paths.thumbs, originalPathOf)
   configureScan({ thumbsDir: paths.thumbs, categoryHomeOverride: paths.categoryHomeOverride })
   onScanState(broadcastScanState)
   configureFileOps({ trash: trashFunction(), onDone: broadcastFileOpDone })

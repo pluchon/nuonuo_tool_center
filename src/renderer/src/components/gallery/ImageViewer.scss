@@ -1,0 +1,229 @@
+// 大图查看（照原型 viewer）：粉紫斜纹外框、白卡片；舞台随窗口变大，浅色用淡紫底、深色用深衬底
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--sh), 0.55);
+
+  &__frame {
+    width: min(1180px, calc(100vw - 64px));
+    box-sizing: border-box;
+    padding: 8px;
+    border-radius: 24px;
+    background: repeating-linear-gradient(135deg, var(--c-b-F6CDD8) 0 10px, var(--a-soft) 10px 20px);
+  }
+
+  &__card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px 16px 16px;
+    border-radius: 18px;
+    background: var(--c-surface);
+    border: 1px solid var(--a-line2);
+    color: var(--c-i-3B3047);
+  }
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  &__dot {
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--c-b-D86F95);
+  }
+
+  &__title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  &__close {
+    margin-left: auto;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--c-b-F2C6D4);
+    background: var(--c-b-FCE7EE);
+    color: var(--c-i-C25B85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  &__stage {
+    position: relative;
+    height: max(300px, calc(100vh - 210px));
+    border-radius: 14px;
+    background: var(--viewer-stage);
+    border: 1px solid var(--a-line2);
+    overflow: hidden;
+    color: var(--c-i-9C90B3);
+  }
+
+  &__nav {
+    position: absolute;
+    z-index: 2;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--a-line2);
+    background: rgba(var(--w), 0.86);
+    color: var(--a-ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(var(--sh), 0.12);
+
+    &--prev {
+      left: 12px;
+    }
+
+    &--next {
+      right: 12px;
+    }
+  }
+
+  &__pan {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+  }
+
+  &__pic {
+    flex: none;
+    display: block;
+    pointer-events: none;
+  }
+
+  &__empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+
+  &__empty-text {
+    font-weight: 700;
+    color: var(--c-i-6E6280);
+  }
+
+  &__empty-btn {
+    height: 32px;
+    padding: 0 16px;
+    border-radius: 999px;
+    border: 1px solid var(--a-line);
+    background: var(--c-surface);
+    color: var(--a-ink);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  &__note {
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    transform: translateX(-50%);
+    padding: 4px 12px;
+    border-radius: 999px;
+    background: rgba(var(--w), 0.86);
+    border: 1px solid var(--a-line2);
+    font-size: 12px;
+    color: var(--c-i-6E6280);
+    pointer-events: none;
+  }
+
+  &__bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &__group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 999px;
+    background: var(--a-bg);
+    border: 1px solid var(--a-line2);
+  }
+
+  &__round {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--a-line);
+    background: var(--c-surface);
+    color: var(--a);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+
+    &--mint {
+      border-color: var(--c-b-BFE3D6);
+      color: var(--c-i-3F8F7B);
+    }
+
+    &--pink {
+      border-color: var(--c-b-F2C6D4);
+      color: var(--c-i-C25B85);
+    }
+
+    &--on {
+      background: var(--c-b-FCE7EE);
+    }
+  }
+
+  &__zoom {
+    min-width: 52px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--a-ink);
+  }
+
+  &__sep {
+    width: 1px;
+    height: 18px;
+    margin: 0 2px;
+    background: var(--a-line2);
+  }
+
+  &__pill {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid var(--a-line);
+    background: var(--c-surface);
+    color: var(--c-i-3B3047);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+}

@@ -21,6 +21,11 @@ export function thumbUrl(hash: string): string {
   return `ltm://thumb/${hash}.webp`
 }
 
+// 原图地址（大图用）：按文件 id 取，带上内容哈希，图换了内容就不会用到旧缓存
+export function originalUrl(fileId: number, hash: string): string {
+  return `ltm://file/${fileId}?h=${hash}`
+}
+
 // 用系统默认程序打开文件
 export function openFileWithDefault(fileId: number): Promise<void> {
   return unwrap(window.api.gallery.open(fileId))

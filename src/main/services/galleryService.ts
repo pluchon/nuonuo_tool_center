@@ -16,6 +16,7 @@ import { SORT_KEYS, type ScanFormat } from '@shared/settings'
 import { BizError } from '../common/bizError'
 import { normalizeRelDir } from '../common/pathUtil'
 import type { ExifInfo } from './scan/exifInfo'
+import { formatOfFile } from './scan/formats'
 import {
   findFileLocation,
   findGalleryRows,
@@ -334,6 +335,19 @@ async function filePathOf(fileId: number): Promise<string> {
     throw new BizError('NOT_FOUND', '这个文件已经不在图库里了')
   }
   return join(loc.rootPath, loc.relPath)
+}
+
+// 大图用的原图路径：只给图库里正常的图片文件，其余返回 null（协议回 404）
+export async function originalPathOf(fileId: number): Promise<string | null> {
+  if (!Number.isSafeInteger(fileId)) {
+    return null
+  }
+  const loc = await findFileLocation(fileId)
+  if (!loc) {
+    return null
+  }
+  const abs = join(loc.rootPath, loc.relPath)
+  return formatOfFile(abs) ? abs : null
 }
 
 // 用系统默认程序打开文件（“无法预览”的图）

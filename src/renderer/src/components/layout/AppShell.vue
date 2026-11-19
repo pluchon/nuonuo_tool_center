@@ -30,6 +30,7 @@
       @ok="gallery.confirmDrop()"
       @cancel="gallery.cancelDrop()"
     />
+    <ImageViewer />
     <AppToast />
   </div>
 </template>

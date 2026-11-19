@@ -50,6 +50,15 @@ body {
   --r18-row-line: rgba(194, 51, 90, 0.35);
 }
 
+// 大图舞台的衬底：浅色淡紫，深色用深衬底（不跟图片走）
+:root {
+  --viewer-stage: var(--c-b-F4F0FA);
+}
+
+:root.dark {
+  --viewer-stage: #15121d;
+}
+
 // 拖图片时跟手的小方块（拖动图要放在 body 下才能截到，所以写成全局样式）
 .drag-ghost {
   position: fixed;

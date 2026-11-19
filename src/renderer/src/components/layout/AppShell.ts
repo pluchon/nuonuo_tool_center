@@ -4,6 +4,7 @@ import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue'
 import FolderPickDialog from '@/components/dialogs/FolderPickDialog.vue'
 import TransferDialog from '@/components/dialogs/TransferDialog.vue'
 import AppToast from '@/components/feedback/AppToast.vue'
+import ImageViewer from '@/components/gallery/ImageViewer.vue'
 import GalleryView from '@/views/gallery/GalleryView.vue'
 import TagsView from '@/views/tags/TagsView.vue'
 import { useFoldersStore } from '@/stores/folders'
@@ -25,7 +26,7 @@ function errText(err: unknown): string {
 // 主界面外壳：左侧导航卡片、主区（图库或标签管理）、底栏，以及各种对话框、目录右键菜单和顶部提示条（照原型主画板）
 export default defineComponent({
   name: 'AppShell',
-  components: { SideNav, GalleryView, TagsView, StatusFooter, FolderPickDialog, TransferDialog, FolderMenu, ConfirmDialog, AppToast },
+  components: { SideNav, GalleryView, TagsView, StatusFooter, FolderPickDialog, TransferDialog, FolderMenu, ConfirmDialog, ImageViewer, AppToast },
   setup() {
     const library = useLibraryStore()
     const scan = useScanStore()

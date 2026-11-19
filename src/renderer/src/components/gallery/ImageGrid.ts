@@ -5,6 +5,7 @@ import { useGalleryStore } from '@/stores/gallery'
 import { usePickerStore } from '@/stores/picker'
 import { useSettingsStore } from '@/stores/settings'
 import { useTransferStore } from '@/stores/transfer'
+import { useViewerStore } from '@/stores/viewer'
 import { groupConsecutive, layoutRows, monthKey, monthLabel, TILE_GAP, type LayoutRow } from '@/utils/gridLayout'
 
 // 一个月份分组（不分组时只有一组，没有标题）
@@ -28,6 +29,7 @@ export default defineComponent({
     const gallery = useGalleryStore()
     const settings = useSettingsStore()
     const picker = usePickerStore()
+    const viewer = useViewerStore()
     const transfer = useTransferStore()
     const gridRef = ref<HTMLElement | null>(null)
     const width = ref(0)
@@ -144,7 +146,7 @@ export default defineComponent({
     // 网格的键盘操作；焦点在输入框里或对话框开着时不处理
     const onKey = (e: KeyboardEvent): void => {
       const el = e.target as HTMLElement | null
-      if (picker.open || gallery.deleteAsk || transfer.mode || (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))) {
+      if (viewer.open || picker.open || gallery.deleteAsk || transfer.mode || (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))) {
         return
       }
       // Delete：删除选中的图（走确认）
@@ -172,6 +174,14 @@ export default defineComponent({
         next = verticalNeighbor(cur, e.key === 'ArrowUp' ? -1 : 1)
       } else if (e.key === 'Escape') {
         gallery.collapse()
+        return
+      } else if (e.key === 'Enter') {
+        // Enter：打开大图（看的是详情面板那张）；焦点在别的按钮上时让按钮自己处理
+        if (el && (el.tagName === 'BUTTON' || el.tagName === 'A') && !el.classList.contains('tile')) {
+          return
+        }
+        e.preventDefault()
+        viewer.show(cur)
         return
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
         e.preventDefault()
@@ -211,6 +221,16 @@ export default defineComponent({
       }
     )
 
-    return { gallery, gridRef, groups, rowStyle, item, masked, thumbUrl, onTileClick, onDragStart, onWheel }
+    // 大图里换了图：关掉后网格停在最后看的那张
+    watch(
+      () => viewer.open,
+      (open) => {
+        if (!open && gallery.primary !== null) {
+          reveal(gallery.primary)
+        }
+      }
+    )
+
+    return { gallery, viewer, gridRef, groups, rowStyle, item, masked, thumbUrl, onTileClick, onDragStart, onWheel }
   }
 })
