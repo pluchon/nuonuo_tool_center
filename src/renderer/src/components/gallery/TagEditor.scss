@@ -1,0 +1,230 @@
+// 图片标签编辑（照原型“图片好标签”一块）
+.tag-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  &__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &__label,
+  &__count {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--c-i-7F7494);
+  }
+
+  &__count--full {
+    color: var(--c-i-A23D62);
+  }
+
+  &__box {
+    position: relative;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    border-radius: 12px;
+    background: var(--look-field-bg);
+    border: 1px solid var(--look-edge);
+  }
+
+  &__list {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 14px;
+    row-gap: 4px;
+    min-height: 24px;
+    padding: 8px 12px;
+  }
+
+  &__tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    font-size: 13px;
+    color: var(--c-i-3B3047);
+  }
+
+  &__dot {
+    width: 7px;
+    height: 7px;
+    flex: none;
+    border-radius: 50%;
+  }
+
+  &__x {
+    width: 16px;
+    height: 16px;
+    margin-left: -2px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--c-i-B9AFC9);
+    font-size: 10px;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      color: var(--c-i-A23D62);
+    }
+  }
+
+  &__add {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 34px;
+    padding: 0 10px;
+    border-top: 1px solid var(--a-line2);
+    border-radius: 0 0 12px 12px;
+    color: var(--a);
+    font-size: 12px;
+  }
+
+  &__kind-wrap {
+    position: relative;
+    flex: none;
+  }
+
+  &__kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 8px 0 2px;
+    border: none;
+    border-right: 1px solid var(--a-line2);
+    border-radius: 0;
+    background: transparent;
+    color: var(--c-i-3B3047);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+
+    &--locked {
+      cursor: default;
+    }
+  }
+
+  &__caret {
+    color: var(--c-i-9C90B3);
+    font-size: 10px;
+  }
+
+  &__input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    font: inherit;
+    color: var(--c-i-3B3047);
+
+    &::placeholder {
+      color: var(--c-i-9C90B3);
+    }
+  }
+
+  &__pop {
+    position: absolute;
+    padding: 6px;
+    box-sizing: border-box;
+    border-radius: 12px;
+    background: var(--c-surface);
+    border: 1px solid var(--a-line);
+    box-shadow: 0 20px 44px -18px rgba(var(--sh), 0.42), 0 2px 8px rgba(var(--sh), 0.06);
+
+    &--kind {
+      z-index: 20;
+      top: 30px;
+      left: -6px;
+      width: 150px;
+    }
+
+    &--sugg {
+      z-index: 18;
+      top: 38px;
+      left: -1px;
+      right: -1px;
+    }
+  }
+
+  &__arrow {
+    position: absolute;
+    top: -6px;
+    left: 18px;
+    width: 10px;
+    height: 10px;
+    background: var(--c-surface);
+    border-left: 1px solid var(--a-line);
+    border-top: 1px solid var(--a-line);
+    transform: rotate(45deg);
+  }
+
+  &__opt {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 8px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--c-i-3B3047);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  &__opt-label {
+    flex: 1;
+  }
+
+  &__sugg {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 8px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--c-i-3B3047);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover {
+      background: color-mix(in srgb, var(--a) 10%, transparent);
+    }
+  }
+
+  &__sugg-name {
+    flex: none;
+  }
+
+  &__sugg-alias {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--c-i-9C90B3);
+  }
+
+  &__sugg-count {
+    flex: none;
+    font-size: 11px;
+    color: var(--c-i-7F7494);
+  }
+}

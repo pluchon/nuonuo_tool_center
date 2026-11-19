@@ -25,7 +25,8 @@ export default defineComponent({
       if (q) {
         return `没有找到「${q}」`
       }
-      if (gallery.onlyR18 || gallery.onlyHere) {
+      const moreOn = Object.values(gallery.more).some((v) => (v as unknown[] | undefined)?.length)
+      if (gallery.onlyR18 || gallery.onlyHere || gallery.tagIds.length > 0 || gallery.dirs.length > 0 || moreOn) {
         return '没有符合条件的图片'
       }
       return '这里还没有图片'

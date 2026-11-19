@@ -1,10 +1,11 @@
 import { BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import { IpcChannel, type GalleryQueryDTO, type ThemeMode } from '@shared/api'
+import { IpcChannel, type AddTagDTO, type GalleryQueryDTO, type ThemeMode } from '@shared/api'
 import type { DataPaths } from '../config/paths'
 import { BizError } from '../common/bizError'
 import { bootDatabase, getDbBootState, type DatabaseLocation } from '../services/databaseService'
 import { listFolders } from '../services/folderService'
-import { getImageDetail, listGallery, openFileWithDefault, showFileInFolder } from '../services/galleryService'
+import { getImageDetail, listGallery, listUntaggedDirs, openFileWithDefault, showFileInFolder } from '../services/galleryService'
+import { addTag, getCommonTags, getTagCatalog, removeTag, renameImage, setR18 } from '../services/imageEditService'
 import { addRoot, getOverview, relocateRoot } from '../services/libraryService'
 import { getScanState, startScan, stopScan } from '../services/scan/scanService'
 import { getSettings, updateSettings } from '../services/settingsService'
@@ -81,6 +82,34 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   handle(IpcChannel.fileShowInFolder, async (_event, fileId: number) => {
     requireDatabase()
     await showFileInFolder(fileId)
+  })
+  handle(IpcChannel.galleryUntaggedDirs, async () => {
+    requireDatabase()
+    return listUntaggedDirs()
+  })
+  handle(IpcChannel.tagCatalog, async () => {
+    requireDatabase()
+    return getTagCatalog()
+  })
+  handle(IpcChannel.imageRename, async (_event, imageId: number, name: string | null) => {
+    requireDatabase()
+    return renameImage(imageId, name)
+  })
+  handle(IpcChannel.imageSetR18, async (_event, imageIds: number[], value: boolean) => {
+    requireDatabase()
+    return setR18(imageIds, value)
+  })
+  handle(IpcChannel.imageAddTag, async (_event, dto: AddTagDTO) => {
+    requireDatabase()
+    return addTag(dto)
+  })
+  handle(IpcChannel.imageRemoveTag, async (_event, imageIds: number[], tagId: number) => {
+    requireDatabase()
+    return removeTag(imageIds, tagId)
+  })
+  handle(IpcChannel.imageCommonTags, async (_event, imageIds: number[]) => {
+    requireDatabase()
+    return getCommonTags(imageIds)
   })
   handle(IpcChannel.fileOpen, async (_event, fileId: number) => {
     requireDatabase()

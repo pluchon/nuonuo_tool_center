@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { image } from '../db/schema'
 
@@ -41,6 +41,18 @@ export async function updateImageAnalysis(
     .update(image)
     .set({ ...patch, deleteState: 0 })
     .where(eq(image.id, id))
+}
+
+// 改名字（null 表示用回文件名）
+export async function updateDisplayName(id: number, displayName: string | null): Promise<void> {
+  const { db } = getDatabase()
+  await db.update(image).set({ displayName }).where(eq(image.id, id))
+}
+
+// 批量设置 R-18
+export async function updateR18(ids: number[], isR18: boolean): Promise<void> {
+  const { db } = getDatabase()
+  await db.update(image).set({ isR18 }).where(inArray(image.id, ids))
 }
 
 // 只更新缩略图状态

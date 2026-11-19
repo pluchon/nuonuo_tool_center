@@ -24,6 +24,13 @@ export const IpcChannel = {
   galleryDetail: 'gallery:detail',
   fileShowInFolder: 'file:showInFolder',
   fileOpen: 'file:open',
+  galleryUntaggedDirs: 'gallery:untaggedDirs',
+  tagCatalog: 'tag:catalog',
+  imageRename: 'image:rename',
+  imageSetR18: 'image:setR18',
+  imageAddTag: 'image:addTag',
+  imageRemoveTag: 'image:removeTag',
+  imageCommonTags: 'image:commonTags',
   windowSetTheme: 'window:setTheme',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',
@@ -145,6 +152,81 @@ export interface GalleryQueryDTO {
   onlyR18?: boolean
   // 只看当前目录，不含子目录（源目录、类目录）
   onlyHere?: boolean
+  // 带其中任一标签（全部图片、R-18 图、类目录；最多 5 个）
+  tagIds?: number[]
+  // 在其中任一目录里（全部图片、R-18 图、还没打标签；最多 5 个；选父目录包含子目录）
+  dirs?: DirKeyDTO[]
+  // 更多筛选：同一组内是“或”，不同组之间是“与”
+  more?: MoreFilterDTO
+}
+
+// 筛选用的目录：源目录按 id，类目录按顶层文件夹名
+export type DirKeyDTO = { kind: 'source'; id: number } | { kind: 'category'; name: string }
+
+// 更多筛选的选项
+export interface MoreFilterDTO {
+  fmt?: ScanFormat[]
+  // 横图 / 竖图 / 方图
+  ori?: Array<'h' | 'v' | 'sq'>
+  // 4K 及以上 / 1080p 及以上 / 1000px 以下（按长边）
+  res?: Array<'4k' | 'fhd' | 'small'>
+  // 1 MB 以下 / 1–10 MB / 10 MB 以上
+  size?: Array<'s' | 'm' | 'l'>
+  // 近 30 天 / 今年 / 去年 / 没有拍摄时间
+  date?: Array<'30d' | 'y' | 'ly' | 'none'>
+}
+
+// “还没打标签”里的目录筛选项：含未打标签图的目录（源目录和顶层类目录）
+export interface DirCountVO {
+  dir: DirKeyDTO
+  label: string
+  count: number
+}
+
+// 标签分类
+export interface TagCategoryVO {
+  id: number
+  name: string
+  // 12 色调色板的序号
+  colorIndex: number
+  sortOrder: number
+}
+
+// 标签字典里的一个标签：名字、分类、别名、用在多少张图上
+export interface TagVO {
+  id: number
+  name: string
+  categoryId: number
+  aliases: string[]
+  count: number
+}
+
+// 全部标签和分类（加标签的候选、筛选下拉都用它）
+export interface TagCatalogVO {
+  categories: TagCategoryVO[]
+  tags: TagVO[]
+}
+
+// 一张图上的标签
+export interface ImageTagVO {
+  id: number
+  name: string
+  categoryId: number
+}
+
+// 给一张或多张图加标签：按名字和别名匹配已有标签，没有就在 categoryId 分类下新建
+export interface AddTagDTO {
+  imageIds: number[]
+  name: string
+  categoryId?: number
+}
+
+// 加标签的结果：实际加上的张数、已经有的张数、已满 5 个跳过的张数
+export interface AddTagResultVO {
+  tag: ImageTagVO
+  added: number
+  already: number
+  skipped: number
 }
 
 // 缩略图状态：已生成 / 还没生成 / 生成失败（无法预览）
@@ -199,8 +281,18 @@ export interface ImageDetailVO {
   importedAt: string
   takenAt: string | null
   exif: ExifInfoVO | null
+  // 用户起的名字（没起过为空，显示时用文件名）
+  displayName: string | null
+  tags: ImageTagVO[]
   locations: ImageLocationVO[]
 }
+
+// 名字最多几个字、每张图最多几个标签、筛选最多选几个
+export const NAME_MAX = 15
+export const TAGS_PER_IMAGE = 5
+export const FILTER_MAX = 5
+// 标签名最多几个字
+export const TAG_NAME_MAX = 20
 
 // 拍摄信息（没有的项不出现）
 export interface ExifInfoVO {

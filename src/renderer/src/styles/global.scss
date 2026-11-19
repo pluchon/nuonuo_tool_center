@@ -38,3 +38,14 @@ body {
   --banner-scan-bg: rgba(63, 143, 123, 0.18);
   --banner-offline-bg: rgba(184, 115, 46, 0.18);
 }
+
+// 详情面板 R-18 一行（关着时）的淡玫红底和描边
+:root {
+  --r18-row-bg: rgba(252, 231, 238, 0.55);
+  --r18-row-line: rgba(242, 198, 212, 0.8);
+}
+
+:root.dark {
+  --r18-row-bg: rgba(194, 51, 90, 0.16);
+  --r18-row-line: rgba(194, 51, 90, 0.35);
+}

@@ -4,6 +4,7 @@ import AppToast from '@/components/feedback/AppToast.vue'
 import GalleryView from '@/views/gallery/GalleryView.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useScanStore } from '@/stores/scan'
+import { useTagsStore } from '@/stores/tags'
 import { useToastStore } from '@/stores/toast'
 import SideNav from './SideNav.vue'
 import StatusFooter from './StatusFooter.vue'
@@ -16,8 +17,10 @@ export default defineComponent({
     const library = useLibraryStore()
     const scan = useScanStore()
     const toast = useToastStore()
+    const tags = useTagsStore()
     onMounted(() => {
       void library.load()
+      tags.load().catch((err: unknown) => toast.show(`标签读不出来：${err instanceof Error ? err.message : String(err)}`, 'error'))
       scan.init().catch((err: unknown) => toast.show(`读不到扫描状态：${err instanceof Error ? err.message : String(err)}`, 'error'))
     })
     return {}

@@ -89,12 +89,12 @@ describe('第四阶段：图片网格', () => {
     // 默认选中一张（扫描中刷新时选中的那张会保留），详情面板显示的就是它
     await expect(page.locator('.tile--on').count()).resolves.toBe(1)
     const selectedName = await page.locator('.tile--on .tile__name').textContent()
-    await expect(page.locator('.detail-panel__name').textContent()).resolves.toBe(selectedName)
+    await expect(page.locator('#nameInput').inputValue()).resolves.toBe(selectedName)
     await shot(page, 'grid-light')
 
     // 点带拍摄信息的照片：详情显示拍摄信息
     await page.click('.tile:has-text("DSC09412.jpg")')
-    await expect(page.locator('.detail-panel__name').textContent()).resolves.toBe('DSC09412.jpg')
+    await expect(page.locator('#nameInput').inputValue()).resolves.toBe('DSC09412.jpg')
     await expect(page.locator('.detail-panel__exif-val').allTextContents()).resolves.toEqual(['SONY ILCE-7M4', 'FE 24-70mm F2.8 GM II'])
     await expect(page.locator('.detail-panel__param-v').allTextContents()).resolves.toEqual(['35mm', 'f/4', '1/250s', '100'])
     await expect(page.locator('.detail-panel__taken').textContent()).resolves.toBe('2025-10-03 09:12:44')
@@ -109,14 +109,14 @@ describe('第四阶段：图片网格', () => {
     const names = await tileNames(page)
     await page.click(`.tile:has-text("${names[0]}")`)
     await page.click(`.tile:has-text("${names[2]}")`, { modifiers: ['Control'] })
-    await expect(page.locator('.detail-panel__batch-num').textContent()).resolves.toBe('2')
+    await expect(page.locator('.batch-panel__num').textContent()).resolves.toBe('2')
     await page.click(`.tile:has-text("${names[5]}")`, { modifiers: ['Shift'] })
     await expect(page.locator('.tile--on').count()).resolves.toBe(4)
     await shot(page, 'grid-multi-light')
     await page.keyboard.press('Escape')
     await expect(page.locator('.tile--on').count()).resolves.toBe(1)
     await page.keyboard.press('Control+a')
-    await expect(page.locator('.detail-panel__batch-num').textContent()).resolves.toBe('22')
+    await expect(page.locator('.batch-panel__num').textContent()).resolves.toBe('22')
     await page.keyboard.press('Escape')
 
     // 方向键：→ 下一张，↓ 下一行
@@ -159,7 +159,7 @@ describe('第四阶段：图片网格', () => {
     // 类目录：名称排序（英文数字在前、按数字大小，中文在后），不分组，出现“排序”条件
     await page.click('.side-nav__label:text-is("壁纸")')
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 5)
-    await page.click('.filter-bar__btn')
+    await page.click('[data-dd="sort"] .filter-bar__btn')
     await page.click('.filter-bar__opt:has-text("名称")')
     await page.waitForFunction(() => document.querySelector('.tile .tile__name')?.textContent === 'a-9.jpg')
     expect(await tileNames(page)).toEqual(['a-9.jpg', 'a-10.jpg', 'b-2.jpg', '海边.jpg', '晚霞.jpg'])

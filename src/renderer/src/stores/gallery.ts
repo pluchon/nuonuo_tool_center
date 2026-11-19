@@ -1,9 +1,20 @@
 import { defineStore } from 'pinia'
-import type { GalleryItemVO, GalleryQueryDTO, ImageDetailVO } from '@shared/api'
+import {
+  TAGS_PER_IMAGE,
+  type DirKeyDTO,
+  type GalleryItemVO,
+  type GalleryQueryDTO,
+  type ImageDetailVO,
+  type ImageTagVO,
+  type MoreFilterDTO
+} from '@shared/api'
 import type { SortKey } from '@shared/settings'
+import { addImageTag, fetchCommonTags, removeImageTag, renameImage, setImagesR18 } from '@/api/edit'
 import { fetchGallery, fetchImageDetail } from '@/api/gallery'
 import { DEFAULT_ZOOM, ROW_HEIGHTS } from '@/utils/gridLayout'
+import { useLibraryStore } from './library'
 import { useSettingsStore } from './settings'
+import { useTagsStore } from './tags'
 import { useToastStore } from './toast'
 import { useViewStore } from './view'
 
@@ -22,6 +33,11 @@ function readZoom(): number {
   }
 }
 
+// 错误信息
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
 // 每次查询的序号：只采用最后一次查询的结果
 let querySeq = 0
 let detailSeq = 0
@@ -33,6 +49,10 @@ export const useGalleryStore = defineStore('gallery', {
     sort: 'new' as SortKey,
     onlyR18: false,
     onlyHere: false,
+    // 标签、目录、更多筛选
+    tagIds: [] as number[],
+    dirs: [] as DirKeyDTO[],
+    more: {} as MoreFilterDTO,
     items: [] as GalleryItemVO[],
     loaded: false,
     loading: false,
@@ -43,6 +63,8 @@ export const useGalleryStore = defineStore('gallery', {
     anchor: null as number | null,
     detail: null as ImageDetailVO | null,
     detailError: '',
+    // 多选时的共同标签
+    commonTags: [] as ImageTagVO[],
     zoom: readZoom(),
     // 查询条件变了就加一（网格据此回到顶部）；扫描中的刷新条件不变，不加
     queryKey: 0,
@@ -67,21 +89,31 @@ export const useGalleryStore = defineStore('gallery', {
     query(): GalleryQueryDTO | null {
       const v = useViewStore()
       const base = { q: this.q, sort: this.nameOnly ? 'new' : this.sort } as const
+      // 筛选条件是响应式代理，IPC 只能传普通对象（代理无法结构化克隆），这里拷一份
+      const tagIds = [...this.tagIds]
+      const dirs = this.dirs.map((d) => ({ ...d }))
+      const more = JSON.parse(JSON.stringify(this.more)) as MoreFilterDTO
       if (v.view === 'dir') {
         if (!v.dir) {
           return null
         }
         return v.dir.kind === 'source'
           ? { ...base, view: 'source', sourceId: v.dir.id, onlyHere: this.onlyHere }
-          : { ...base, view: 'category', category: v.dir.name, onlyHere: this.onlyHere, onlyR18: this.onlyR18 }
+          : { ...base, view: 'category', category: v.dir.name, onlyHere: this.onlyHere, onlyR18: this.onlyR18, tagIds, more }
       }
-      return { ...base, view: v.view, onlyR18: v.view === 'all' && this.onlyR18 }
+      if (v.view === 'all' || v.view === 'r18') {
+        return { ...base, view: v.view, onlyR18: v.view === 'all' && this.onlyR18, tagIds, dirs, more }
+      }
+      return { ...base, view: v.view, dirs: v.view === 'untagged' ? dirs : undefined }
     },
-    // 切换视图时清掉搜索和只看开关，排序回到设置里的默认排序
+    // 切换视图时清掉搜索、筛选和只看开关，排序回到设置里的默认排序
     resetFilters(): void {
       this.q = ''
       this.onlyR18 = false
       this.onlyHere = false
+      this.tagIds = []
+      this.dirs = []
+      this.more = {}
       this.sort = useSettingsStore().values.defaultSort
     },
     // 按当前条件重新查；保留还在列表里的选中，否则选第一张
@@ -92,6 +124,8 @@ export const useGalleryStore = defineStore('gallery', {
       }
       const seq = ++querySeq
       this.loading = true
+      // 选中的那张在旧列表里的位置：它离开列表时（比如在“R-18 图”里取消 R-18）选同一位置上的下一张
+      const oldIndex = this.primary === null ? -1 : this.items.findIndex((i) => i.imageId === this.primary)
       try {
         const { items } = await fetchGallery(query)
         if (seq !== querySeq) {
@@ -113,13 +147,18 @@ export const useGalleryStore = defineStore('gallery', {
             this.primary = kept[0]
           }
         } else {
-          this.selectOne(items[0]?.imageId ?? null)
+          const at = oldIndex >= 0 ? Math.min(oldIndex, items.length - 1) : 0
+          this.selectOne(items[at]?.imageId ?? null)
         }
         void this.loadDetail()
       } catch (err) {
         if (seq === querySeq) {
-          this.error = err instanceof Error ? err.message : String(err)
+          this.error = errText(err)
           this.loaded = true
+          // 列表里还留着上一次的图时，不能悄悄显示旧结果：提示出来
+          if (this.items.length > 0) {
+            useToastStore().show(`图片列表没刷新：${this.error}`, 'error')
+          }
         }
       } finally {
         if (seq === querySeq) {
@@ -133,6 +172,20 @@ export const useGalleryStore = defineStore('gallery', {
       const seq = ++detailSeq
       if (id === null) {
         this.detail = null
+        if (this.multi) {
+          const ids = [...this.selected]
+          try {
+            const common = await fetchCommonTags(ids)
+            if (seq === detailSeq) {
+              this.commonTags = common
+            }
+          } catch (err) {
+            if (seq === detailSeq) {
+              this.commonTags = []
+              this.detailError = err instanceof Error ? err.message : String(err)
+            }
+          }
+        }
         return
       }
       try {
@@ -223,6 +276,73 @@ export const useGalleryStore = defineStore('gallery', {
     collapse(): void {
       if (this.multi) {
         this.selectOne(this.primary)
+      }
+    },
+    // 改完之后刷新：列表（名字、是否打过标签、是否还在这个视图里）、详情、侧栏计数、标签字典
+    async afterEdit(): Promise<void> {
+      await Promise.all([this.load(), useLibraryStore().load(), useTagsStore().load()])
+    },
+    // 当前要改的图：多选时是全部选中的，否则是正在看的那张
+    targets(): number[] {
+      return this.multi ? [...this.selected] : this.primary === null ? [] : [this.primary]
+    },
+    // 改名字；失败时提示并保留原名
+    async rename(name: string): Promise<boolean> {
+      const id = this.primary
+      if (id === null || this.multi) {
+        return false
+      }
+      try {
+        await renameImage(id, name)
+        await this.afterEdit()
+        return true
+      } catch (err) {
+        useToastStore().show(errText(err), 'error')
+        return false
+      }
+    },
+    // 标记 / 取消 R-18（单张或多选）
+    async setR18(value: boolean): Promise<void> {
+      const ids = this.targets()
+      if (ids.length === 0) {
+        return
+      }
+      try {
+        await setImagesR18(ids, value)
+        await this.afterEdit()
+      } catch (err) {
+        useToastStore().show(errText(err), 'error')
+      }
+    },
+    // 加标签（单张或多选）；多选时有图已满 5 个就提示跳过了几张
+    async addTag(name: string, categoryId?: number): Promise<boolean> {
+      const ids = this.targets()
+      if (ids.length === 0 || !name.trim()) {
+        return false
+      }
+      try {
+        const result = await addImageTag({ imageIds: ids, name, categoryId })
+        if (result.skipped > 0) {
+          useToastStore().show(`有 ${result.skipped} 张已经有 ${TAGS_PER_IMAGE} 个标签了，没加上`, 'error')
+        }
+        await this.afterEdit()
+        return true
+      } catch (err) {
+        useToastStore().show(errText(err), 'error')
+        return false
+      }
+    },
+    // 移除标签（单张或多选）
+    async removeTag(tagId: number): Promise<void> {
+      const ids = this.targets()
+      if (ids.length === 0) {
+        return
+      }
+      try {
+        await removeImageTag(ids, tagId)
+        await this.afterEdit()
+      } catch (err) {
+        useToastStore().show(errText(err), 'error')
       }
     },
     // 缩略图换档（delta 为正变小、为负变大）

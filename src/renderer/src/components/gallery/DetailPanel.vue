@@ -1,13 +1,7 @@
 <template>
   <aside class="detail-panel nn-noscroll" aria-label="图片详情">
-    <!-- 多选：标题 + 张数（批量操作在编辑阶段接入） -->
-    <template v-if="gallery.multi">
-      <div class="detail-panel__batch">
-        <span class="detail-panel__batch-title">已选</span>
-        <span class="detail-panel__batch-num">{{ gallery.selected.length }}</span>
-        <span class="detail-panel__batch-title">张</span>
-      </div>
-    </template>
+    <!-- 多选：批量面板 -->
+    <BatchPanel v-if="gallery.multi" />
 
     <template v-else-if="detail">
       <div v-if="notice" class="detail-panel__notice" :class="`detail-panel__notice--${notice.kind}`" role="alert">
@@ -23,8 +17,21 @@
       </div>
 
       <div class="detail-panel__block">
-        <span class="detail-panel__label">图片名字</span>
-        <div class="detail-panel__name" :title="detail.name">{{ detail.name }}</div>
+        <div class="detail-panel__row-head">
+          <label class="detail-panel__label" for="nameInput">图片好名字</label>
+          <span class="detail-panel__label" :class="{ 'detail-panel__over': nameOver }">{{ nameOver ? `最多 ${nameMax} 个字 · ` : '' }}{{ nameLen }}/{{ nameMax }}</span>
+        </div>
+        <input
+          id="nameInput"
+          class="detail-panel__name"
+          :class="{ 'detail-panel__name--over': nameOver }"
+          :value="nameDraft"
+          :placeholder="fileName"
+          @input="onNameInput"
+          @keydown.enter="onNameEnter"
+          @keydown.esc.stop="onNameCancel"
+          @blur="saveName"
+        />
         <div class="detail-panel__file">
           <span class="detail-panel__file-name">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></svg>
@@ -64,6 +71,8 @@
         </div>
       </div>
 
+      <TagEditor :tags="detail.tags" :image-id="detail.imageId" />
+
       <div v-if="location" class="detail-panel__block">
         <span class="detail-panel__label">图片源路径</span>
         <div class="detail-panel__path" :title="location.path">
@@ -72,6 +81,21 @@
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1.5" /><path d="M3 7v10a2 2 0 0 0 2 2h12.5l3-8H7.5L5 17" /></svg>
           </button>
         </div>
+      </div>
+
+      <div class="detail-panel__r18" :class="{ 'detail-panel__r18--on': detail.isR18 }">
+        <span class="detail-panel__r18-label">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="3" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+          R-18
+        </span>
+        <button class="detail-panel__switch" type="button" role="switch" :aria-checked="detail.isR18" aria-label="标为 R-18" @click="gallery.setR18(!detail.isR18)">
+          <span class="detail-panel__knob" />
+        </button>
+      </div>
+
+      <div v-if="importText" class="detail-panel__imported">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-label="导入时间"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 3" /></svg>
+        <span>{{ importText }}</span>
       </div>
     </template>
 

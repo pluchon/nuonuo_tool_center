@@ -1,5 +1,6 @@
-import { and, eq, ne, sql, type SQL } from 'drizzle-orm'
+import { and, eq, inArray, ne, or, sql, type SQL } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
+import { col } from '../db/sqlUtil'
 import { image, imageFile, imageTag, libraryRoot, tag } from '../db/schema'
 
 // 网格查询的一行：一个文件位置连同它的图片
@@ -36,10 +37,14 @@ export interface GalleryFilter {
   q?: string
   byTag?: boolean
   onlyR18?: boolean
+  // 带其中任一标签
+  tagIds?: number[]
+  // 文件在其中任一目录里：整个源目录，或某个目录下以 prefix 开头的子路径
+  dirs?: Array<{ rootId: number; prefix: string }>
 }
 
 // 打过标签：至少有一个已确认的标签
-const taggedExpr = sql<boolean>`exists (select 1 from ${imageTag} where ${imageTag.imageId} = ${image.id} and ${imageTag.deleteState} = 0 and ${imageTag.status} = 'ACCEPTED')`
+const taggedExpr = sql<boolean>`exists (select 1 from ${imageTag} where ${col(imageTag.imageId)} = ${col(image.id)} and ${imageTag.deleteState} = 0 and ${imageTag.status} = 'ACCEPTED')`
 
 // 文件名：相对路径最后一段
 const fileNameExpr = sql<string>`regexp_replace(${imageFile.relPath}, '^.*\\\\', '')`
@@ -102,10 +107,26 @@ export async function findGalleryRows(f: GalleryFilter): Promise<GalleryRow[]> {
   if (f.onlyR18) {
     conds.push(eq(image.isR18, true))
   }
+  if (f.tagIds && f.tagIds.length > 0) {
+    conds.push(
+      sql`exists (select 1 from ${imageTag} where ${col(imageTag.imageId)} = ${col(image.id)} and ${imageTag.deleteState} = 0 and ${imageTag.status} = 'ACCEPTED' and ${inArray(imageTag.tagId, f.tagIds)})`
+    )
+  }
+  if (f.dirs && f.dirs.length > 0) {
+    conds.push(
+      or(
+        ...f.dirs.map((d) =>
+          d.prefix
+            ? and(eq(imageFile.rootId, d.rootId), sql`lower(${imageFile.relPath}) like ${likeEscape(d.prefix.toLowerCase()) + '\\\\%'}`)
+            : eq(imageFile.rootId, d.rootId)
+        )
+      )
+    )
+  }
   if (f.q) {
     const pattern = `%${likeEscape(f.q)}%`
     const nameHit = sql`lower(coalesce(${image.displayName}, ${fileNameExpr})) like ${pattern}`
-    const tagHit = sql`exists (select 1 from ${imageTag} join ${tag} on ${tag.id} = ${imageTag.tagId} where ${imageTag.imageId} = ${image.id} and ${imageTag.deleteState} = 0 and ${imageTag.status} = 'ACCEPTED' and ${tag.deleteState} = 0 and lower(${tag.name}) like ${pattern})`
+    const tagHit = sql`exists (select 1 from ${imageTag} join ${tag} on ${col(tag.id)} = ${col(imageTag.tagId)} where ${col(imageTag.imageId)} = ${col(image.id)} and ${imageTag.deleteState} = 0 and ${imageTag.status} = 'ACCEPTED' and ${tag.deleteState} = 0 and lower(${tag.name}) like ${pattern})`
     conds.push(f.byTag ? sql`(${nameHit} or ${tagHit})` : nameHit)
   }
   return db
@@ -154,4 +175,34 @@ export async function findFileLocation(fileId: number): Promise<{ rootPath: stri
     .where(and(eq(imageFile.id, fileId), eq(imageFile.deleteState, 0), eq(libraryRoot.deleteState, 0)))
     .limit(1)
   return row
+}
+
+// “还没打标签”的图在各目录（源目录、类目录顶层文件夹）里有多少张
+export async function countUntaggedByDir(): Promise<Array<{ rootId: number; kind: 'SOURCE' | 'CATEGORY'; name: string; top: string; n: number }>> {
+  const { db } = getDatabase()
+  const top = sql<string>`case when ${libraryRoot.kind} = 'CATEGORY' then split_part(${imageFile.relPath}, '\\', 1) else '' end`
+  return db
+    .select({
+      rootId: libraryRoot.id,
+      kind: libraryRoot.kind,
+      name: libraryRoot.name,
+      top,
+      n: sql<number>`count(distinct ${image.id})::int`
+    })
+    .from(imageFile)
+    .innerJoin(image, eq(image.id, imageFile.imageId))
+    .innerJoin(libraryRoot, eq(libraryRoot.id, imageFile.rootId))
+    .where(
+      and(
+        eq(imageFile.deleteState, 0),
+        ne(imageFile.status, 'DELETED'),
+        eq(image.deleteState, 0),
+        eq(libraryRoot.deleteState, 0),
+        sql`not ${taggedExpr}`,
+        // 类目录根下直接放的文件不属于任何类目录
+        sql`(${libraryRoot.kind} = 'SOURCE' or strpos(${imageFile.relPath}, '\\') > 0)`
+      )
+    )
+    .groupBy(libraryRoot.id, libraryRoot.kind, libraryRoot.name, top)
+    .orderBy(libraryRoot.id, top)
 }

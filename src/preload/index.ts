@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import {
   IpcChannel,
   IpcEvent,
+  type AddTagDTO,
+  type AddTagResultVO,
   type ApiResponse,
   type AppSettings,
   type DbBootState,
@@ -9,9 +11,12 @@ import {
   type GalleryListVO,
   type GalleryQueryDTO,
   type ImageDetailVO,
+  type ImageTagVO,
   type LibraryOverviewVO,
   type LibraryRootVO,
   type ScanStateVO,
+  type TagCatalogVO,
+  type DirCountVO,
   type ThemeMode
 } from '@shared/api'
 
@@ -38,7 +43,19 @@ const api = {
     list: (query: GalleryQueryDTO): Promise<ApiResponse<GalleryListVO>> => ipcRenderer.invoke(IpcChannel.galleryList, query),
     detail: (imageId: number): Promise<ApiResponse<ImageDetailVO>> => ipcRenderer.invoke(IpcChannel.galleryDetail, imageId),
     showInFolder: (fileId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.fileShowInFolder, fileId),
-    open: (fileId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.fileOpen, fileId)
+    open: (fileId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.fileOpen, fileId),
+    untaggedDirs: (): Promise<ApiResponse<DirCountVO[]>> => ipcRenderer.invoke(IpcChannel.galleryUntaggedDirs)
+  },
+  edit: {
+    tagCatalog: (): Promise<ApiResponse<TagCatalogVO>> => ipcRenderer.invoke(IpcChannel.tagCatalog),
+    rename: (imageId: number, name: string | null): Promise<ApiResponse<string | null>> =>
+      ipcRenderer.invoke(IpcChannel.imageRename, imageId, name),
+    setR18: (imageIds: number[], value: boolean): Promise<ApiResponse<number>> =>
+      ipcRenderer.invoke(IpcChannel.imageSetR18, imageIds, value),
+    addTag: (dto: AddTagDTO): Promise<ApiResponse<AddTagResultVO>> => ipcRenderer.invoke(IpcChannel.imageAddTag, dto),
+    removeTag: (imageIds: number[], tagId: number): Promise<ApiResponse<number>> =>
+      ipcRenderer.invoke(IpcChannel.imageRemoveTag, imageIds, tagId),
+    commonTags: (imageIds: number[]): Promise<ApiResponse<ImageTagVO[]>> => ipcRenderer.invoke(IpcChannel.imageCommonTags, imageIds)
   },
   scan: {
     start: (rootId: number | null): Promise<ApiResponse<ScanStateVO>> => ipcRenderer.invoke(IpcChannel.scanStart, rootId),

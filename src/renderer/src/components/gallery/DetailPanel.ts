@@ -1,8 +1,11 @@
-import { computed, defineComponent } from 'vue'
-import type { ExifInfoVO, ImageDetailVO, ImageLocationVO } from '@shared/api'
+import { computed, defineComponent, ref, watch } from 'vue'
+import { NAME_MAX, type ExifInfoVO, type ImageDetailVO, type ImageLocationVO } from '@shared/api'
 import { openFileWithDefault, showFileInFolder, thumbUrl } from '@/api/gallery'
 import { useGalleryStore } from '@/stores/gallery'
 import { useToastStore } from '@/stores/toast'
+import { useViewStore } from '@/stores/view'
+import BatchPanel from './BatchPanel.vue'
+import TagEditor from './TagEditor.vue'
 
 // 详情面板顶部的状态提示
 export interface NoticeVM {
@@ -61,9 +64,11 @@ function cameraOf(e: ExifInfoVO): string {
 // 详情面板：单选时显示一张图的预览和信息，多选时显示已选张数（照原型右侧面板；名字、标签、R-18、复制移动在编辑阶段接入）
 export default defineComponent({
   name: 'DetailPanel',
+  components: { BatchPanel, TagEditor },
   setup() {
     const gallery = useGalleryStore()
     const toast = useToastStore()
+    const viewStore = useViewStore()
 
     // 只显示和当前选中一致的详情，避免切换时闪出上一张的信息
     const detail = computed<ImageDetailVO | null>(() =>
@@ -117,6 +122,46 @@ export default defineComponent({
       }
     })
 
+    // 名字：输入时不截断（会打断中文输入法），超过 15 个字计数变红、不保存；回车或失焦时保存，Esc 放弃
+    const nameDraft = ref('')
+    watch(
+      () => [detail.value?.imageId, detail.value?.name] as const,
+      () => {
+        nameDraft.value = detail.value?.name ?? ''
+      },
+      { immediate: true }
+    )
+    const nameLen = computed(() => Array.from(nameDraft.value.trim()).length)
+    const nameOver = computed(() => nameLen.value > NAME_MAX)
+    const onNameInput = (e: Event): void => {
+      nameDraft.value = (e.target as HTMLInputElement).value
+    }
+    const saveName = async (): Promise<void> => {
+      const d = detail.value
+      if (!d || nameOver.value) {
+        return
+      }
+      const next = nameDraft.value.trim()
+      // 清空等于用回文件名
+      if (next === d.name || (next === '' && d.displayName === null)) {
+        nameDraft.value = d.name
+        return
+      }
+      await gallery.rename(next)
+    }
+    const onNameEnter = (e: KeyboardEvent): void => {
+      if (!e.isComposing) {
+        ;(e.target as HTMLInputElement).blur()
+      }
+    }
+    const onNameCancel = (e: KeyboardEvent): void => {
+      nameDraft.value = detail.value?.name ?? ''
+      ;(e.target as HTMLInputElement).blur()
+    }
+
+    // “最近导入”里在面板底部显示导入时间
+    const importText = computed(() => (viewStore.view === 'recent' && detail.value ? formatTaken(detail.value.importedAt) : ''))
+
     const fail = (err: unknown): void => toast.show(err instanceof Error ? err.message : String(err), 'error')
     const onShowInFolder = (): void => {
       if (location.value) {
@@ -129,6 +174,27 @@ export default defineComponent({
       }
     }
 
-    return { gallery, detail, location, fileName, dims, size, notice, exif, thumbUrl, onShowInFolder, onOpenDefault }
+    return {
+      gallery,
+      detail,
+      location,
+      fileName,
+      dims,
+      size,
+      notice,
+      exif,
+      thumbUrl,
+      nameDraft,
+      nameLen,
+      nameOver,
+      nameMax: NAME_MAX,
+      importText,
+      onNameInput,
+      saveName,
+      onNameEnter,
+      onNameCancel,
+      onShowInFolder,
+      onOpenDefault
+    }
   }
 })

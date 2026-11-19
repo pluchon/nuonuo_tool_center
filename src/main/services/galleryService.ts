@@ -1,7 +1,17 @@
 import { stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { shell } from 'electron'
-import type { GalleryItemVO, GalleryListVO, GalleryQueryDTO, ImageDetailVO, ThumbState } from '@shared/api'
+import {
+  FILTER_MAX,
+  type DirCountVO,
+  type DirKeyDTO,
+  type GalleryItemVO,
+  type GalleryListVO,
+  type GalleryQueryDTO,
+  type ImageDetailVO,
+  type MoreFilterDTO,
+  type ThumbState
+} from '@shared/api'
 import { SORT_KEYS, type ScanFormat } from '@shared/settings'
 import { BizError } from '../common/bizError'
 import type { ExifInfo } from './scan/exifInfo'
@@ -10,11 +20,13 @@ import {
   findGalleryRows,
   findImageExif,
   findImageRows,
+  countUntaggedByDir,
   type GalleryFilter,
   type GalleryRow
 } from '../repositories/galleryRepository'
 import { findActiveRootById, findActiveRootsByKind } from '../repositories/libraryRootRepository'
 import { THUMB_FAILED, THUMB_READY } from '../repositories/imageRepository'
+import { findTagsOfImage } from '../repositories/tagRepository'
 
 // “最近导入”的天数（和侧栏计数一致）
 export const RECENT_DAYS = 30
@@ -70,11 +82,95 @@ async function toFilter(q: GalleryQueryDTO): Promise<GalleryFilter> {
     if (!catRoot) {
       return { ...filter, rootId: -1 }
     }
-    return { ...filter, rootId: catRoot.id, prefix: name, onlyHere: q.onlyHere === true, byTag: true, onlyR18: q.onlyR18 === true }
+    return {
+      ...filter,
+      rootId: catRoot.id,
+      prefix: name,
+      onlyHere: q.onlyHere === true,
+      byTag: true,
+      onlyR18: q.onlyR18 === true,
+      tagIds: checkTagIds(q.tagIds)
+    }
   }
-  // 还没打标签、最近导入只按图片名搜；全部图片、R-18 图还按标签名
+  // 还没打标签、最近导入只按图片名搜；全部图片、R-18 图还按标签名，并能按标签筛选
   const byTag = q.view === 'all' || q.view === 'r18'
-  return { ...filter, scope: q.view, byTag, onlyR18: q.view === 'all' && q.onlyR18 === true }
+  return {
+    ...filter,
+    scope: q.view,
+    byTag,
+    onlyR18: q.view === 'all' && q.onlyR18 === true,
+    tagIds: byTag ? checkTagIds(q.tagIds) : undefined,
+    dirs: q.view === 'recent' ? undefined : await resolveDirs(q.dirs)
+  }
+}
+
+// 标签筛选：最多 5 个整数 id
+function checkTagIds(raw: unknown): number[] | undefined {
+  if (raw === undefined) {
+    return undefined
+  }
+  if (!Array.isArray(raw) || raw.length > FILTER_MAX || raw.some((v) => !Number.isInteger(v))) {
+    throw new BizError('BAD_REQUEST', `标签最多选 ${FILTER_MAX} 个`)
+  }
+  return raw.length > 0 ? (raw as number[]) : undefined
+}
+
+// 目录筛选：最多 5 个；源目录按 id，类目录换成类目录根下的前缀
+async function resolveDirs(raw: unknown): Promise<GalleryFilter['dirs']> {
+  if (raw === undefined) {
+    return undefined
+  }
+  if (!Array.isArray(raw) || raw.length > FILTER_MAX) {
+    throw new BizError('BAD_REQUEST', `目录最多选 ${FILTER_MAX} 个`)
+  }
+  if (raw.length === 0) {
+    return undefined
+  }
+  const [catRoot] = await findActiveRootsByKind('CATEGORY')
+  return (raw as DirKeyDTO[]).map((d) => {
+    if (d?.kind === 'source' && Number.isInteger(d.id)) {
+      return { rootId: d.id, prefix: '' }
+    }
+    if (d?.kind === 'category' && typeof d.name === 'string' && d.name && !/[\\/]/.test(d.name)) {
+      return { rootId: catRoot?.id ?? -1, prefix: d.name }
+    }
+    throw new BizError('BAD_REQUEST', '目录筛选不对')
+  })
+}
+
+// 更多筛选：同一组内满足任一项，所有组都要满足（全部图片、R-18 图、类目录）
+export function matchMore(item: GalleryItemVO, more: MoreFilterDTO | undefined, now: Date = new Date()): boolean {
+  if (!more) {
+    return true
+  }
+  const w = item.width ?? 0
+  const h = item.height ?? 0
+  const long = Math.max(w, h)
+  const r = h > 0 ? w / h : 1
+  const mb = item.byteSize / (1024 * 1024)
+  const taken = item.takenAt ? new Date(item.takenAt) : null
+  const tests: { [K in keyof Required<MoreFilterDTO>]: (v: NonNullable<MoreFilterDTO[K]>[number]) => boolean } = {
+    fmt: (v) => item.format === v,
+    ori: (v) => (w > 0 && h > 0 ? (v === 'h' ? r > 1.05 : v === 'v' ? r < 0.95 : r >= 0.95 && r <= 1.05) : false),
+    res: (v) => (long > 0 ? (v === '4k' ? long >= 3840 : v === 'fhd' ? long >= 1920 : long < 1000) : false),
+    size: (v) => (v === 's' ? mb < 1 : v === 'm' ? mb >= 1 && mb <= 10 : mb > 10),
+    date: (v) => {
+      if (v === 'none') {
+        return taken === null
+      }
+      if (!taken) {
+        return false
+      }
+      if (v === '30d') {
+        return now.getTime() - taken.getTime() <= 30 * 24 * 3600 * 1000
+      }
+      return taken.getFullYear() === now.getFullYear() - (v === 'ly' ? 1 : 0)
+    }
+  }
+  return (Object.keys(tests) as Array<keyof MoreFilterDTO>).every((k) => {
+    const picked = more[k] as Array<never> | undefined
+    return !picked || picked.length === 0 || picked.some((v) => (tests[k] as (x: never) => boolean)(v))
+  })
 }
 
 // 这些目录现在能不能访问
@@ -153,8 +249,23 @@ export async function listGallery(query: GalleryQueryDTO): Promise<GalleryListVO
       byImage.set(row.imageId, [row])
     }
   }
-  const items = [...byImage.values()].map((list) => toItem(pickRepresentative(list, offline), offline))
+  // 更多筛选只在全部图片、R-18 图、类目录里生效
+  const more = query.view === 'all' || query.view === 'r18' || query.view === 'category' ? query.more : undefined
+  const items = [...byImage.values()]
+    .map((list) => toItem(pickRepresentative(list, offline), offline))
+    .filter((item) => matchMore(item, more))
   return { items: sortItems(items, query.sort) }
+}
+
+// “还没打标签”的目录筛选项：含未打标签图的源目录和顶层类目录
+export async function listUntaggedDirs(): Promise<DirCountVO[]> {
+  // 源目录在前、类目录在后（和侧栏顺序一致）
+  const rows = (await countUntaggedByDir()).sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'SOURCE' ? -1 : 1))
+  return rows.map((r) =>
+    r.kind === 'SOURCE'
+      ? { dir: { kind: 'source', id: r.rootId }, label: r.name, count: r.n }
+      : { dir: { kind: 'category', name: r.top }, label: r.top, count: r.n }
+  )
 }
 
 // 详情面板：一张图的信息和它在磁盘上的所有位置
@@ -181,6 +292,8 @@ export async function getImageDetail(imageId: number): Promise<ImageDetailVO> {
     importedAt: rep.createTime.toISOString(),
     takenAt: rep.takenAt ? rep.takenAt.toISOString() : null,
     exif: ((await findImageExif(imageId)) as ExifInfo | null) ?? null,
+    displayName: rep.displayName,
+    tags: await findTagsOfImage(imageId),
     locations: rows.map((r) => ({
       fileId: r.fileId,
       path: join(r.rootPath, r.relPath),
