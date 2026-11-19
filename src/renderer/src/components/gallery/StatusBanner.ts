@@ -68,7 +68,7 @@ export default defineComponent({
           total: '',
           pct: 0,
           button: '重新选择',
-          run: () => picker.openRelocate(src.id, src.name)
+          run: () => void picker.openRelocate(src.id, src.name)
         }
       }
       return null

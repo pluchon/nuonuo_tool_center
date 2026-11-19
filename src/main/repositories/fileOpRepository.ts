@@ -119,9 +119,9 @@ export async function retireRowsAt(dbx: Db, rootId: number, relPath: string): Pr
     .where(and(eq(imageFile.rootId, rootId), sql`lower(${imageFile.relPath}) = ${relPath.toLowerCase()}`, eq(imageFile.deleteState, 0)))
 }
 
-// 文件挪了位置：记录跟着改
+// 文件挪了位置：记录跟着改（移出图库后撤销挪回来时，记录重新算在图库里）
 export async function relocateImageFile(dbx: Db, id: number, rootId: number, relPath: string): Promise<void> {
-  await dbx.update(imageFile).set({ rootId, relPath, status: 'NORMAL' }).where(eq(imageFile.id, id))
+  await dbx.update(imageFile).set({ rootId, relPath, status: 'NORMAL', deleteState: 0 }).where(eq(imageFile.id, id))
 }
 
 // 复制出来的新文件：同一张图多一个位置

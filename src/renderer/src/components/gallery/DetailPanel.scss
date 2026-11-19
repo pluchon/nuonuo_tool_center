@@ -437,9 +437,10 @@
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     height: 32px;
-    padding: 0 4px 0 10px;
+    // 文件夹按钮在左边，和路径做成同一个输入框（中间一条细分隔线）
+    padding: 0 10px 0 3px;
     border-radius: 10px;
     background: var(--look-field-bg);
     border: 1px solid var(--look-edge);
@@ -459,18 +460,35 @@
   }
 
   &__open {
+    position: relative;
     flex: none;
     width: 26px;
     height: 26px;
     padding: 0;
-    border-radius: 8px;
-    border: 1px solid var(--a-line);
-    background: var(--c-surface);
+    border-radius: 7px;
+    border: none;
+    background: transparent;
     color: var(--a);
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
+    transition: background 0.15s;
+
+    // 和路径之间的细分隔线
+    &::after {
+      content: '';
+      position: absolute;
+      right: -5px;
+      top: 6px;
+      bottom: 6px;
+      width: 1px;
+      background: var(--look-edge);
+    }
+
+    &:hover:not(:disabled) {
+      background: var(--a-soft);
+    }
 
     &:disabled {
       opacity: 0.45;

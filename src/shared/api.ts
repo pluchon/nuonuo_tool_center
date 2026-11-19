@@ -19,6 +19,7 @@ export const IpcChannel = {
   systemOpenDataDir: 'system:openDataDir',
   systemCleanCache: 'system:cleanCache',
   systemExportBackup: 'system:exportBackup',
+  systemPickFolder: 'system:pickFolder',
   libraryGetOverview: 'library:getOverview',
   libraryAddRoot: 'library:addRoot',
   libraryRelocateRoot: 'library:relocateRoot',
@@ -378,6 +379,8 @@ export interface TransferFolderVO {
 export interface TransferRootsVO {
   sources: Array<TransferFolderVO & { id: number; offline: boolean }>
   categories: TransferFolderVO[]
+  // 类目录所在的图库文件夹（判断“其他位置”选的文件夹在不在图库里）
+  home: string
 }
 
 // 移动 / 复制的结果：批次 id（撤销用）、做成几步、跳过几步（已经在那里）、失败几步和第一个原因

@@ -47,6 +47,32 @@
           </div>
         </div>
 
+        <!-- 其他位置：Windows 自己的选文件夹对话框，可以放到图库外（复制等于导出一份，移动等于移出图库） -->
+        <div class="transfer-dlg__group">
+          <div class="transfer-dlg__group-title"><span class="transfer-dlg__dot transfer-dlg__dot--other" aria-hidden="true" />其他位置</div>
+          <div class="transfer-dlg__others">
+            <button
+              v-for="p in transfer.others"
+              :key="p"
+              class="transfer-dlg__row transfer-dlg__row--other"
+              :class="{ 'transfer-dlg__row--on': transfer.picked.includes(p) }"
+              type="button"
+              :role="isCopy ? 'checkbox' : 'radio'"
+              :aria-checked="transfer.picked.includes(p) ? 'true' : 'false'"
+              :title="p"
+              @click="transfer.toggle(p)"
+            >
+              <span class="transfer-dlg__mark" :class="{ 'transfer-dlg__mark--box': isCopy }" aria-hidden="true">{{ transfer.picked.includes(p) ? '✓' : '' }}</span>
+              <span class="transfer-dlg__label transfer-dlg__label--path">{{ p }}</span>
+              <span class="transfer-dlg__note">{{ transfer.inLibrary(p) ? '' : '图库外' }}</span>
+            </button>
+            <button class="transfer-dlg__pick" type="button" @click="transfer.pickOther()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M12 11v5M9.5 13.5h5" /></svg>
+              选择文件夹…
+            </button>
+          </div>
+        </div>
+
         <button
           class="transfer-dlg__confirm"
           :class="{ 'transfer-dlg__confirm--ready': ready }"

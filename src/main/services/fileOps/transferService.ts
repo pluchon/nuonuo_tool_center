@@ -14,6 +14,7 @@ import {
   insertBatch,
   insertCopiedFile,
   relocateImageFile,
+  retireImageFile,
   retireRowsAt,
   updateBatchStatus,
   updateOpStatus,
@@ -53,14 +54,15 @@ function reason(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-// 一个目标文件夹：它属于哪个图库目录、在里面的相对路径
+// 一个目标文件夹：它属于哪个图库目录、在里面的相对路径；不在图库里（“其他位置”）时 root 为空
 interface Target {
   abs: string
-  root: LibraryRootEntity
+  root: LibraryRootEntity | null
   relDir: string
 }
 
-// 校验目标文件夹：必须是图库里的某个源目录或类目录（或它们的子文件夹），并且现在存在
+// 校验目标文件夹：必须现在存在。在某个源目录或类目录（或它们的子文件夹）里就是图库里的目标；
+// 否则是“其他位置”：复制过去等于导出一份（图库不变），移动过去等于把这张图移出图库（名字和标签留着，撤销可挪回）
 async function resolveTarget(raw: unknown): Promise<Target> {
   if (typeof raw !== 'string' || raw.trim() === '') {
     throw new BizError('BAD_REQUEST', '目标目录不对')
@@ -69,17 +71,14 @@ async function resolveTarget(raw: unknown): Promise<Target> {
   await ensureCategoryRoot(categoryHomeOverride)
   const roots = (await findActiveRoots()).filter((r) => isWithin(r.path, abs))
   // 嵌套时取最深的那个
-  const root = roots.sort((a, b) => b.path.length - a.path.length)[0]
-  if (!root) {
-    throw new BizError('BAD_REQUEST', '只能放到源目录或类目录里')
-  }
+  const root = roots.sort((a, b) => b.path.length - a.path.length)[0] ?? null
   const ok = await stat(abs)
     .then((s) => s.isDirectory())
     .catch(() => false)
   if (!ok) {
     throw new BizError('NOT_FOUND', `找不到目标目录：${abs}`)
   }
-  return { abs, root, relDir: relative(root.path, abs) }
+  return { abs, root, relDir: root ? relative(root.path, abs) : '' }
 }
 
 // 每张图挑一个来源位置：正常且目录在线的优先
@@ -210,10 +209,16 @@ export async function moveImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
         await updateOpToPath(db, op.id, to)
         await moveInto(op.fromPath, to)
         reserved = null
+        const root = target.root
         await db.transaction(async (tx) => {
-          const rel = relative(target.root.path, to)
-          await retireRowsAt(tx, target.root.id, rel)
-          await relocateImageFile(tx, op.imageFileId!, target.root.id, rel)
+          if (root) {
+            const rel = relative(root.path, to)
+            await retireRowsAt(tx, root.id, rel)
+            await relocateImageFile(tx, op.imageFileId!, root.id, rel)
+          } else {
+            // 移到图库外：这个位置从图库里去掉
+            await retireImageFile(tx, op.imageFileId!)
+          }
           await updateOpStatus(tx, op.id, 'DONE')
         })
         done += 1
@@ -257,12 +262,15 @@ export async function copyImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
     const pairs: Array<{ row: (typeof sources)[number]; target: Target }> = []
     let skipped = 0
     for (const target of targets) {
-      const has = await findImagesInDir(
-        db,
-        sources.map((s) => s.imageId),
-        target.root.id,
-        target.relDir
-      )
+      // 图库外的目录不知道里面有什么，同名的自动加编号
+      const has = target.root
+        ? await findImagesInDir(
+            db,
+            sources.map((s) => s.imageId),
+            target.root.id,
+            target.relDir
+          )
+        : new Set<number>()
       for (const row of sources) {
         if (has.has(row.imageId)) {
           skipped += 1
@@ -299,11 +307,15 @@ export async function copyImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
       try {
         const to = await copyInto(op.fromPath, target.abs, basename(op.fromPath))
         const mtime = (await stat(to)).mtime
+        const root = target.root
         await db.transaction(async (tx) => {
-          const rel = relative(target.root.path, to)
           await updateOpToPath(tx, op.id, to)
-          await retireRowsAt(tx, target.root.id, rel)
-          await insertCopiedFile(tx, { imageId: row.imageId, rootId: target.root.id, relPath: rel, mtime })
+          // 图库外的副本不登记
+          if (root) {
+            const rel = relative(root.path, to)
+            await retireRowsAt(tx, root.id, rel)
+            await insertCopiedFile(tx, { imageId: row.imageId, rootId: root.id, relPath: rel, mtime })
+          }
           await updateOpStatus(tx, op.id, 'DONE')
         })
         done += 1

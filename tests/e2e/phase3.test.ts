@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import sharp from 'sharp'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
-import { pickFolder } from './support/picker'
+import { importFolder, stubFolderPick } from './support/picker'
 
 // 生成的测试图数量：够扫上几秒，能看到进度横幅
 const IMAGE_COUNT = 300
@@ -50,11 +50,7 @@ describe('第三阶段：导入和扫描', () => {
     await expect(page.locator('.status-footer').innerText()).resolves.toContain('还没有扫描过')
     await expect(page.locator('.app-toast').count()).resolves.toBe(0)
 
-    await page.click('.gallery__pick')
-    await shot(page, 'import-dialog-light')
-    await pickFolder(page, source)
-    await expect(page.locator('.folder-pick__confirm').textContent()).resolves.toContain('导入「pics」')
-    await page.click('.folder-pick__confirm')
+    await importFolder(app, page, source)
 
     await page.waitForSelector('.status-banner--scan')
     await expect(page.locator('.status-banner__title').textContent()).resolves.toBe('正在扫描「pics」')
@@ -96,11 +92,8 @@ describe('第三阶段：导入和扫描', () => {
     await p2.waitForSelector('.status-banner--offline')
     await shot(p2, 'offline-dark')
 
+    await stubFolderPick(second.app, moved)
     await p2.click('.status-banner__btn')
-    await expect(p2.locator('.folder-pick__title').textContent()).resolves.toBe('重新选择「pics」的位置')
-    await pickFolder(p2, moved)
-    await shot(p2, 'relocate-dialog-dark')
-    await p2.click('.folder-pick__confirm')
     // 文件都没变，改位置后的扫描几乎立刻结束，“已改到”的提示会马上被“扫描完成”替换
     await p2.waitForSelector('.app-toast:has-text("「pics」扫描完成")', { timeout: 90_000 })
     const overview = await p2.evaluate(() => window.api.library.getOverview())

@@ -1,7 +1,6 @@
 import { computed, defineComponent, onBeforeUnmount, onMounted } from 'vue'
 import { onFileOpDone, pathOfDropped } from '@/api/files'
 import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue'
-import FolderPickDialog from '@/components/dialogs/FolderPickDialog.vue'
 import SettingsDialog from '@/components/dialogs/SettingsDialog.vue'
 import TransferDialog from '@/components/dialogs/TransferDialog.vue'
 import AppToast from '@/components/feedback/AppToast.vue'
@@ -27,7 +26,7 @@ function errText(err: unknown): string {
 // 主界面外壳：左侧导航卡片、主区（图库或标签管理）、底栏，以及各种对话框、目录右键菜单和顶部提示条（照原型主画板）
 export default defineComponent({
   name: 'AppShell',
-  components: { SideNav, GalleryView, TagsView, StatusFooter, FolderPickDialog, TransferDialog, FolderMenu, ConfirmDialog, ImageViewer, SettingsDialog, AppToast },
+  components: { SideNav, GalleryView, TagsView, StatusFooter, TransferDialog, FolderMenu, ConfirmDialog, ImageViewer, SettingsDialog, AppToast },
   setup() {
     const library = useLibraryStore()
     const scan = useScanStore()

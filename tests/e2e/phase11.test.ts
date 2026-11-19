@@ -4,7 +4,7 @@ import sharp from 'sharp'
 import type { ElectronApplication, Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
-import { pickFolder } from './support/picker'
+import { importFolder } from './support/picker'
 
 // 测试进程里 sharp 读过的文件会被它的缓存占着（Windows 上删不掉），关掉缓存
 sharp.cache(false)
@@ -57,10 +57,9 @@ describe('第十一阶段：设置', () => {
     const backup = join(dirs.root, 'backup.tar.gz')
 
     const { app, page } = await launchApp(dirs)
+    await importFolder(app, page, source)
+    // 导入用完选文件夹对话框后，再换成选背景图、保存备份
     await stubDialogs(app, bgFile, backup)
-    await page.click('.gallery__pick')
-    await pickFolder(page, source)
-    await page.click('.folder-pick__confirm')
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 90_000 })
 
     // 齿轮打开，六个分类

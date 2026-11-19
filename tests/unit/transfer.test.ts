@@ -88,11 +88,34 @@ describe('文件操作：移动和复制', () => {
     expect(existsSync(join(library, '猫猫', 'a.jpg'))).toBe(false)
   })
 
-  it('目标必须在图库里', async () => {
-    mkdirSync(join(dir, 'elsewhere'))
-    await expect(moveImages(ALL, [1], join(dir, 'elsewhere'))).rejects.toThrow('源目录或类目录')
+  it('目标目录要存在；至少选一个', async () => {
     await expect(copyImages(ALL, [1], [])).rejects.toThrow('先选')
     await expect(moveImages(ALL, [1], join(source, 'nope'))).rejects.toThrow('找不到')
+  })
+
+  it('其他位置（图库外）：复制等于导出一份，图库不变；移动等于移出图库，撤销挪回来', async () => {
+    const out = join(dir, 'elsewhere')
+    mkdirSync(out)
+    writeFileSync(join(out, 'a.jpg'), 'SOMEONE ELSE')
+    const before = await where(1)
+    const copied = await copyImages(ALL, [1], [out])
+    expect(copied).toMatchObject({ done: 1, failed: 0 })
+    // 同名不覆盖，加编号；图库里的位置不变
+    expect(readFileSync(join(out, 'a.jpg'), 'utf8')).toBe('SOMEONE ELSE')
+    expect(readFileSync(join(out, 'a (2).jpg'), 'utf8')).toBe('A')
+    expect(await where(1)).toEqual(before)
+    // 撤销导出：复制出来的进回收站
+    await undoTransfer(copied.batchId)
+    expect(existsSync(join(out, 'a (2).jpg'))).toBe(false)
+
+    const moved = await moveImages(ALL, [1], out)
+    expect(moved).toMatchObject({ done: 1, failed: 0 })
+    expect(readFileSync(join(out, 'a (2).jpg'), 'utf8')).toBe('A')
+    // 移出图库：这张图没有位置了（名字、标签还在），列表里也就没有它
+    await expect(getImageDetail(1)).rejects.toThrow()
+    expect(await undoTransfer(moved.batchId)).toMatchObject({ done: 1, failed: 0 })
+    expect(await where(1)).toEqual(before)
+    expect(existsSync(join(out, 'a (2).jpg'))).toBe(false)
   })
 
   it('崩溃后收尾：只清理日志里记下的占位文件，没记目标的不动别人的同名文件', async () => {

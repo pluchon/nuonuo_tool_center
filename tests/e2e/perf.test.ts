@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import sharp from 'sharp'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp } from './support/app'
-import { pickFolder } from './support/picker'
+import { importFolder } from './support/picker'
 
 sharp.cache(false)
 
@@ -41,10 +41,8 @@ describe('性能', () => {
       }
 
       const { app, page } = await launchApp(dirs)
-      await page.click('.gallery__pick')
-      await pickFolder(page, source)
       const t0 = Date.now()
-      await page.click('.folder-pick__confirm')
+      await importFolder(app, page, source)
       await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 30 * 60_000 })
       const scanMs = Date.now() - t0
 

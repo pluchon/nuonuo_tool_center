@@ -117,7 +117,7 @@ export async function transferRoots(categoryHomeOverride: string | null): Promis
       return { path, label: name, hasChildren: await hasChildDirs(path) }
     })
   )
-  return { sources, categories }
+  return { sources, categories, home }
 }
 
 // 不能选的原因：就是图库文件夹（或在它里面）/ 在已导入的源目录里 / 包含了已导入的源目录或图库文件夹

@@ -119,6 +119,14 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
       categoryHomeLocked: paths.categoryHomeOverride !== null
     }
   })
+  // Windows 自己的选文件夹对话框（导入源目录、重新选择位置、复制 / 移动到其他位置）；取消返回 null
+  handle(IpcChannel.systemPickFolder, async (event, title: unknown) => {
+    const picked = await dialog.showOpenDialog(senderWindow(event), {
+      title: typeof title === 'string' && title.length <= 40 ? title : '选择文件夹',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    return picked.canceled || picked.filePaths.length === 0 ? null : picked.filePaths[0]
+  })
   handle(IpcChannel.systemOpenDataDir, async () => {
     const err = await shell.openPath(paths.root)
     if (err) {

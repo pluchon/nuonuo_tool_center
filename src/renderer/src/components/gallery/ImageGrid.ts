@@ -2,7 +2,6 @@ import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, w
 import type { GalleryItemVO } from '@shared/api'
 import { thumbUrl } from '@/api/gallery'
 import { useGalleryStore } from '@/stores/gallery'
-import { usePickerStore } from '@/stores/picker'
 import { useSettingsStore } from '@/stores/settings'
 import { useTransferStore } from '@/stores/transfer'
 import { useViewerStore } from '@/stores/viewer'
@@ -28,7 +27,6 @@ export default defineComponent({
   setup() {
     const gallery = useGalleryStore()
     const settings = useSettingsStore()
-    const picker = usePickerStore()
     const viewer = useViewerStore()
     const transfer = useTransferStore()
     const gridRef = ref<HTMLElement | null>(null)
@@ -146,7 +144,7 @@ export default defineComponent({
     // 网格的键盘操作；焦点在输入框里或对话框开着时不处理
     const onKey = (e: KeyboardEvent): void => {
       const el = e.target as HTMLElement | null
-      if (viewer.open || settings.dialogOpen || picker.open || gallery.deleteAsk || transfer.mode || (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))) {
+      if (viewer.open || settings.dialogOpen || gallery.deleteAsk || transfer.mode || (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))) {
         return
       }
       // Delete：删除选中的图（走确认）

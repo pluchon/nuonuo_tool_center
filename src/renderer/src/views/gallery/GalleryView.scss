@@ -27,6 +27,15 @@
     gap: 14px;
   }
 
+  // 详情面板外面这一层只管收起 / 展开的动画：宽度从 300 收到 0，面板贴着右边，看起来是往右滑走
+  &__side {
+    flex: none;
+    width: 300px;
+    min-height: 0;
+    display: flex;
+    justify-content: flex-end;
+  }
+
   &__column {
     flex: 1;
     min-width: 0;
@@ -95,5 +104,29 @@
       opacity: 0.6;
       cursor: default;
     }
+  }
+}
+
+// 详情面板收起 / 展开（连同和网格之间的间距一起收）
+.side-enter-active,
+.side-leave-active {
+  overflow: hidden;
+  transition:
+    width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.22s ease;
+}
+
+.side-enter-from,
+.side-leave-to {
+  width: 0;
+  margin-left: -14px;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side-enter-active,
+  .side-leave-active {
+    transition: none;
   }
 }

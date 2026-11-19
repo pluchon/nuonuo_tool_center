@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot, shotPrototype, SHOT_DIR } from './support/app'
 import { compareShots } from './support/compare'
-import { pickFolder } from './support/picker'
+import { importFolder, stubFolderPick } from './support/picker'
 
 const diffRatios: Record<string, number> = {}
 
@@ -75,9 +75,7 @@ describe('第二阶段：按画布换主界面', () => {
       'R-18 图'
     ])
 
-    await page.click('.gallery__pick')
-    await pickFolder(page, source)
-    await page.click('.folder-pick__confirm')
+    await importFolder(app, page, source)
     await page.waitForSelector('.side-nav__label:text-is("pics")')
     // 导入后直接切到这个源目录，空目录扫完显示空状态
     await expect(page.locator('.side-nav__item--on .side-nav__label').textContent()).resolves.toBe('pics')
@@ -85,17 +83,19 @@ describe('第二阶段：按画布换主界面', () => {
     await expect(page.locator('.gallery__text').textContent()).resolves.toBe('这里还没有图片')
     await shot(page, 'imported-light')
 
-    // 再打开导入对话框：图库文件夹和已导入的目录都标出来、不能选
+    // 系统对话框里选了不能导入的文件夹：已导入的、包含已导入目录的、应用自己的图库文件夹，都报原因、不导入
+    await page.waitForSelector('.app-toast', { state: 'detached', timeout: 15_000 })
+    await importFolder(app, page, source, '.side-nav__add[aria-label="导入源目录"]')
+    await page.waitForSelector('.app-toast:has-text("与已导入的目录重叠")')
+    // 出错的提示条不自动消失，点“知道了”关掉
+    await page.click('.app-toast__btn')
+    await importFolder(app, page, dirs.root, '.side-nav__add[aria-label="导入源目录"]')
+    await page.waitForSelector('.app-toast:has-text("重叠")')
+    await page.click('.app-toast__btn')
+    // 取消：什么都不发生
+    await stubFolderPick(app, null)
     await page.click('.side-nav__add[aria-label="导入源目录"]')
-    await pickFolder(page, source, false)
-    const notes = await page
-      .locator('.folder-pick__row')
-      .evaluateAll((els) => els.map((e) => [e.querySelector('.folder-pick__label')?.textContent, e.querySelector('.folder-pick__note')?.textContent]))
-    expect(notes).toEqual(expect.arrayContaining([['phase2-import', '含已导入'], ['library', '图库文件夹'], ['pics', '已导入']]))
-    // 还没选中能导入的文件夹
-    await expect(page.locator('.folder-pick__confirm').textContent()).resolves.toContain('先选一个文件夹')
-    await page.keyboard.press('Escape')
-    await page.waitForSelector('.folder-pick', { state: 'detached' })
+    await expect(page.locator('.side-nav__label:text-is("pics")').count()).resolves.toBe(1)
     await app.close()
   })
 })

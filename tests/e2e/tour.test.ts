@@ -4,7 +4,7 @@ import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
-import { pickFolder } from './support/picker'
+import { importFolder } from './support/picker'
 
 sharp.cache(false)
 
@@ -174,9 +174,7 @@ describe('全流程巡检', () => {
 
     const { app, page } = await launchApp(dirs)
     await shot(page, 'tour-light-00-first-run')
-    await page.click('.gallery__pick')
-    await pickFolder(page, source)
-    await page.click('.folder-pick__confirm')
+    await importFolder(app, page, source)
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 90_000 })
     await page.click('.title-bar__gear')
     await page.click('.set-dlg__tab:has-text("图库")')

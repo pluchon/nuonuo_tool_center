@@ -87,10 +87,10 @@
       <div v-if="location" class="detail-panel__block">
         <span class="detail-panel__label">图片源路径</span>
         <div class="detail-panel__path" :title="location.path">
-          <span class="detail-panel__path-text">{{ location.path }}</span>
           <button class="detail-panel__open" type="button" aria-label="打开源目录" title="打开源目录" :disabled="location.offline" @click="onShowInFolder">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1.5" /><path d="M3 7v10a2 2 0 0 0 2 2h12.5l3-8H7.5L5 17" /></svg>
           </button>
+          <span class="detail-panel__path-text">{{ location.path }}</span>
         </div>
       </div>
 

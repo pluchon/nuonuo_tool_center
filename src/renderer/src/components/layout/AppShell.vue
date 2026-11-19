@@ -6,7 +6,6 @@
       <GalleryView v-else />
     </div>
     <StatusFooter />
-    <FolderPickDialog />
     <TransferDialog />
     <FolderMenu />
     <ConfirmDialog

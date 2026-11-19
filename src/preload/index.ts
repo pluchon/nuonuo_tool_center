@@ -39,7 +39,8 @@ const api = {
     dataInfo: (): Promise<ApiResponse<DataInfoVO>> => ipcRenderer.invoke(IpcChannel.systemDataInfo),
     openDataDir: (): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.systemOpenDataDir),
     cleanCache: (): Promise<ApiResponse<CacheCleanVO>> => ipcRenderer.invoke(IpcChannel.systemCleanCache),
-    exportBackup: (): Promise<ApiResponse<string | null>> => ipcRenderer.invoke(IpcChannel.systemExportBackup)
+    exportBackup: (): Promise<ApiResponse<string | null>> => ipcRenderer.invoke(IpcChannel.systemExportBackup),
+    pickFolder: (title: string): Promise<ApiResponse<string | null>> => ipcRenderer.invoke(IpcChannel.systemPickFolder, title)
   },
   settings: {
     get: (): Promise<ApiResponse<AppSettings>> => ipcRenderer.invoke(IpcChannel.settingsGet),

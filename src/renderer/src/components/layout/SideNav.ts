@@ -240,7 +240,7 @@ export default defineComponent({
         {
           title: '源目录',
           dot: 'var(--c-b-3F8F7B)',
-          add: { label: '导入源目录', run: () => picker.openImport(), disabled: false },
+          add: { label: '导入源目录', run: () => void picker.openImport(), disabled: false },
           rows: sources,
           hint: '还没有源目录'
         },

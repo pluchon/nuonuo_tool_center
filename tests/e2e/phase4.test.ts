@@ -4,7 +4,7 @@ import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
-import { pickFolder } from './support/picker'
+import { importFolder } from './support/picker'
 
 afterEach(async () => {
   await closeLeftoverApps()
@@ -61,9 +61,7 @@ describe('第四阶段：图片网格', () => {
     }
 
     const { app, page } = await launchApp(dirs)
-    await page.click('.gallery__pick')
-    await pickFolder(page, source)
-    await page.click('.folder-pick__confirm')
+    await importFolder(app, page, source)
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 90_000 })
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 22)
 

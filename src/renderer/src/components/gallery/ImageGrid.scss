@@ -102,10 +102,12 @@
     font-variant-numeric: tabular-nums;
   }
 
+  // content-visibility 会把绘制裁在行框里：上下各留出空间给悬停弹起的描边和投影，再用负外边距抵掉，图的位置不变
   &__row {
     display: flex;
     gap: 8px;
-    padding: 0 2px;
+    padding: 6px 2px 14px;
+    margin: -6px 0 -14px;
     content-visibility: auto;
   }
 }

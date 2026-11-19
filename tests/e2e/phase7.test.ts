@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import sharp from 'sharp'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
-import { pickFolder } from './support/picker'
+import { importFolder } from './support/picker'
 
 afterEach(async () => {
   await closeLeftoverApps()
@@ -29,9 +29,7 @@ describe('第七阶段：删除', () => {
     }
 
     const { app, page } = await launchApp(dirs)
-    await page.click('.gallery__pick')
-    await pickFolder(page, source)
-    await page.click('.folder-pick__confirm')
+    await importFolder(app, page, source)
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 90_000 })
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 5)
 

@@ -86,12 +86,20 @@ export default defineComponent({
       panY.value = 0
     }
 
-    const setZoom = (z: number): void => {
-      zoom.value = clampZoom(z, fit.value)
-      if (zoom.value <= 100) {
+    // 缩放：anchor 是相对舞台中心的一点（鼠标位置），缩放后图上这一点还在鼠标下面；不给就以舞台中心为准。
+    // 图的位置 = 平移 + 缩放×(旋转后的图内坐标)，等比缩放时新平移 = 锚点 − (锚点 − 旧平移)×新旧比例
+    const setZoom = (z: number, anchor: { x: number; y: number } = { x: 0, y: 0 }): void => {
+      const before = zoom.value
+      const after = clampZoom(z, fit.value)
+      zoom.value = after
+      if (after <= 100) {
         panX.value = 0
         panY.value = 0
+        return
       }
+      const k = after / before
+      panX.value = anchor.x - (anchor.x - panX.value) * k
+      panY.value = anchor.y - (anchor.y - panY.value) * k
     }
 
     const zoomIn = (): void => setZoom(zoom.value + ZOOM_STEP)
@@ -130,7 +138,10 @@ export default defineComponent({
         return
       }
       e.preventDefault()
-      setZoom(zoom.value + (e.deltaY < 0 ? WHEEL_STEP : -WHEEL_STEP))
+      // 以鼠标所在的位置为中心缩放
+      const box = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      const anchor = { x: e.clientX - (box.left + box.width / 2), y: e.clientY - (box.top + box.height / 2) }
+      setZoom(zoom.value + (e.deltaY < 0 ? WHEEL_STEP : -WHEEL_STEP), anchor)
     }
 
     // 放大后按住左键拖动；松手在哪都算

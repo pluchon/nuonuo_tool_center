@@ -8,6 +8,49 @@
     border-radius: 5px;
   }
 
+  &__dot--other {
+    background: var(--c-b-9C90B3);
+  }
+
+  &__others {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__row--other {
+    flex: none;
+    width: 100%;
+    font: inherit;
+    text-align: left;
+  }
+
+  // 路径太长省略开头，留下最后的文件夹名
+  &__label--path {
+    direction: rtl;
+    text-align: left;
+  }
+
+  &__pick {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    border-radius: 10px;
+    border: 1.5px dashed var(--a-mid);
+    background: transparent;
+    color: var(--a-ink);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+
+    &:hover {
+      background: var(--a-soft);
+    }
+  }
+
   &__empty {
     display: block;
     padding: 6px 10px;

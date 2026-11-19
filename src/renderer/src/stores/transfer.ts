@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import type { GalleryQueryDTO, TransferResultVO, TransferRootsVO } from '@shared/api'
 import { copyImages, fetchTransferRoots, moveImages, undoTransfer } from '@/api/files'
 import { fetchImageDetail } from '@/api/gallery'
+import { pickFolder } from '@/api/system'
 import { useGalleryStore } from './gallery'
 import { useToastStore } from './toast'
 
@@ -18,6 +19,13 @@ function dirKey(path: string): string {
   return path.slice(0, path.lastIndexOf('\\')).toLowerCase()
 }
 
+// child 在不在 parent 里面（含相等，不区分大小写）
+function within(parent: string, child: string): boolean {
+  const p = parent.replace(/\\+$/, '').toLowerCase()
+  const c = child.toLowerCase()
+  return c === p || c.startsWith(`${p}\\`)
+}
+
 // 最后一段名字
 function lastName(path: string): string {
   return path.replace(/\\$/, '').split('\\').pop() ?? path
@@ -30,6 +38,8 @@ export const useTransferStore = defineStore('transfer', {
     roots: null as TransferRootsVO | null,
     // 选中的目标目录（移动只有一个）
     picked: [] as string[],
+    // 用系统对话框选的“其他位置”（可能在图库外）
+    others: [] as string[],
     // 单张时：这张图所在的目录（“当前位置”）和已有副本的目录（复制时不能再选），都已转成小写
     here: '',
     copies: [] as string[],
@@ -48,6 +58,7 @@ export const useTransferStore = defineStore('transfer', {
       }
       this.imageCount = ids.length
       this.picked = []
+      this.others = []
       this.here = ''
       this.copies = []
       this.expandTo = []
@@ -83,6 +94,32 @@ export const useTransferStore = defineStore('transfer', {
         return '已有副本'
       }
       return ''
+    },
+    // 这个文件夹在不在图库里（某个源目录或类目录所在的图库文件夹里）
+    inLibrary(path: string): boolean {
+      const roots = this.roots
+      return !!roots && (within(roots.home, path) || roots.sources.some((s) => within(s.path, path)))
+    },
+    // “其他位置…”：用 Windows 自己的选文件夹对话框，选好的加进列表并选中
+    async pickOther(): Promise<void> {
+      const mode = this.mode
+      if (!mode || this.busy) {
+        return
+      }
+      try {
+        const path = await pickFolder(mode === 'move' ? '移动到…' : '复制到…')
+        if (!path || this.mode !== mode) {
+          return
+        }
+        if (!this.others.some((p) => p.toLowerCase() === path.toLowerCase())) {
+          this.others = [...this.others, path]
+        }
+        if (!this.picked.includes(path)) {
+          this.toggle(path)
+        }
+      } catch (err) {
+        useToastStore().show(errText(err), 'error')
+      }
     },
     // 点一行：移动单选，复制多选
     toggle(path: string): void {
@@ -141,7 +178,14 @@ export const useTransferStore = defineStore('transfer', {
         return
       }
       const where = picked.length === 1 ? `「${lastName(picked[0])}」` : ` ${picked.length} 个目录`
-      const text = mode === 'move' ? `已移动 ${res.done} 张到「${lastName(picked[0])}」` : `已复制 ${this.imageCount} 张到${where}`
+      // 移到图库外：说清楚图离开了图库（撤销可以挪回来）
+      const outside = mode === 'move' && !this.inLibrary(picked[0])
+      const text =
+        mode === 'move'
+          ? outside
+            ? `已把 ${res.done} 张移出图库，放到「${lastName(picked[0])}」`
+            : `已移动 ${res.done} 张到「${lastName(picked[0])}」`
+          : `已复制 ${this.imageCount} 张到${where}`
       const batchId = res.batchId
       toast.show(
         text,

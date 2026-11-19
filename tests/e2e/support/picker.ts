@@ -1,34 +1,15 @@
-import type { Page } from 'playwright'
+import type { ElectronApplication, Page } from 'playwright'
 
-// 在导入对话框里按路径逐层展开，最后点中目标文件夹（select 为 false 时只展开不点，用于不能选的文件夹）。
-// path 形如 D:\ltm-dev\e2e\case\pics（D 盘打开时已自动展开）
-export async function pickFolder(page: Page, path: string, select = true): Promise<void> {
-  const [drive, ...parts] = path.split('\\')
-  await page.waitForSelector('.folder-pick')
-  let node = page.locator('.folder-pick__tree > .el-tree-node').filter({ has: page.locator(`.folder-pick__label:text-is("${drive} 盘")`) })
-  // D 盘由对话框自己展开：先等它展开完，别和自动展开同时点（会又收起来）
-  if (drive === 'D:') {
-    await page.waitForFunction(
-      () => [...document.querySelectorAll('.folder-pick__tree > .el-tree-node')].some((n) => n.getAttribute('aria-expanded') === 'true' && n.querySelector('.el-tree-node__children .el-tree-node')),
-      undefined,
-      { timeout: 15_000 }
-    )
-  }
-  for (let i = 0; i < parts.length; i++) {
-    const expanded = (await node.getAttribute('aria-expanded')) === 'true'
-    if (!expanded) {
-      await node.locator('> .el-tree-node__content .el-tree-node__expand-icon').click()
-    }
-    const child = node
-      .locator('> .el-tree-node__children > .el-tree-node')
-      .filter({ has: page.locator(`> .el-tree-node__content .folder-pick__label:text-is("${parts[i]}")`) })
-    await child.waitFor()
-    node = child
-  }
-  const row = node.locator('> .el-tree-node__content .folder-pick__row')
-  if (select) {
-    await row.click()
-  } else {
-    await row.waitFor()
-  }
+// 导入源目录、重新选择位置、复制 / 移动到其他位置都用 Windows 自己的选文件夹对话框；
+// 测试里不能真弹出来，把主进程的 dialog.showOpenDialog 换成直接返回给定路径（之后每次都返回它）
+export async function stubFolderPick(app: ElectronApplication, path: string | null): Promise<void> {
+  await app.evaluate(({ dialog }, p) => {
+    dialog.showOpenDialog = (async () => (p ? { canceled: false, filePaths: [p] } : { canceled: true, filePaths: [] })) as unknown as typeof dialog.showOpenDialog
+  }, path)
+}
+
+// 导入一个源目录：先换掉对话框，再点导入按钮（默认是第一次打开时主区的“选择图片文件夹”）
+export async function importFolder(app: ElectronApplication, page: Page, path: string, trigger = '.gallery__pick'): Promise<void> {
+  await stubFolderPick(app, path)
+  await page.click(trigger)
 }

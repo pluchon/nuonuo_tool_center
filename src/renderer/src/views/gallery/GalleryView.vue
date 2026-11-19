@@ -3,7 +3,7 @@
   <main v-if="library.firstRun" class="gallery gallery--welcome">
     <section class="gallery__welcome" aria-label="开始使用">
       <NonoArt pose="welcome" size="large" />
-      <button class="gallery__pick" type="button" @click="picker.openImport()">
+      <button class="gallery__pick" type="button" :disabled="picker.busy" @click="picker.openImport()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>选择图片文件夹
       </button>
     </section>
@@ -32,7 +32,12 @@
       </div>
       <ImageGrid v-else-if="gallery.items.length > 0" />
     </main>
-    <DetailPanel v-if="gallery.items.length > 0" />
+    <!-- 详情面板：列表空了往右收起、网格跟着变宽；有图了再展开 -->
+    <Transition name="side">
+      <div v-if="gallery.items.length > 0" class="gallery__side">
+        <DetailPanel />
+      </div>
+    </Transition>
     <ConfirmDialog
       :open="!!gallery.deleteAsk"
       :title="deleteTitle"

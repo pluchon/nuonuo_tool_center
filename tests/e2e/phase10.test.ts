@@ -4,7 +4,7 @@ import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
-import { pickFolder } from './support/picker'
+import { importFolder } from './support/picker'
 
 afterEach(async () => {
   await closeLeftoverApps()
@@ -55,9 +55,7 @@ describe('第十阶段：大图查看', () => {
     await makeImage(join(source, 'gone.jpg'), 800, 600)
 
     const { app, page } = await launchApp(dirs)
-    await page.click('.gallery__pick')
-    await pickFolder(page, source)
-    await page.click('.folder-pick__confirm')
+    await importFolder(app, page, source)
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 90_000 })
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 3)
     // 扫完就把一张原图删掉（缩略图还在），后面看它时原图读不到；先关掉实时监听，不然它会被自动从列表里去掉

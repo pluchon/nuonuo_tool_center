@@ -1,27 +1,57 @@
 import { defineStore } from 'pinia'
+import { pickFolder } from '@/api/system'
+import { useLibraryStore } from './library'
+import { useToastStore } from './toast'
+import { useViewStore } from './view'
 
-// 选文件夹对话框：导入源目录，或给找不到的源目录重新选择位置
+// 错误信息
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+// 导入源目录 / 给找不到的源目录重新选择位置：用 Windows 自己的选文件夹对话框；
+// 不能选的文件夹（已导入的、它们的上下层、应用自己的图库文件夹）由主进程校验后报原因
 export const usePickerStore = defineStore('picker', {
   state: () => ({
-    open: false,
-    // 重新选择位置时是那个源目录；导入时为空
-    relocate: null as { id: number; name: string } | null
+    // 系统对话框开着或正在导入
+    busy: false
   }),
   actions: {
-    // 打开“导入源目录”
-    openImport(): void {
-      this.relocate = null
-      this.open = true
+    // 导入源目录：选好后切到这个源目录
+    async openImport(): Promise<void> {
+      if (this.busy) {
+        return
+      }
+      this.busy = true
+      try {
+        const path = await pickFolder('导入源目录')
+        if (path) {
+          const created = await useLibraryStore().importSource(path)
+          useViewStore().showDir({ kind: 'source', id: created.id })
+        }
+      } catch (err) {
+        useToastStore().show(errText(err), 'error')
+      } finally {
+        this.busy = false
+      }
     },
-    // 打开“重新选择「X」的位置”
-    openRelocate(id: number, name: string): void {
-      this.relocate = { id, name }
-      this.open = true
-    },
-    // 关闭对话框
-    close(): void {
-      this.open = false
-      this.relocate = null
+    // 重新选择「X」的位置
+    async openRelocate(id: number, name: string): Promise<void> {
+      if (this.busy) {
+        return
+      }
+      this.busy = true
+      try {
+        const path = await pickFolder(`重新选择「${name}」的位置`)
+        if (path) {
+          await useLibraryStore().relocateSource(id, path)
+          useToastStore().show(`「${name}」已改到 ${path}`)
+        }
+      } catch (err) {
+        useToastStore().show(errText(err), 'error')
+      } finally {
+        this.busy = false
+      }
     }
   }
 })

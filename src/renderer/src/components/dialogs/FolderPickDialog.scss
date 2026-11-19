@@ -1,6 +1,0 @@
-@use '../../styles/folderDialog' as *;
-
-// 选文件夹对话框（导入源目录、重新选择位置）
-.folder-pick {
-  @include folder-dialog;
-}

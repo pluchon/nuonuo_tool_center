@@ -30,3 +30,8 @@ export function cleanCache(): Promise<CacheCleanVO> {
 export function exportBackup(): Promise<string | null> {
   return unwrap(window.api.system.exportBackup())
 }
+
+// Windows 自己的选文件夹对话框；取消返回 null
+export function pickFolder(title: string): Promise<string | null> {
+  return unwrap(window.api.system.pickFolder(title))
+}
