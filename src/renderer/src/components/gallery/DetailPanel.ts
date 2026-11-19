@@ -123,11 +123,12 @@ export default defineComponent({
     })
 
     // 名字：输入时不截断（会打断中文输入法），超过 15 个字计数变红、不保存；回车或失焦时保存，Esc 放弃
+    // 没起过名字时输入框留空、文件名作为占位文字（文件名常常超过 15 个字，不能当成用户输入去计数）
     const nameDraft = ref('')
     watch(
-      () => [detail.value?.imageId, detail.value?.name] as const,
+      () => [detail.value?.imageId, detail.value?.displayName] as const,
       () => {
-        nameDraft.value = detail.value?.name ?? ''
+        nameDraft.value = detail.value?.displayName ?? ''
       },
       { immediate: true }
     )
@@ -142,9 +143,9 @@ export default defineComponent({
         return
       }
       const next = nameDraft.value.trim()
-      // 清空等于用回文件名
-      if (next === d.name || (next === '' && d.displayName === null)) {
-        nameDraft.value = d.name
+      // 没变就不保存；清空等于用回文件名
+      if (next === (d.displayName ?? '')) {
+        nameDraft.value = next
         return
       }
       await gallery.rename(next)
@@ -155,7 +156,7 @@ export default defineComponent({
       }
     }
     const onNameCancel = (e: KeyboardEvent): void => {
-      nameDraft.value = detail.value?.name ?? ''
+      nameDraft.value = detail.value?.displayName ?? ''
       ;(e.target as HTMLInputElement).blur()
     }
 

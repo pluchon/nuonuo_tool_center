@@ -1,12 +1,14 @@
 import { app, BrowserWindow, nativeTheme, shell } from 'electron'
-import { join } from 'node:path'
+import { mkdir, rename } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { IpcEvent, type ScanStateVO, type ThemeMode } from '@shared/api'
+import { IpcEvent, type FileOpDoneVO, type ScanStateVO, type ThemeMode } from '@shared/api'
 import { buildDataPaths, resolveDataRoot } from './config/paths'
 import { getLogger, initLogger } from './common/logger'
 import { registerIpcHandlers } from './ipc'
 import { handleLtmProtocol, registerLtmSchemePrivileges } from './protocol/ltmProtocol'
 import { bootDatabase, shutdownDatabase, type DatabaseLocation } from './services/databaseService'
+import { configureFileOps, flushPendingDeletes, recoverFileOps } from './services/fileOps/fileOpsService'
 import { configureScan, onScanState, startScan, stopScanAndWait } from './services/scan/scanService'
 import { getSettings } from './services/settingsService'
 import { windowBackground } from './window/windowControl'
@@ -99,6 +101,27 @@ function broadcastScanState(state: ScanStateVO): void {
   }
 }
 
+// 放进回收站的方式：正常是系统回收站；端到端测试设了 LTM_FAKE_TRASH_DIR 时挪进那个文件夹（不往真回收站里塞测试图）
+function trashFunction(): (path: string) => Promise<void> {
+  const fake = process.env.LTM_FAKE_TRASH_DIR
+  if (!fake) {
+    return (path) => shell.trashItem(path)
+  }
+  return async (path) => {
+    await mkdir(fake, { recursive: true })
+    await rename(path, join(fake, `${Date.now()}-${basename(path)}`))
+  }
+}
+
+// 文件操作执行完推给所有窗口（删不掉的要提示）
+function broadcastFileOpDone(result: FileOpDoneVO): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send(IpcEvent.fileOpDone, result)
+    }
+  }
+}
+
 // 设置里开了“启动时自动扫描”就扫一遍全部目录（对账：外部删掉、改名、新增的文件）
 async function autoScanOnStart(): Promise<void> {
   try {
@@ -117,7 +140,12 @@ async function bootstrap(): Promise<void> {
   handleLtmProtocol(paths.thumbs)
   configureScan({ thumbsDir: paths.thumbs, categoryHomeOverride: paths.categoryHomeOverride })
   onScanState(broadcastScanState)
+  configureFileOps({ trash: trashFunction(), onDone: broadcastFileOpDone })
   registerIpcHandlers(paths, dbLocation)
+  if (state === 'READY') {
+    // 上次没做完的文件操作（崩溃、断电）先按日志补做，再扫描
+    await recoverFileOps().catch((err: unknown) => log.error('补做上次的文件操作失败', err))
+  }
   createMainWindow(await initialTheme(state === 'READY'))
   if (state === 'READY') {
     await autoScanOnStart()
@@ -152,8 +180,10 @@ app.on('will-quit', (event) => {
   }
   closing = true
   event.preventDefault()
-  // 先让扫描停下（手上的文件写完），再关数据库
-  void stopScanAndWait()
+  // 等着进回收站的删除马上执行，再让扫描停下（手上的文件写完），最后关数据库
+  void flushPendingDeletes()
+    .catch((err: unknown) => log.error('退出前执行删除失败', err))
+    .then(() => stopScanAndWait())
     .catch((err: unknown) => log.error('停止扫描失败', err))
     .then(() => shutdownDatabase(paths.lockFile))
     .catch((err: unknown) => log.error('关闭数据库失败', err))

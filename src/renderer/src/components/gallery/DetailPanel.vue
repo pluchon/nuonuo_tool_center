@@ -14,6 +14,16 @@
       <div class="detail-panel__preview">
         <img v-if="detail.thumb === 'READY'" class="detail-panel__pic" :class="{ 'detail-panel__pic--off': location?.offline }" :src="thumbUrl(detail.hash)" alt="" draggable="false" />
         <svg v-else width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>
+        <button
+          class="detail-panel__del"
+          type="button"
+          aria-label="删除"
+          title="删除（进系统回收站）"
+          :disabled="!!location?.offline"
+          @click="gallery.askDelete()"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
+        </button>
       </div>
 
       <div class="detail-panel__block">

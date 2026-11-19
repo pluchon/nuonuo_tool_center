@@ -3,6 +3,7 @@ import { IpcChannel, type AddTagDTO, type CreateTagDTO, type GalleryQueryDTO, ty
 import type { DataPaths } from '../config/paths'
 import { BizError } from '../common/bizError'
 import { bootDatabase, getDbBootState, type DatabaseLocation } from '../services/databaseService'
+import { deleteImages, recoverFileOps, undoDelete } from '../services/fileOps/fileOpsService'
 import { listFolders } from '../services/folderService'
 import { getImageDetail, listGallery, listUntaggedDirs, openFileWithDefault, showFileInFolder } from '../services/galleryService'
 import { addTag, getCommonTags, getTagCatalog, removeTag, renameImage, setR18 } from '../services/imageEditService'
@@ -40,7 +41,14 @@ function requireDatabase(): void {
 // 注册全部 IPC 处理器：只做参数绑定与调用服务
 export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation): void {
   handle(IpcChannel.systemGetBootState, async () => getDbBootState())
-  handle(IpcChannel.systemRetryDatabase, async () => bootDatabase(location))
+  handle(IpcChannel.systemRetryDatabase, async () => {
+    const state = await bootDatabase(location)
+    // 重试打开成功：先把上次没做完的文件操作补做完
+    if (state === 'READY') {
+      await recoverFileOps()
+    }
+    return state
+  })
 
   handle(IpcChannel.settingsGet, async () => {
     requireDatabase()
@@ -147,6 +155,14 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   handle(IpcChannel.tagCategoryDelete, async (_event, id: number) => {
     requireDatabase()
     await removeCategory(id)
+  })
+  handle(IpcChannel.fileDelete, async (_event, query: GalleryQueryDTO, imageIds: number[]) => {
+    requireDatabase()
+    return deleteImages(query, imageIds)
+  })
+  handle(IpcChannel.fileUndoDelete, async (_event, batchId: number) => {
+    requireDatabase()
+    await undoDelete(batchId)
   })
   handle(IpcChannel.fileOpen, async (_event, fileId: number) => {
     requireDatabase()

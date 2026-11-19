@@ -1,4 +1,6 @@
-import { defineComponent, onMounted } from 'vue'
+import { defineComponent, onBeforeUnmount, onMounted } from 'vue'
+import { onFileOpDone } from '@/api/files'
+import { useGalleryStore } from '@/stores/gallery'
 import FolderPickDialog from '@/components/dialogs/FolderPickDialog.vue'
 import AppToast from '@/components/feedback/AppToast.vue'
 import GalleryView from '@/views/gallery/GalleryView.vue'
@@ -21,6 +23,16 @@ export default defineComponent({
     const toast = useToastStore()
     const tags = useTagsStore()
     const viewStore = useViewStore()
+    const gallery = useGalleryStore()
+    // 删除真正执行后有删不掉的（被占用、没权限）：提示原因，刷新列表让它们回来
+    const offDone = onFileOpDone((result) => {
+      if (result.failed > 0) {
+        toast.show(`有 ${result.failed} 张没删成功：${result.error ?? '原因不明'}`, 'error')
+        void gallery.afterEdit()
+      }
+    })
+    onBeforeUnmount(offDone)
+
     onMounted(() => {
       void library.load()
       tags.load().catch((err: unknown) => toast.show(`标签读不出来：${err instanceof Error ? err.message : String(err)}`, 'error'))

@@ -38,6 +38,8 @@ export const IpcChannel = {
   tagCategoryRename: 'tagCategory:rename',
   tagCategorySetColor: 'tagCategory:setColor',
   tagCategoryDelete: 'tagCategory:delete',
+  fileDelete: 'file:delete',
+  fileUndoDelete: 'file:undoDelete',
   windowSetTheme: 'window:setTheme',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',
@@ -47,7 +49,9 @@ export const IpcChannel = {
 // 主进程主动推给渲染进程的事件
 export const IpcEvent = {
   // 扫描状态变化：开始、进度、结束都推同一个结构
-  scanState: 'scan:state'
+  scanState: 'scan:state',
+  // 一批文件操作真正执行完（删除进回收站之后），带上失败的数量和原因
+  fileOpDone: 'fileOp:done'
 } as const
 
 // 实际生效的明暗（“跟随系统”已经解析过）
@@ -304,6 +308,21 @@ export const TAG_NAME_MAX = 15
 export const CATEGORY_NAME_MAX = 6
 // 一次最多把几个标签合并进来
 export const MERGE_MAX = 5
+
+// 删除的结果：批次 id（撤销用）、删了几张图、因为目录找不到没删的位置数
+export interface DeleteResultVO {
+  batchId: number
+  images: number
+  skipped: number
+}
+
+// 一批文件操作执行完：成功几步、失败几步、第一个失败原因
+export interface FileOpDoneVO {
+  batchId: number
+  done: number
+  failed: number
+  error: string | null
+}
 
 // 新建标签：名字、分类、别名
 export interface CreateTagDTO {

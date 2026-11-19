@@ -10,6 +10,7 @@ import {
 } from '@shared/api'
 import type { SortKey } from '@shared/settings'
 import { addImageTag, fetchCommonTags, removeImageTag, renameImage, setImagesR18 } from '@/api/edit'
+import { deleteImages, undoDelete } from '@/api/files'
 import { fetchGallery, fetchImageDetail } from '@/api/gallery'
 import { DEFAULT_ZOOM, ROW_HEIGHTS } from '@/utils/gridLayout'
 import { useLibraryStore } from './library'
@@ -65,6 +66,9 @@ export const useGalleryStore = defineStore('gallery', {
     detailError: '',
     // 多选时的共同标签
     commonTags: [] as ImageTagVO[],
+    // 等待确认删除的图（确认框开着时不为空）
+    deleteAsk: null as number[] | null,
+    deleteBusy: false,
     zoom: readZoom(),
     // 查询条件变了就加一（网格据此回到顶部）；扫描中的刷新条件不变，不加
     queryKey: 0,
@@ -343,6 +347,55 @@ export const useGalleryStore = defineStore('gallery', {
         await this.afterEdit()
       } catch (err) {
         useToastStore().show(errText(err), 'error')
+      }
+    },
+    // 删除当前要改的图：设置里开了“删除前确认”就先弹确认框
+    askDelete(): void {
+      const ids = this.targets()
+      if (ids.length === 0) {
+        return
+      }
+      if (useSettingsStore().values.confirmDelete) {
+        this.deleteAsk = ids
+      } else {
+        void this.runDelete(ids)
+      }
+    },
+    cancelDelete(): void {
+      this.deleteAsk = null
+    },
+    async confirmDelete(): Promise<void> {
+      const ids = this.deleteAsk
+      if (!ids || this.deleteBusy) {
+        return
+      }
+      this.deleteBusy = true
+      await this.runDelete(ids)
+      this.deleteBusy = false
+      this.deleteAsk = null
+    },
+    // 删除：图马上从列表里消失（选中移到同一位置上的下一张），提示条上可以撤销
+    async runDelete(ids: number[]): Promise<void> {
+      const query = this.query()
+      if (!query) {
+        return
+      }
+      const toast = useToastStore()
+      try {
+        // ids 可能来自响应式状态（确认框里存的那份），IPC 只能传普通数组
+        const res = await deleteImages(query, [...ids])
+        await this.afterEdit()
+        const text = res.images === 1 ? '已放进系统回收站' : `${res.images} 张图已放进系统回收站`
+        toast.show(text, 'ok', async () => {
+          try {
+            await undoDelete(res.batchId)
+            await this.afterEdit()
+          } catch (err) {
+            toast.show(errText(err), 'error')
+          }
+        })
+      } catch (err) {
+        toast.show(errText(err), 'error')
       }
     },
     // 缩略图换档（delta 为正变小、为负变大）

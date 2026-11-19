@@ -18,6 +18,8 @@ import {
   type TagCatalogVO,
   type TagCategoryVO,
   type CreateTagDTO,
+  type DeleteResultVO,
+  type FileOpDoneVO,
   type SaveTagDTO,
   type DirCountVO,
   type ThemeMode
@@ -59,6 +61,17 @@ const api = {
     removeTag: (imageIds: number[], tagId: number): Promise<ApiResponse<number>> =>
       ipcRenderer.invoke(IpcChannel.imageRemoveTag, imageIds, tagId),
     commonTags: (imageIds: number[]): Promise<ApiResponse<ImageTagVO[]>> => ipcRenderer.invoke(IpcChannel.imageCommonTags, imageIds)
+  },
+  files: {
+    remove: (query: GalleryQueryDTO, imageIds: number[]): Promise<ApiResponse<DeleteResultVO>> =>
+      ipcRenderer.invoke(IpcChannel.fileDelete, query, imageIds),
+    undoDelete: (batchId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.fileUndoDelete, batchId),
+    // 订阅文件操作执行完的通知，返回取消订阅的函数
+    onDone: (listener: (result: FileOpDoneVO) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, result: FileOpDoneVO): void => listener(result)
+      ipcRenderer.on(IpcEvent.fileOpDone, handler)
+      return () => ipcRenderer.removeListener(IpcEvent.fileOpDone, handler)
+    }
   },
   tags: {
     create: (dto: CreateTagDTO): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.tagCreate, dto),

@@ -79,6 +79,11 @@
       background: rgba(255, 255, 255, 0.1);
       color: #ffffff;
     }
+
+    // “撤销”用淡紫色字（照原型 C.i_CDBEFF）
+    &--undo {
+      color: var(--c-i-CDBEFF);
+    }
   }
 
   &__pad {

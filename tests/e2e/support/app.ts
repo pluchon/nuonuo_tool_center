@@ -49,7 +49,8 @@ export async function launchApp(dirs: CaseDirs): Promise<{ app: ElectronApplicat
       env[k] = v
     }
   }
-  Object.assign(env, { LTM_DATA_DIR: dirs.data, LTM_CATEGORY_HOME: dirs.library, LTM_LOG_LEVEL: 'info' })
+  // 删除的文件挪进场景目录下的 trash，不进系统回收站
+  Object.assign(env, { LTM_DATA_DIR: dirs.data, LTM_CATEGORY_HOME: dirs.library, LTM_LOG_LEVEL: 'info', LTM_FAKE_TRASH_DIR: join(dirs.root, 'trash') })
   const app = await _electron.launch({ executablePath: electronPath as unknown as string, args: [PROJECT_ROOT], env })
   openApps.add(app)
   app.once('close', () => openApps.delete(app))

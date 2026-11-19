@@ -33,6 +33,13 @@
       <ImageGrid v-else-if="gallery.items.length > 0" />
     </main>
     <DetailPanel v-if="gallery.items.length > 0" />
+    <ConfirmDialog
+      :open="!!gallery.deleteAsk"
+      :title="deleteTitle"
+      :busy="gallery.deleteBusy"
+      @ok="gallery.confirmDelete()"
+      @cancel="gallery.cancelDelete()"
+    />
   </div>
 
   <!-- 加载中：先留空，避免闪一下空状态 -->

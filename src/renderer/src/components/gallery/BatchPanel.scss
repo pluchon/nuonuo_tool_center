@@ -10,6 +10,24 @@
     justify-content: space-between;
   }
 
+  // 删除全部选中：无底色无边框的垃圾桶图标
+  &__bin {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--c-i-B07A93);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+
+    &:hover {
+      color: var(--c-i-A23D62);
+    }
+  }
+
   &__title {
     font-size: 15px;
     font-weight: 700;

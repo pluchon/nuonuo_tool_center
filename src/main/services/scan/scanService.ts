@@ -13,6 +13,7 @@ import {
   updateImageFileStatus,
   type ScanFileRow
 } from '../../repositories/imageFileRepository'
+import { findHiddenRelPaths } from '../../repositories/fileOpRepository'
 import {
   findImageByHash,
   insertImageOrGet,
@@ -246,6 +247,8 @@ async function scanRoot(plan: RootPlan): Promise<RootOutcome> {
   const { root, walk, todo } = plan
   const rows = await findScanRowsByRoot(root.id)
   const byKey = new Map(rows.map((r) => [pathKey(r.relPath), r]))
+  // 刚删除、还在撤销窗口里等着进回收站的文件：不能当成新文件再登记一遍
+  const hidden = new Set((await findHiddenRelPaths(root.id)).map(pathKey))
   // 磁盘上还在的文件（含这次按设置不处理的、读不了的）：它们的记录不能当成“不见了”
   const present = new Set([...walk.files.map((f) => pathKey(f.relPath)), ...walk.unreadableFiles.map(pathKey)])
   const reappeared: number[] = []
@@ -257,7 +260,9 @@ async function scanRoot(plan: RootPlan): Promise<RootOutcome> {
       const file = todo[next++]
       const row = byKey.get(pathKey(file.relPath))
       try {
-        if (row && isUnchanged(row, file)) {
+        if (!row && hidden.has(pathKey(file.relPath))) {
+          // 等着进回收站的文件：不登记，计入已处理
+        } else if (row && isUnchanged(row, file)) {
           if (row.status !== 'NORMAL') {
             reappeared.push(row.id)
           }

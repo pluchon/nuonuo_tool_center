@@ -158,6 +158,29 @@ export async function findImageRows(imageId: number): Promise<GalleryRow[]> {
     .orderBy(imageFile.id)
 }
 
+// 这些图在磁盘上的全部位置（没进回收站的）
+export async function findRowsOfImages(imageIds: number[]): Promise<GalleryRow[]> {
+  if (imageIds.length === 0) {
+    return []
+  }
+  const { db } = getDatabase()
+  return db
+    .select(ROW_COLUMNS)
+    .from(imageFile)
+    .innerJoin(image, eq(image.id, imageFile.imageId))
+    .innerJoin(libraryRoot, eq(libraryRoot.id, imageFile.rootId))
+    .where(
+      and(
+        inArray(image.id, imageIds),
+        eq(image.deleteState, 0),
+        eq(imageFile.deleteState, 0),
+        ne(imageFile.status, 'DELETED'),
+        eq(libraryRoot.deleteState, 0)
+      )
+    )
+    .orderBy(imageFile.id)
+}
+
 // 一张图的拍摄信息
 export async function findImageExif(imageId: number): Promise<unknown> {
   const { db } = getDatabase()

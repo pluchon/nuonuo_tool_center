@@ -8,6 +8,10 @@
       <span class="app-toast__sep" aria-hidden="true" />
       <button class="app-toast__btn" type="button" @click="toast.close()">知道了</button>
     </template>
+    <template v-else-if="toast.undoable">
+      <span class="app-toast__sep" aria-hidden="true" />
+      <button class="app-toast__btn app-toast__btn--undo" type="button" @click="toast.undo()">撤销</button>
+    </template>
     <span v-else class="app-toast__pad" aria-hidden="true" />
   </div>
 </template>

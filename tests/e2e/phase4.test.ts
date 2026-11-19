@@ -89,12 +89,15 @@ describe('第四阶段：图片网格', () => {
     // 默认选中一张（扫描中刷新时选中的那张会保留），详情面板显示的就是它
     await expect(page.locator('.tile--on').count()).resolves.toBe(1)
     const selectedName = await page.locator('.tile--on .tile__name').textContent()
-    await expect(page.locator('#nameInput').inputValue()).resolves.toBe(selectedName)
+    // 没起过名字：输入框留空，文件名是占位文字，不计字数
+    await expect(page.locator('#nameInput').getAttribute('placeholder')).resolves.toBe(selectedName)
+    await expect(page.locator('#nameInput').inputValue()).resolves.toBe('')
+    await expect(page.locator('.detail-panel__over').count()).resolves.toBe(0)
     await shot(page, 'grid-light')
 
     // 点带拍摄信息的照片：详情显示拍摄信息
     await page.click('.tile:has-text("DSC09412.jpg")')
-    await expect(page.locator('#nameInput').inputValue()).resolves.toBe('DSC09412.jpg')
+    await expect(page.locator('#nameInput').getAttribute('placeholder')).resolves.toBe('DSC09412.jpg')
     await expect(page.locator('.detail-panel__exif-val').allTextContents()).resolves.toEqual(['SONY ILCE-7M4', 'FE 24-70mm F2.8 GM II'])
     await expect(page.locator('.detail-panel__param-v').allTextContents()).resolves.toEqual(['35mm', 'f/4', '1/250s', '100'])
     await expect(page.locator('.detail-panel__taken').textContent()).resolves.toBe('2025-10-03 09:12:44')

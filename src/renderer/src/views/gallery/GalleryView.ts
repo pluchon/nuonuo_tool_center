@@ -1,4 +1,5 @@
 import { computed, defineComponent, onMounted, watch } from 'vue'
+import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue'
 import NonoArt from '@/components/nono/NonoArt.vue'
 import DetailPanel from '@/components/gallery/DetailPanel.vue'
 import FilterBar from '@/components/gallery/FilterBar.vue'
@@ -12,7 +13,7 @@ import { useViewStore } from '@/stores/view'
 // 主区：第一次打开、读取失败，以及筛选栏 + 状态横幅 + 图片网格 + 详情面板
 export default defineComponent({
   name: 'GalleryView',
-  components: { NonoArt, DetailPanel, FilterBar, ImageGrid, StatusBanner },
+  components: { NonoArt, DetailPanel, FilterBar, ImageGrid, StatusBanner, ConfirmDialog },
   setup() {
     const library = useLibraryStore()
     const picker = usePickerStore()
@@ -32,6 +33,12 @@ export default defineComponent({
       return '这里还没有图片'
     })
 
+    // 删除确认框的标题（照原型）
+    const deleteTitle = computed(() => {
+      const n = gallery.deleteAsk?.length ?? 0
+      return n > 1 ? `删除这 ${n} 张图？` : '删除这张图？'
+    })
+
     // 切换视图：清掉搜索和开关，重新查
     watch(
       () => [viewStore.view, viewStore.dir] as const,
@@ -46,6 +53,6 @@ export default defineComponent({
       void gallery.load()
     })
 
-    return { library, picker, gallery, emptyText }
+    return { library, picker, gallery, emptyText, deleteTitle }
   }
 })

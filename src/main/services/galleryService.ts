@@ -20,6 +20,7 @@ import {
   findGalleryRows,
   findImageExif,
   findImageRows,
+  findRowsOfImages,
   countUntaggedByDir,
   type GalleryFilter,
   type GalleryRow
@@ -255,6 +256,21 @@ export async function listGallery(query: GalleryQueryDTO): Promise<GalleryListVO
     .map((list) => toItem(pickRepresentative(list, offline), offline))
     .filter((item) => matchMore(item, more))
   return { items: sortItems(items, query.sort) }
+}
+
+// 删除、移动、复制作用到哪些文件：在源目录、类目录里只动这个目录（按“仅当前目录”开关）里的位置，
+// 其他视图动这张图的全部位置。返回的行里标好目录是否找不到
+export async function filesForAction(query: GalleryQueryDTO, imageIds: number[]): Promise<Array<GalleryRow & { offline: boolean }>> {
+  const wanted = new Set(imageIds)
+  let rows: GalleryRow[]
+  if (query?.view === 'source' || query?.view === 'category') {
+    const scope = await toFilter({ view: query.view, sourceId: query.sourceId, category: query.category, onlyHere: query.onlyHere, sort: 'new' })
+    rows = (await findGalleryRows(scope)).filter((r) => wanted.has(r.imageId))
+  } else {
+    rows = await findRowsOfImages(imageIds)
+  }
+  const offline = await offlineRoots(rows)
+  return rows.map((r) => ({ ...r, offline: offline.has(r.rootId) }))
 }
 
 // “还没打标签”的目录筛选项：含未打标签图的源目录和顶层类目录

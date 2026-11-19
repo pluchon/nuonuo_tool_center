@@ -49,9 +49,11 @@ describe('第六阶段：标签管理', () => {
     const dirs = freshCase('phase6-tags')
     const source = join(dirs.root, 'pics')
     mkdirSync(source, { recursive: true })
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 3; i++) {
       await makeImage(join(source, `pic-${i}.jpg`), i)
     }
+    // 文件名超过 15 个字的图：没起过名字时不该显示“最多 15 个字”
+    await makeImage(join(source, '1750851496332_p0.jpg'), 3)
 
     const { app, page } = await launchApp(dirs)
     await page.click('.gallery__pick')
@@ -59,6 +61,11 @@ describe('第六阶段：标签管理', () => {
     await page.click('.folder-pick__confirm')
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 90_000 })
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 4)
+
+    await page.click('.tile:has-text("1750851496332")')
+    await page.waitForFunction(() => (document.querySelector('#nameInput') as HTMLInputElement | null)?.placeholder === '1750851496332_p0.jpg')
+    await expect(page.locator('.detail-panel__over').count()).resolves.toBe(0)
+    await expect(page.locator('#nameInput').inputValue()).resolves.toBe('')
 
     // 准备标签：甘雨（角色）2 张、原神 1 张、Genshin 1 张
     await page.click('.tile:has-text("pic-0.jpg")')

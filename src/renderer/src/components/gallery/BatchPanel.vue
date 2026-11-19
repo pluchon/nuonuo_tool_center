@@ -2,6 +2,15 @@
   <div class="batch-panel">
     <div class="batch-panel__head">
       <span class="batch-panel__title">已选 <span class="batch-panel__num">{{ gallery.selected.length }}</span> 张</span>
+      <button
+        class="batch-panel__bin"
+        type="button"
+        :aria-label="`删除选中的 ${gallery.selected.length} 张`"
+        :title="`删除选中的 ${gallery.selected.length} 张（进系统回收站）`"
+        @click="gallery.askDelete()"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
+      </button>
     </div>
 
     <div class="batch-panel__thumbs">
