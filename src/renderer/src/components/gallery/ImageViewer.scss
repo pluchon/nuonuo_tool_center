@@ -70,7 +70,7 @@
     background: var(--viewer-stage);
     border: 1px solid var(--a-line2);
     overflow: hidden;
-    color: var(--c-i-9C90B3);
+    color: var(--viewer-stage-ink);
   }
 
   &__nav {
@@ -127,7 +127,7 @@
 
   &__empty-text {
     font-weight: 700;
-    color: var(--c-i-6E6280);
+    color: rgba(255, 255, 255, 0.8);
   }
 
   &__empty-btn {

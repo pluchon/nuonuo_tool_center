@@ -190,30 +190,38 @@
     height: 24px;
     padding: 0;
     border-radius: 999px;
-    border: none;
-    background: var(--a-line);
+    box-sizing: border-box;
+    // 关着：中性白底灰圆点；开着：主题色底白圆点
+    border: 1px solid var(--switch-off-line);
+    background: var(--switch-off-track);
     cursor: pointer;
-    transition: background 0.15s;
+    transition:
+      background 0.15s,
+      border-color 0.15s;
 
     &--on {
       background: var(--a);
+      border-color: var(--a);
 
       .set-dlg__knob {
-        left: 21px;
+        left: 20px;
+        background: #fff;
+        box-shadow: 0 1px 3px rgba(var(--sh), 0.25);
       }
     }
   }
 
   &__knob {
     position: absolute;
-    top: 3px;
-    left: 3px;
+    top: 2px;
+    left: 2px;
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 1px 3px rgba(var(--sh), 0.25);
-    transition: left 0.15s;
+    background: var(--switch-off-knob);
+    transition:
+      left 0.15s,
+      background 0.15s;
   }
 
   &__seg {

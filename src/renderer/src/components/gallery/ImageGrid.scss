@@ -189,6 +189,8 @@
     border-radius: 12px;
     overflow: hidden;
     background: var(--c-b-F1EEF6);
+    // 角标按缩略图自己的宽度收缩（长图很窄时不叠在一起）
+    container-type: inline-size;
 
     // 源目录找不到：用缓存的缩略图，显示成灰色
     &--offline {
@@ -258,6 +260,23 @@
     color: #ffffff;
     font-size: 10px;
     font-weight: 700;
+  }
+
+  // 很窄的缩略图（长图）：R-18 只留锁图标；格式标记让位给“长图”，免得和右上角的勾选圈、左下角的标记挤在一起
+  @container (max-width: 110px) {
+    &__r18 {
+      width: 20px;
+      padding: 0;
+      justify-content: center;
+    }
+
+    &__r18-text {
+      display: none;
+    }
+
+    &__badge--fmt {
+      display: none;
+    }
   }
 
   // 右下角格式、左下角“全景 / 长图”

@@ -5,7 +5,6 @@ import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isWithin, pathKey } from '../../common/pathUtil'
 import {
-  findImagesWithOtherNormalFile,
   findScanRowsByRoot,
   insertImageFile,
   softDeleteImageFiles,
@@ -333,7 +332,8 @@ async function ensureImage(hash: string, abs: string, file: WalkedFile): Promise
   return insertImageOrGet({ contentHash: hash, format: file.format, byteSize: file.size, ...analysis })
 }
 
-// 对账：记录里有、磁盘上没有的文件。所在子目录读不了的不动；同一内容在别处还有正常位置的（被移动或改名了）删掉这条记录；其余标成“不见了”
+// 对账：记录里有、磁盘上没有的文件，从图库里去掉（逻辑删除这条文件记录）。所在子目录读不了的不动（目录离线另有提示）。
+// 图片本身（名字、标签）留着：文件放回来（从回收站还原）后再扫描，按内容哈希认回来
 async function reconcileMissing(rows: ScanFileRow[], present: Set<string>, unreadableDirs: string[]): Promise<void> {
   const gone = rows.filter(
     (r) => !present.has(pathKey(r.relPath)) && !unreadableDirs.some((d) => isWithin(d, r.relPath))
@@ -341,16 +341,11 @@ async function reconcileMissing(rows: ScanFileRow[], present: Set<string>, unrea
   if (gone.length === 0) {
     return
   }
-  const goneIds = gone.map((r) => r.id)
-  const elsewhere = await findImagesWithOtherNormalFile(
-    [...new Set(gone.map((r) => r.imageId))],
-    goneIds
+  await chunked(
+    gone.map((r) => r.id),
+    softDeleteImageFiles
   )
-  const moved = gone.filter((r) => elsewhere.has(r.imageId)).map((r) => r.id)
-  const missing = gone.filter((r) => !elsewhere.has(r.imageId) && r.status !== 'MISSING').map((r) => r.id)
-  await chunked(moved, softDeleteImageFiles)
-  await chunked(missing, (ids) => updateImageFileStatus(ids, 'MISSING'))
-  log.info(`对账：${moved.length} 条移到了别处，${missing.length} 条找不到`)
+  log.info(`对账：${gone.length} 个文件已经不在磁盘上，从图库里去掉`)
 }
 
 // 分批执行，避免一条 SQL 带太多参数

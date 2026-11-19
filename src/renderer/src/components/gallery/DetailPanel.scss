@@ -67,9 +67,8 @@
     cursor: pointer;
   }
 
-  // 预览右下角的删除按钮（照原型 nn-del）：半透明白底小方块，鼠标移上去变粉
   // 盖满预览区的透明按钮：点它看大图（照原型）
-  &__open {
+  &__zoom {
     position: absolute;
     inset: 0;
     width: 100%;
@@ -81,6 +80,7 @@
     cursor: zoom-in;
   }
 
+  // 预览右下角的删除按钮（照原型 nn-del）：半透明白底小方块，鼠标移上去变粉
   &__del {
     z-index: 1;
     position: absolute;
@@ -118,12 +118,12 @@
     aspect-ratio: 4 / 3;
     border-radius: 16px;
     overflow: hidden;
-    background: var(--c-b-F4F0FA);
+    background: var(--viewer-stage);
     border: 1px solid var(--look-edge);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--c-i-9C90B3);
+    color: var(--viewer-stage-ink);
   }
 
   &__pic {
@@ -184,25 +184,26 @@
     height: 40px;
     padding: 0 12px;
     border-radius: 12px;
-    background: var(--r18-row-bg);
-    border: 1px solid var(--r18-row-line);
-    transition: background 0.15s;
+    // 关着：和其它输入框一样的普通底；开着：整行淡玫红，开关变红（常见的开关做法：关是中性色，开才是强调色）
+    background: var(--look-field-bg);
+    border: 1px solid var(--look-edge);
+    transition:
+      background 0.15s,
+      border-color 0.15s;
 
     &--on {
-      background: var(--c-b-A23D62);
-      border-color: var(--c-b-A23D62);
-
-      .detail-panel__r18-label {
-        color: #ffffff;
-      }
+      background: var(--r18-row-bg);
+      border-color: var(--r18-row-line);
 
       .detail-panel__switch {
-        background: var(--c-surface);
+        background: var(--c-b-C2335A);
+        border-color: var(--c-b-C2335A);
       }
 
       .detail-panel__knob {
-        left: 23px;
-        background: var(--c-b-A23D62);
+        left: 22px;
+        background: #ffffff;
+        box-shadow: 0 1px 3px rgba(var(--sh), 0.3);
       }
     }
   }
@@ -221,20 +222,26 @@
     height: 24px;
     padding: 0;
     border-radius: 999px;
-    border: none;
-    background: var(--c-b-E8A9BC);
+    box-sizing: border-box;
+    border: 1px solid var(--switch-off-line);
+    background: var(--switch-off-track);
     cursor: pointer;
+    transition:
+      background 0.15s,
+      border-color 0.15s;
   }
 
   &__knob {
     position: absolute;
-    top: 3px;
-    left: 3px;
+    top: 2px;
+    left: 2px;
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    background: #ffffff;
-    transition: left 0.15s;
+    background: var(--switch-off-knob);
+    transition:
+      left 0.15s,
+      background 0.15s;
   }
 
   // 底部：复制到 / 移动到，下面是导入时间（“最近导入”里）

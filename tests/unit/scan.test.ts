@@ -182,7 +182,7 @@ describe('扫描', () => {
     expect(ov.counts.total).toBe(7)
   })
 
-  it('文件被外部删掉标成“不见了”；被挪到别处的按哈希接上，旧记录去掉；放回来又恢复正常', async () => {
+  it('文件被外部删掉就从图库里去掉；被挪到别处的按哈希接上，旧记录去掉；放回来按内容认回原来的图', async () => {
     rmSync(join(source, 'b.png'))
     mkdirSync(join(source, 'sub2'))
     renameSync(join(source, 'sub', 'c.webp'), join(source, 'sub2', 'c.webp'))
@@ -194,12 +194,14 @@ describe('扫描', () => {
       ['sub2\\c.webp', 'NORMAL', 0]
     ])
     expect(c[0].image_id).toBe(c[1].image_id)
-    expect(files.find((f) => f.rel_path === 'b.png')?.status).toBe('MISSING')
+    const goneB = files.filter((f) => f.rel_path === 'b.png')
+    expect(goneB.map((f) => f.delete_state)).toEqual([1])
 
     await solid(30, 60, '#C25B85').png().toFile(join(source, 'b.png'))
     await scanAndWait(rootId)
     files = await filesOf(rootId)
-    expect(files.find((f) => f.rel_path === 'b.png')?.status).toBe('NORMAL')
+    const backB = files.filter((f) => f.rel_path === 'b.png' && f.delete_state === 0)
+    expect(backB.map((f) => [f.status, f.image_id])).toEqual([['NORMAL', goneB[0].image_id]])
   })
 
   it('设置里不扫某种格式：已有的这类记录不会被当成“不见了”', async () => {

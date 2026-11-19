@@ -60,7 +60,8 @@ describe('第十阶段：大图查看', () => {
     await page.click('.folder-pick__confirm')
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 90_000 })
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 3)
-    // 扫完就把一张原图删掉（缩略图还在），后面看它时原图读不到
+    // 扫完就把一张原图删掉（缩略图还在），后面看它时原图读不到；先关掉实时监听，不然它会被自动从列表里去掉
+    await page.evaluate(() => window.api.settings.update({ watchChanges: false }))
     unlinkSync(join(source, 'gone.jpg'))
 
     // 双击全景图：原图整张显示在舞台里，100%
@@ -160,8 +161,8 @@ describe('第十阶段：大图查看', () => {
 
     // 原图被删了：退回缩略图并说明；点详情预览打开
     await page.click('.tile:has-text("gone.jpg")')
-    await page.waitForSelector('.detail-panel__open')
-    await page.click('.detail-panel__open')
+    await page.waitForSelector('.detail-panel__zoom')
+    await page.click('.detail-panel__zoom')
     await page.waitForSelector('.viewer__note:has-text("原图读不到，先显示缩略图")')
     await page.waitForFunction(() => document.querySelector<HTMLImageElement>('.viewer__pic')?.src.startsWith('ltm://thumb/'))
     await expect(fullyInside(page)).resolves.toBe(true)
@@ -172,7 +173,7 @@ describe('第十阶段：大图查看', () => {
     await page.click('.side-nav__label:text-is("pics")')
     await page.dblclick('.tile:has-text("wide.jpg")')
     await waitOriginal(page, 3000)
-    await expect(page.locator('.viewer__stage').evaluate((e) => getComputedStyle(e).backgroundColor)).resolves.toBe('rgb(21, 18, 29)')
+    await expect(page.locator('.viewer__stage').evaluate((e) => getComputedStyle(e).backgroundColor)).resolves.toBe('rgb(20, 17, 24)')
     await shot(page, 'viewer-dark')
     await page.keyboard.press('Escape')
     await app.close()

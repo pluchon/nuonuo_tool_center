@@ -70,9 +70,9 @@ describe('第十二阶段：实时监听', () => {
     await page.click('.tile:has-text("b-renamed.jpg")')
     await page.waitForSelector('.tag-editor__tag:has-text("猫猫")')
 
-    // 外部删除：这张标成“文件不见了”（粉色斜纹占位，照设计不直接消失）
+    // 外部删除：从网格里去掉
     unlinkSync(join(source, 'a.jpg'))
-    await page.waitForSelector('.tile[aria-label="a.jpg"] .tile__bad--missing', { timeout: 20_000 })
+    await page.waitForFunction(() => !document.querySelector('.tile[aria-label="a.jpg"]'), undefined, { timeout: 20_000 })
 
     // 关掉“实时监听文件变化”：再放进来的图不会自动出现
     await page.click('.title-bar__gear')
@@ -83,8 +83,16 @@ describe('第十二阶段：实时监听', () => {
     await page.keyboard.press('Escape')
     const before = await page.locator('.tile').count()
     copyFileSync(join(outside, 'n4.jpg'), join(source, 'n4.jpg'))
+    // 再在外面删掉一张；监听关着，网格不动
+    unlinkSync(join(source, 'n2.jpg'))
     await page.waitForTimeout(5000)
     await expect(page.locator('.tile').count()).resolves.toBe(before)
+
+    // 点底栏“重新扫描”：新放进来的出现，外面删掉的从列表里去掉
+    await page.click('.status-footer__scan')
+    await page.waitForFunction(() => !!document.querySelector('.tile[aria-label="n4.jpg"]') && !document.querySelector('.tile[aria-label="n2.jpg"]'), undefined, {
+      timeout: 30_000
+    })
 
     // 再打开：重建监听（之前漏掉的要等下次扫描），新的变化又能自动反映
     await page.click('.title-bar__gear')

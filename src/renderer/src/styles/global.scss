@@ -50,13 +50,23 @@ body {
   --r18-row-line: rgba(194, 51, 90, 0.35);
 }
 
-// 大图舞台的衬底：浅色淡紫，深色用深衬底（不跟图片走）
+// 关着的开关：白底灰圆点（深色下是浅一层的底和描边）；开着时各自用强调色
 :root {
-  --viewer-stage: var(--c-b-F4F0FA);
+  --switch-off-track: #ffffff;
+  --switch-off-line: #ddd5ea;
+  --switch-off-knob: #b9afc9;
 }
 
 :root.dark {
-  --viewer-stage: #15121d;
+  --switch-off-track: rgba(255, 255, 255, 0.08);
+  --switch-off-line: rgba(255, 255, 255, 0.24);
+  --switch-off-knob: #a89dbb;
+}
+
+// 图片的衬底（详情预览、大图舞台）：不管浅色深色都用近黑，图片两边的留白不抢颜色（看图软件的通行做法）
+:root {
+  --viewer-stage: #141118;
+  --viewer-stage-ink: rgba(255, 255, 255, 0.55);
 }
 
 // 拖图片时跟手的小方块（拖动图要放在 body 下才能截到，所以写成全局样式）

@@ -71,7 +71,7 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18v14H3zM3 15l5-5 4 4M14 12l2-2 5 5M8 3l2 4M16 21l-2-4" /></svg>无法预览
             </span>
             <span v-if="masked(t.id)" class="tile__r18">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>R-18
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg><span class="tile__r18-text">R-18</span>
             </span>
             <span class="tile__badge tile__badge--fmt">{{ item(t.id).format }}</span>
             <span v-if="t.crop" class="tile__badge tile__badge--crop" title="缩略图只显示中间部分">{{ t.crop }}</span>

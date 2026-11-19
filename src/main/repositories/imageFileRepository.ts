@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, notInArray } from 'drizzle-orm'
+import { and, eq, inArray, ne } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { image, imageFile } from '../db/schema'
 
@@ -64,24 +64,4 @@ export async function softDeleteImageFiles(ids: number[]): Promise<void> {
   }
   const { db } = getDatabase()
   await db.update(imageFile).set({ deleteState: 1 }).where(inArray(imageFile.id, ids))
-}
-
-// 这些图片里，哪些在给定记录之外还有正常的文件位置
-export async function findImagesWithOtherNormalFile(imageIds: number[], excludeFileIds: number[]): Promise<Set<number>> {
-  if (imageIds.length === 0) {
-    return new Set()
-  }
-  const { db } = getDatabase()
-  const rows = await db
-    .selectDistinct({ imageId: imageFile.imageId })
-    .from(imageFile)
-    .where(
-      and(
-        inArray(imageFile.imageId, imageIds),
-        eq(imageFile.deleteState, 0),
-        eq(imageFile.status, 'NORMAL'),
-        excludeFileIds.length > 0 ? notInArray(imageFile.id, excludeFileIds) : undefined
-      )
-    )
-  return new Set(rows.map((r) => r.imageId))
 }
