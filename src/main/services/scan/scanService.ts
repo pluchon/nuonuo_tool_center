@@ -1,4 +1,6 @@
 import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { cpus } from 'node:os'
 import { join } from 'node:path'
 import type { ScanProgressVO, ScanResultVO, ScanStateVO } from '@shared/api'
 import { BizError } from '../../common/bizError'
@@ -30,13 +32,14 @@ import {
 import { ensureCategoryRoot } from '../categoryHome'
 import { getSettings } from '../settingsService'
 import { shouldProcess } from './formats'
-import { analyzeImage, hashFile } from './imageProbe'
+import { analyzeImage, hashBuffer, hashFile, READ_ONCE_LIMIT } from './imageProbe'
 import { RootUnavailableError, walkRoot, type WalkedFile, type WalkResult } from './walker'
 
 const log = getLogger('scan')
 
-// 同时处理的文件数：读盘和 sharp 都是异步的，2 路就能占满，再多会拖慢整机
-const WORKERS = 2
+// 同时处理的文件数：每路 sharp 只用 1 个线程，按核数取 2–4 路（16 核的机器 4 路，只占四分之一的核，整机不卡）。
+// 实测 3000×2000 照片：2 路约 30 ms/张，读一次 + 4 路约 11 ms/张
+export const WORKERS = Math.min(4, Math.max(2, Math.floor(cpus().length / 4)))
 // 进度推送的最小间隔（毫秒）
 const PUSH_INTERVAL = 150
 // 批量更新时一次最多带多少个 id
@@ -305,8 +308,10 @@ function isUnchanged(row: ScanFileRow, file: WalkedFile): boolean {
 // 登记一个新文件或内容变了的文件：算哈希，按哈希找或建图片，缺缩略图就补，再写文件记录
 async function registerFile(root: LibraryRootEntity, file: WalkedFile, row: ScanFileRow | undefined): Promise<void> {
   const abs = join(root.path, file.relPath)
-  const hash = await hashFile(abs)
-  const img = await ensureImage(hash, abs, file)
+  // 一般大小的文件只读一次：同一份内容算哈希、解码、写缩略图
+  const data = file.size <= READ_ONCE_LIMIT ? await readFile(abs) : null
+  const hash = data ? hashBuffer(data) : await hashFile(abs)
+  const img = await ensureImage(hash, abs, file, data)
   if (row) {
     await updateImageFileContent(row.id, { imageId: img.id, relPath: file.relPath, mtime: file.mtime })
   } else {
@@ -315,14 +320,14 @@ async function registerFile(root: LibraryRootEntity, file: WalkedFile, row: Scan
 }
 
 // 按哈希找图片；没有就解析后新建。已有的图片缺缩略图（文件被清掉或上次失败）时重新生成
-async function ensureImage(hash: string, abs: string, file: WalkedFile): Promise<ImageEntity> {
+async function ensureImage(hash: string, abs: string, file: WalkedFile, data: Buffer | null): Promise<ImageEntity> {
   const thumbPath = join(config!.thumbsDir, `${hash}.webp`)
   const existing = await findImageByHash(hash)
   if (existing && existing.thumbReady === THUMB_READY && existsSync(thumbPath)) {
     return existing
   }
   const needThumb = existsSync(thumbPath) ? null : thumbPath
-  const info = await analyzeImage(abs, file.format, needThumb)
+  const info = await analyzeImage(abs, file.format, needThumb, data)
   const thumbReady = needThumb === null || info.thumbnail ? THUMB_READY : THUMB_FAILED
   const analysis = { width: info.width, height: info.height, exif: info.exif, takenAt: info.takenAt, thumbReady }
   if (existing) {

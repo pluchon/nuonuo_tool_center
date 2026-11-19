@@ -1,5 +1,5 @@
 <template>
-  <div class="batch-panel">
+  <div class="batch-panel nn-appear">
     <div class="batch-panel__head">
       <span class="batch-panel__title">已选 <span class="batch-panel__num">{{ gallery.selected.length }}</span> 张</span>
       <button

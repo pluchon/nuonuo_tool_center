@@ -26,11 +26,12 @@
         <span class="gallery__text">图片读不出来</span>
         <button class="gallery__retry" type="button" :disabled="gallery.loading" @click="gallery.load()">重试</button>
       </div>
-      <div v-else-if="gallery.loaded && gallery.items.length === 0" class="gallery__empty">
+      <div v-else-if="gallery.loaded && gallery.items.length === 0" class="gallery__empty nn-appear">
         <NonoArt pose="empty" />
         <span class="gallery__text">{{ emptyText }}</span>
       </div>
-      <ImageGrid v-else-if="gallery.items.length > 0" />
+      <!-- 换视图或筛选条件时网格整体淡入（扫描中的刷新不换 key，不闪） -->
+      <ImageGrid v-else-if="gallery.items.length > 0" :key="gallery.queryKey" class="nn-appear" />
     </main>
     <!-- 详情面板：列表空了往右收起、网格跟着变宽；有图了再展开 -->
     <Transition name="side">

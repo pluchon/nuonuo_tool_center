@@ -98,3 +98,108 @@ body {
   line-height: 20px;
   text-align: center;
 }
+
+// ===== 过渡动画：只用几种，短而轻（用户定，2026-11-20：流畅优雅、不过多） =====
+// 节奏：进场 0.2–0.26 秒、退场 0.12–0.15 秒；动的是 opacity 和独立的 translate / scale 属性，不碰各组件自己的 transform
+
+// 弹窗（确认、复制移动、设置、标签分类、大图）：遮罩淡入，卡片轻轻浮起
+.nn-dlg-enter-active {
+  transition: opacity 0.2s ease;
+}
+
+.nn-dlg-leave-active {
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.nn-dlg-enter-from,
+.nn-dlg-leave-to {
+  opacity: 0;
+}
+
+.nn-dlg-enter-active .nn-dlg-panel {
+  transition:
+    translate 0.26s cubic-bezier(0.2, 0.9, 0.3, 1),
+    scale 0.26s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+.nn-dlg-leave-active .nn-dlg-panel {
+  transition:
+    translate 0.15s ease-in,
+    scale 0.15s ease-in;
+}
+
+.nn-dlg-enter-from .nn-dlg-panel,
+.nn-dlg-leave-to .nn-dlg-panel {
+  translate: 0 8px;
+  scale: 0.97;
+}
+
+// 下拉、菜单、建议列表：淡入并从上方落下一点
+.nn-pop-enter-active {
+  transition:
+    opacity 0.16s ease,
+    translate 0.2s cubic-bezier(0.2, 0.9, 0.3, 1),
+    scale 0.2s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+.nn-pop-leave-active {
+  transition:
+    opacity 0.12s ease,
+    translate 0.12s ease,
+    scale 0.12s ease;
+  pointer-events: none;
+}
+
+.nn-pop-enter-from,
+.nn-pop-leave-to {
+  opacity: 0;
+  translate: 0 -4px;
+  scale: 0.98;
+}
+
+// 页面切换（图库 / 标签管理）：先淡出再淡入
+.nn-fade-enter-active {
+  transition: opacity 0.18s ease;
+}
+
+.nn-fade-leave-active {
+  transition: opacity 0.12s ease;
+}
+
+.nn-fade-enter-from,
+.nn-fade-leave-to {
+  opacity: 0;
+}
+
+// 内容一出现就淡入（换图、换设置分类、换视图后的网格、批量面板、空状态）
+@keyframes nn-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes nn-rise-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+  }
+}
+
+.nn-appear {
+  animation: nn-fade-in 0.22s ease both;
+}
+
+.nn-rise {
+  animation: nn-rise-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+
+// 系统开了“减少动画”：全部几乎瞬间完成（保留结束状态，不影响逻辑）
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -28,6 +28,8 @@ function zoomText(page: Page): Promise<string | null> {
 
 // 图片整张都在舞台里（允许 1px 误差）
 async function fullyInside(page: Page): Promise<boolean> {
+  // 等打开大图的过渡动画做完再量（动画里卡片还在缩放）
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'))
   const stage = await page.locator('.viewer__stage').boundingBox()
   const pic = await page.locator('.viewer__pic').boundingBox()
   if (!stage || !pic) {

@@ -25,22 +25,24 @@
           >
             <span class="tag-editor__dot" :style="{ background: colorOf(shownCategoryId).dot }" aria-hidden="true" />{{ categoryName(shownCategoryId) }}<span v-if="!exact" class="tag-editor__caret">▾</span>
           </button>
-          <div v-if="kindOpen" class="tag-editor__pop tag-editor__pop--kind" role="listbox" aria-label="新标签的分类">
-            <span class="tag-editor__arrow" aria-hidden="true" />
-            <button
-              v-for="c in tagsStore.categories"
-              :key="c.id"
-              class="tag-editor__opt"
-              :style="c.id === shownCategoryId ? { background: colorOf(c.id).bg, color: colorOf(c.id).ink } : undefined"
-              type="button"
-              role="option"
-              :aria-selected="c.id === shownCategoryId"
-              @click="pickKind(c.id)"
-            >
-              <span class="tag-editor__dot" :style="{ background: colorOf(c.id).dot }" aria-hidden="true" />
-              <span class="tag-editor__opt-label">{{ c.name }}</span><span>{{ c.id === shownCategoryId ? '✓' : '' }}</span>
-            </button>
-          </div>
+          <Transition name="nn-pop">
+            <div v-if="kindOpen" class="tag-editor__pop tag-editor__pop--kind" role="listbox" aria-label="新标签的分类">
+              <span class="tag-editor__arrow" aria-hidden="true" />
+              <button
+                v-for="c in tagsStore.categories"
+                :key="c.id"
+                class="tag-editor__opt"
+                :style="c.id === shownCategoryId ? { background: colorOf(c.id).bg, color: colorOf(c.id).ink } : undefined"
+                type="button"
+                role="option"
+                :aria-selected="c.id === shownCategoryId"
+                @click="pickKind(c.id)"
+              >
+                <span class="tag-editor__dot" :style="{ background: colorOf(c.id).dot }" aria-hidden="true" />
+                <span class="tag-editor__opt-label">{{ c.name }}</span><span>{{ c.id === shownCategoryId ? '✓' : '' }}</span>
+              </button>
+            </div>
+          </Transition>
         </span>
         <input
           class="tag-editor__input"
@@ -52,14 +54,16 @@
           @keydown.enter="onEnter"
           @keydown.esc.stop="draft = ''"
         />
-        <div v-if="suggestions.length > 0 && !kindOpen" class="tag-editor__pop tag-editor__pop--sugg" role="listbox" aria-label="匹配的标签">
-          <button v-for="s in suggestions" :key="s.tag.id" class="tag-editor__sugg" type="button" role="option" :title="categoryName(s.tag.categoryId)" @click="pick(s.tag.name)">
-            <span class="tag-editor__dot" :style="{ background: colorOf(s.tag.categoryId).dot }" aria-hidden="true" />
-            <span class="tag-editor__sugg-name">{{ s.tag.name }}</span>
-            <span class="tag-editor__sugg-alias">{{ s.alias ? `别名 ${s.alias}` : '' }}</span>
-            <span class="tag-editor__sugg-count">{{ s.tag.count }} 张</span>
-          </button>
-        </div>
+        <Transition name="nn-pop">
+          <div v-if="suggestions.length > 0 && !kindOpen" class="tag-editor__pop tag-editor__pop--sugg" role="listbox" aria-label="匹配的标签">
+            <button v-for="s in suggestions" :key="s.tag.id" class="tag-editor__sugg" type="button" role="option" :title="categoryName(s.tag.categoryId)" @click="pick(s.tag.name)">
+              <span class="tag-editor__dot" :style="{ background: colorOf(s.tag.categoryId).dot }" aria-hidden="true" />
+              <span class="tag-editor__sugg-name">{{ s.tag.name }}</span>
+              <span class="tag-editor__sugg-alias">{{ s.alias ? `别名 ${s.alias}` : '' }}</span>
+              <span class="tag-editor__sugg-count">{{ s.tag.count }} 张</span>
+            </button>
+          </div>
+        </Transition>
       </div>
     </div>
   </div>

@@ -1,0 +1,36 @@
+// 由 resources/icon.png 生成 Windows 用的多尺寸 resources/icon.ico（窗口、任务栏、桌面快捷方式用）
+// 用法：node scripts/make-icon.mjs
+import { writeFileSync } from 'node:fs'
+import sharp from 'sharp'
+
+const SIZES = [16, 24, 32, 48, 64, 128, 256]
+const source = 'resources/icon.png'
+const target = 'resources/icon.ico'
+
+// 每个尺寸一张 PNG（ICO 允许直接内嵌 PNG）
+const images = []
+for (const size of SIZES) {
+  images.push({ size, data: await sharp(source).resize(size, size, { kernel: 'lanczos3' }).png({ compressionLevel: 9 }).toBuffer() })
+}
+
+// ICO 文件头 6 字节 + 每张 16 字节的目录，然后依次是图片数据
+const header = Buffer.alloc(6 + images.length * 16)
+header.writeUInt16LE(0, 0)
+header.writeUInt16LE(1, 2)
+header.writeUInt16LE(images.length, 4)
+let offset = header.length
+images.forEach((img, i) => {
+  const at = 6 + i * 16
+  // 256 在目录里记成 0
+  header.writeUInt8(img.size === 256 ? 0 : img.size, at)
+  header.writeUInt8(img.size === 256 ? 0 : img.size, at + 1)
+  header.writeUInt8(0, at + 2)
+  header.writeUInt8(0, at + 3)
+  header.writeUInt16LE(1, at + 4)
+  header.writeUInt16LE(32, at + 6)
+  header.writeUInt32LE(img.data.length, at + 8)
+  header.writeUInt32LE(offset, at + 12)
+  offset += img.data.length
+})
+writeFileSync(target, Buffer.concat([header, ...images.map((i) => i.data)]))
+console.log(`已生成 ${target}（${SIZES.join('/')}）`)

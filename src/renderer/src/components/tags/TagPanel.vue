@@ -62,26 +62,28 @@
           <span class="tag-panel__kind-name">{{ categoryName }}</span>
           <span class="tag-panel__caret">▾</span>
         </button>
-        <div v-if="kindOpen" class="tag-panel__pop tag-panel__pop--kind" role="listbox" aria-label="分类">
-          <button
-            v-for="c in tagsStore.categories"
-            :key="c.id"
-            class="tag-panel__opt"
-            type="button"
-            role="option"
-            :aria-selected="c.id === categoryId"
-            :style="
-              c.id === categoryId
-                ? { background: tagsStore.colorOf(c.id).bg, color: tagsStore.colorOf(c.id).ink, borderColor: tagsStore.colorOf(c.id).line }
-                : undefined
-            "
-            @click="pickKind(c.id)"
-          >
-            <span class="tag-panel__dot" :style="{ background: tagsStore.colorOf(c.id).dot }" aria-hidden="true" />
-            <span class="tag-panel__opt-name">{{ c.name }}</span>
-            <span>{{ c.id === categoryId ? '✓' : '' }}</span>
-          </button>
-        </div>
+        <Transition name="nn-pop">
+          <div v-if="kindOpen" class="tag-panel__pop tag-panel__pop--kind" role="listbox" aria-label="分类">
+            <button
+              v-for="c in tagsStore.categories"
+              :key="c.id"
+              class="tag-panel__opt"
+              type="button"
+              role="option"
+              :aria-selected="c.id === categoryId"
+              :style="
+                c.id === categoryId
+                  ? { background: tagsStore.colorOf(c.id).bg, color: tagsStore.colorOf(c.id).ink, borderColor: tagsStore.colorOf(c.id).line }
+                  : undefined
+              "
+              @click="pickKind(c.id)"
+            >
+              <span class="tag-panel__dot" :style="{ background: tagsStore.colorOf(c.id).dot }" aria-hidden="true" />
+              <span class="tag-panel__opt-name">{{ c.name }}</span>
+              <span>{{ c.id === categoryId ? '✓' : '' }}</span>
+            </button>
+          </div>
+        </Transition>
       </div>
     </div>
 
@@ -143,28 +145,30 @@
           <span v-if="mergeMode === 'in'" class="tag-panel__counter">{{ chosen.length }}/{{ mergeMax }}</span>
           <span class="tag-panel__caret">▾</span>
         </button>
-        <div v-if="mergeOpen" class="tag-panel__pop tag-panel__pop--merge" role="listbox" :aria-multiselectable="mergeMode === 'in'">
-          <button
-            v-for="o in mergeOptions"
-            :key="o.tag.id"
-            class="tag-panel__mopt"
-            :class="{ 'tag-panel__mopt--on': o.on }"
-            type="button"
-            role="option"
-            :aria-selected="o.on"
-            @click="pickMerge(o.tag.id)"
-          >
-            <span
-              class="tag-panel__mark"
-              :class="{ 'tag-panel__mark--radio': mergeMode === 'out', 'tag-panel__mark--on': o.on, 'tag-panel__mark--blocked': o.blocked }"
-              >{{ o.on ? '✓' : '' }}</span
+        <Transition name="nn-pop">
+          <div v-if="mergeOpen" class="tag-panel__pop tag-panel__pop--merge" role="listbox" :aria-multiselectable="mergeMode === 'in'">
+            <button
+              v-for="o in mergeOptions"
+              :key="o.tag.id"
+              class="tag-panel__mopt"
+              :class="{ 'tag-panel__mopt--on': o.on }"
+              type="button"
+              role="option"
+              :aria-selected="o.on"
+              @click="pickMerge(o.tag.id)"
             >
-            <span class="tag-panel__mdot" :style="{ background: o.color.dot }" aria-hidden="true" />
-            <span class="tag-panel__mname">{{ o.tag.name }}</span>
-            <span class="tag-panel__mcount">{{ o.tag.count }} 张</span>
-          </button>
-          <span v-if="mergeOptions.length === 0" class="tag-panel__none tag-panel__none--pad">没有别的标签</span>
-        </div>
+              <span
+                class="tag-panel__mark"
+                :class="{ 'tag-panel__mark--radio': mergeMode === 'out', 'tag-panel__mark--on': o.on, 'tag-panel__mark--blocked': o.blocked }"
+                >{{ o.on ? '✓' : '' }}</span
+              >
+              <span class="tag-panel__mdot" :style="{ background: o.color.dot }" aria-hidden="true" />
+              <span class="tag-panel__mname">{{ o.tag.name }}</span>
+              <span class="tag-panel__mcount">{{ o.tag.count }} 张</span>
+            </button>
+            <span v-if="mergeOptions.length === 0" class="tag-panel__none tag-panel__none--pad">没有别的标签</span>
+          </div>
+        </Transition>
       </div>
       <div v-if="mergePreview" class="tag-panel__preview">
         <span class="tag-panel__preview-text">{{ mergePreview.text }}</span>

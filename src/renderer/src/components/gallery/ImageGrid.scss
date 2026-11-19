@@ -205,6 +205,8 @@
     display: block;
     width: 100%;
     height: 100%;
+    // 缩略图读出来时淡入
+    animation: nn-fade-in 0.3s ease both;
     object-fit: cover;
 
     // R-18：模糊遮挡

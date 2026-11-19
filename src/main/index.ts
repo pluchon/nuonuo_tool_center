@@ -61,7 +61,8 @@ async function initialTheme(dbReady: boolean): Promise<ThemeMode> {
 
 // 创建主窗口：开启上下文隔离与沙箱，外部链接交给系统浏览器；标题栏和窗口按钮由界面自己画
 function createMainWindow(theme: ThemeMode): BrowserWindow {
-  const iconPath = join(app.getAppPath(), 'resources', 'icon.png')
+  // Windows 用多尺寸的 ico（小尺寸更清楚），其它系统用 png
+  const iconPath = join(app.getAppPath(), 'resources', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
