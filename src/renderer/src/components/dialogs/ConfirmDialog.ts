@@ -1,4 +1,4 @@
-import { defineComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { defineComponent, nextTick, onBeforeUnmount, ref, watch, type PropType } from 'vue'
 
 // 危险操作的确认框（照原型 confirmDlg）：只有标题和两个等宽按钮，默认聚焦在安全的“先不删”上；Esc 取消
 export default defineComponent({
@@ -9,7 +9,11 @@ export default defineComponent({
     okLabel: { type: String, default: '删除' },
     noLabel: { type: String, default: '先不删' },
     // 执行中：确认按钮不可再点
-    busy: { type: Boolean, default: false }
+    busy: { type: Boolean, default: false },
+    // danger：粉色描边、红按钮（删除、移除）；normal：主题色（拖放复制 / 移动）
+    tone: { type: String as PropType<'danger' | 'normal'>, default: 'danger' },
+    // 标题前的图标路径，默认垃圾桶
+    icon: { type: String, default: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3' }
   },
   emits: ['ok', 'cancel'],
   setup(props, { emit }) {

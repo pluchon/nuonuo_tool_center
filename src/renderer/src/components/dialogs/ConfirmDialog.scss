@@ -20,6 +20,20 @@
     flex-direction: column;
     gap: 12px;
     color: var(--c-i-3B3047);
+
+    // 非危险操作：主题色描边、图标和按钮
+    &--normal {
+      border-color: var(--a-line);
+
+      .confirm-dlg__icon {
+        background: var(--a-soft);
+        color: var(--a);
+      }
+
+      .confirm-dlg__ok {
+        background: var(--a);
+      }
+    }
   }
 
   &__head {

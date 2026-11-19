@@ -1,6 +1,9 @@
 import { stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import type { FolderNodeVO, TransferRootsVO } from '@shared/api'
+import { shell } from 'electron'
+import type { DirNodeVO, FolderNodeVO, FolderRefDTO, TransferRootsVO } from '@shared/api'
+import { countImagesByChildFolder } from '../repositories/libraryOverviewRepository'
+import { resolveFolder } from './fileOps/folderOpsService'
 import { BizError } from '../common/bizError'
 import { getLogger } from '../common/logger'
 import { isWithin } from '../common/pathUtil'
@@ -63,6 +66,36 @@ export async function listFolders(parent: string | null, categoryHomeOverride: s
       return { path, label: name, isDrive: false, hasChildren: await hasChildDirs(path), lock: lockOf(path, home, sources) }
     })
   )
+}
+
+// 侧栏目录树展开一层：列出磁盘上的子文件夹和各自的图片数（含更深的子目录）
+export async function dirChildren(ref: FolderRefDTO): Promise<DirNodeVO[]> {
+  const folder = await resolveFolder(ref)
+  let names: string[] | null
+  try {
+    names = await childDirs(folder.abs)
+  } catch (err) {
+    log.info(`列子文件夹失败：${folder.abs}`, err)
+    throw new BizError('DEPENDENCY_FAILED', `打不开这个文件夹：${folder.abs}`)
+  }
+  const counts = folder.root ? await countImagesByChildFolder(folder.root.id, folder.rel) : new Map<string, number>()
+  return Promise.all(
+    (names ?? []).map(async (name) => ({
+      name,
+      rel: folder.rel ? `${folder.rel}\\${name}` : name,
+      count: counts.get(name.toLowerCase()) ?? 0,
+      hasChildren: await hasChildDirs(join(folder.abs, name))
+    }))
+  )
+}
+
+// 在资源管理器里打开一个目录
+export async function openFolder(ref: FolderRefDTO): Promise<void> {
+  const folder = await resolveFolder(ref)
+  const error = await shell.openPath(folder.abs)
+  if (error) {
+    throw new BizError('DEPENDENCY_FAILED', `打不开：${error}`)
+  }
 }
 
 // 移动 / 复制对话框的顶层：全部源目录（找不到的标出来）、图库文件夹下的顶层类目录

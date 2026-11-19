@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import {
   TAGS_PER_IMAGE,
   type DirKeyDTO,
+  type FolderRefDTO,
   type GalleryItemVO,
   type GalleryQueryDTO,
   type ImageDetailVO,
@@ -10,13 +11,14 @@ import {
 } from '@shared/api'
 import type { SortKey } from '@shared/settings'
 import { addImageTag, fetchCommonTags, removeImageTag, renameImage, setImagesR18 } from '@/api/edit'
-import { deleteImages, undoDelete } from '@/api/files'
+import { copyImageToClipboard, deleteImages, undoDelete } from '@/api/files'
 import { fetchGallery, fetchImageDetail } from '@/api/gallery'
 import { DEFAULT_ZOOM, ROW_HEIGHTS } from '@/utils/gridLayout'
 import { useLibraryStore } from './library'
 import { useSettingsStore } from './settings'
 import { useTagsStore } from './tags'
 import { useToastStore } from './toast'
+import { useTransferStore } from './transfer'
 import { useViewStore } from './view'
 
 // 一次最多选多少张
@@ -66,6 +68,10 @@ export const useGalleryStore = defineStore('gallery', {
     detailError: '',
     // 多选时的共同标签
     commonTags: [] as ImageTagVO[],
+    // 正在拖动的图；拖到哪个源目录上（侧栏行的键）；松手后等确认的拖放
+    dragging: [] as number[],
+    dropKey: null as string | null,
+    dropAsk: null as { ids: number[]; target: string; label: string; move: boolean } | null,
     // 等待确认删除的图（确认框开着时不为空）
     deleteAsk: null as number[] | null,
     deleteBusy: false,
@@ -102,7 +108,7 @@ export const useGalleryStore = defineStore('gallery', {
           return null
         }
         return v.dir.kind === 'source'
-          ? { ...base, view: 'source', sourceId: v.dir.id, onlyHere: this.onlyHere }
+          ? { ...base, view: 'source', sourceId: v.dir.id, sub: v.dir.sub ?? '', onlyHere: this.onlyHere }
           : { ...base, view: 'category', category: v.dir.name, onlyHere: this.onlyHere, onlyR18: this.onlyR18, tagIds, more }
       }
       if (v.view === 'all' || v.view === 'r18') {
@@ -396,6 +402,64 @@ export const useGalleryStore = defineStore('gallery', {
         })
       } catch (err) {
         toast.show(errText(err), 'error')
+      }
+    },
+    // Ctrl + C：单张时把图复制到剪贴板；多选时系统剪贴板放不了多张图，提示一下
+    async copyToClipboard(): Promise<void> {
+      const toast = useToastStore()
+      if (this.multi) {
+        toast.show('一次只能复制一张图，多张请用“复制到…”', 'error')
+        return
+      }
+      const fileId = this.primaryItem?.fileId
+      if (fileId === undefined) {
+        return
+      }
+      try {
+        await copyImageToClipboard(fileId)
+        toast.show('已复制图片')
+      } catch (err) {
+        toast.show(errText(err), 'error')
+      }
+    },
+    // 开始拖：拖的是选中的那组（按住的图在选中里），否则只拖这一张
+    startDrag(id: number): number[] {
+      this.dragging = this.selected.includes(id) ? [...this.selected] : [id]
+      return this.dragging
+    },
+    endDrag(): void {
+      this.dragging = []
+      this.dropKey = null
+    },
+    // 松手：弹确认（复制或移动 N 张到这个源目录）
+    askDrop(ref: FolderRefDTO, label: string, move: boolean): void {
+      const ids = [...this.dragging]
+      this.endDrag()
+      if (ref.kind !== 'source' || ids.length === 0) {
+        return
+      }
+      const root = useLibraryStore().overview?.sources.find((s) => s.id === ref.id)
+      if (!root) {
+        return
+      }
+      this.dropAsk = { ids, target: ref.sub ? `${root.path}\\${ref.sub}` : root.path, label, move }
+    },
+    cancelDrop(): void {
+      this.dropAsk = null
+    },
+    // 确认拖放：和“复制到 / 移动到”走同一套
+    async confirmDrop(): Promise<void> {
+      const ask = this.dropAsk
+      const query = this.query()
+      if (!ask || !query || this.deleteBusy) {
+        return
+      }
+      this.deleteBusy = true
+      try {
+        await useTransferStore().runDirect(ask.move ? 'move' : 'copy', query, ask.ids, [ask.target])
+      } finally {
+        this.deleteBusy = false
+        this.dropAsk = null
       }
     },
     // 缩略图换档（delta 为正变小、为负变大）

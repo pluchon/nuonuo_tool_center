@@ -1,6 +1,6 @@
 import { and, eq, inArray, ne, or, sql, type SQL } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
-import { col } from '../db/sqlUtil'
+import { col, likeEscape } from '../db/sqlUtil'
 import { image, imageFile, imageTag, libraryRoot, tag } from '../db/schema'
 
 // 网格查询的一行：一个文件位置连同它的图片
@@ -70,10 +70,6 @@ const ROW_COLUMNS = {
   takenAt: image.takenAt
 }
 
-// LIKE 里的通配符转义
-function likeEscape(s: string): string {
-  return s.replace(/[\\%_]/g, (c) => `\\${c}`)
-}
 
 // 按条件查文件位置：只要未删除、没进回收站的文件和未删除的图片
 export async function findGalleryRows(f: GalleryFilter): Promise<GalleryRow[]> {

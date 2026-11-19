@@ -6,3 +6,8 @@ import { getTableName, sql, type Column, type SQL } from 'drizzle-orm'
 export function col(column: Column): SQL {
   return sql`${sql.identifier(getTableName(column.table))}.${sql.identifier(column.name)}`
 }
+
+// LIKE 里的通配符转义（反斜杠、百分号、下划线）
+export function likeEscape(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => `\\${c}`)
+}

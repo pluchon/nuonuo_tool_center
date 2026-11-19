@@ -72,6 +72,82 @@
     position: relative;
     display: flex;
     border-radius: 10px;
+    outline: 1px solid transparent;
+    outline-offset: -1px;
+
+    // 拖着图片经过源目录：虚线框
+    &--drop {
+      outline: 1.5px dashed var(--c-i-3F8F7B);
+    }
+  }
+
+  // 目录树的连线（竖线 + 圆角拐角）
+  &__guide {
+    position: absolute;
+    z-index: 1;
+    box-sizing: border-box;
+    border-left: 1.5px solid var(--a-mid);
+    border-bottom: 1.5px solid var(--a-mid);
+    pointer-events: none;
+  }
+
+  // 新建 / 改名的输入行
+  &__edit-wrap {
+    flex: none;
+    position: relative;
+  }
+
+  &__edit {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 10px 0 8px;
+    box-sizing: border-box;
+    border-radius: 10px;
+    background: var(--c-surface);
+    border: 1.5px solid transparent;
+  }
+
+  &__edit-input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    font: inherit;
+    color: var(--c-i-3B3047);
+
+    &::placeholder {
+      color: var(--c-i-9C90B3);
+    }
+  }
+
+  &__edit-len {
+    flex: none;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--c-i-7F7494);
+
+    &--over {
+      color: var(--c-i-A23D62);
+    }
+  }
+
+  &__edit-over {
+    display: block;
+    padding: 0 10px;
+    font-size: 11px;
+    line-height: 18px;
+    color: var(--c-i-A23D62);
+  }
+
+  &__sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
   }
 
   &__item {
@@ -119,6 +195,15 @@
     align-items: center;
     justify-content: center;
     color: var(--c-i-9C90B3);
+    cursor: pointer;
+
+    svg {
+      transition: transform 0.15s;
+    }
+
+    &--open svg {
+      transform: rotate(90deg);
+    }
   }
 
   &__icon {

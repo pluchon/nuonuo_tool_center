@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { shell } from 'electron'
+import { clipboard, ClipboardItem, nativeImage, shell } from 'electron'
 import {
   FILTER_MAX,
   type DirCountVO,
@@ -14,6 +14,7 @@ import {
 } from '@shared/api'
 import { SORT_KEYS, type ScanFormat } from '@shared/settings'
 import { BizError } from '../common/bizError'
+import { normalizeRelDir } from '../common/pathUtil'
 import type { ExifInfo } from './scan/exifInfo'
 import {
   findFileLocation,
@@ -71,12 +72,16 @@ async function toFilter(q: GalleryQueryDTO): Promise<GalleryFilter> {
     if (!root || root.kind !== 'SOURCE') {
       throw new BizError('NOT_FOUND', '这个源目录已经不在图库里了')
     }
+    const sub = normalizeRelDir(q.sub)
+    if (sub === null) {
+      throw new BizError('BAD_REQUEST', '子文件夹路径不对')
+    }
     // 源目录只按图片名搜
-    return { ...filter, rootId: root.id, prefix: '', onlyHere: q.onlyHere === true }
+    return { ...filter, rootId: root.id, prefix: sub, onlyHere: q.onlyHere === true }
   }
   if (q.view === 'category') {
-    const name = typeof q.category === 'string' ? q.category : ''
-    if (!name || name.includes('\\') || name.includes('/')) {
+    const name = normalizeRelDir(q.category)
+    if (!name) {
       throw new BizError('BAD_REQUEST', '类目录名不对')
     }
     const [catRoot] = await findActiveRootsByKind('CATEGORY')
@@ -264,7 +269,7 @@ export async function filesForAction(query: GalleryQueryDTO, imageIds: number[])
   const wanted = new Set(imageIds)
   let rows: GalleryRow[]
   if (query?.view === 'source' || query?.view === 'category') {
-    const scope = await toFilter({ view: query.view, sourceId: query.sourceId, category: query.category, onlyHere: query.onlyHere, sort: 'new' })
+    const scope = await toFilter({ view: query.view, sourceId: query.sourceId, sub: query.sub, category: query.category, onlyHere: query.onlyHere, sort: 'new' })
     rows = (await findGalleryRows(scope)).filter((r) => wanted.has(r.imageId))
   } else {
     rows = await findRowsOfImages(imageIds)
@@ -338,6 +343,17 @@ export async function openFileWithDefault(fileId: number): Promise<void> {
   if (err) {
     throw new BizError('DEPENDENCY_FAILED', `打不开：${err}`)
   }
+}
+
+// 把一张图复制到剪贴板（可以直接粘贴进聊天软件、画图）；系统解不了的格式（RAW、HEIC 等）报错
+export async function copyImageToClipboard(fileId: number): Promise<void> {
+  const abs = await filePathOf(fileId)
+  const img = nativeImage.createFromPath(abs)
+  if (img.isEmpty()) {
+    throw new BizError('DEPENDENCY_FAILED', '这种格式没法复制成图片')
+  }
+  // Electron 45 的剪贴板是异步、按 MIME 类型写的（W3C 风格）
+  await clipboard.write([new ClipboardItem({ 'image/png': new Blob([img.toPNG()], { type: 'image/png' }) })])
 }
 
 // 在资源管理器里打开文件所在的文件夹并选中它

@@ -5,7 +5,7 @@ import { BizError } from '../common/bizError'
 import { getLogger } from '../common/logger'
 import { isSkippedDir, isWithin } from '../common/pathUtil'
 import { toLibraryRootVO, toSidebarCountsVO, toSourceRootVO } from '../converter/libraryConverter'
-import { countImagesByRoot, countImagesByTopFolder, countOverview } from '../repositories/libraryOverviewRepository'
+import { countImagesByChildFolder, countImagesByRoot, countOverview } from '../repositories/libraryOverviewRepository'
 import {
   findActiveRootById,
   findActiveRoots,
@@ -65,7 +65,7 @@ async function listCategoryDirs(home: string): Promise<CategoryDirVO[]> {
     return []
   }
   const [catRoot] = await findActiveRootsByKind('CATEGORY')
-  const counts = catRoot ? await countImagesByTopFolder(catRoot.id) : new Map<string, number>()
+  const counts = catRoot ? await countImagesByChildFolder(catRoot.id, '') : new Map<string, number>()
   return Promise.all(
     names.map(async (name) => ({
       name,

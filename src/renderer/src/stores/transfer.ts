@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { TransferResultVO, TransferRootsVO } from '@shared/api'
+import type { GalleryQueryDTO, TransferResultVO, TransferRootsVO } from '@shared/api'
 import { copyImages, fetchTransferRoots, moveImages, undoTransfer } from '@/api/files'
 import { fetchImageDetail } from '@/api/gallery'
 import { useGalleryStore } from './gallery'
@@ -98,25 +98,34 @@ export const useTransferStore = defineStore('transfer', {
     // 执行：成功后刷新列表，提示条上可以撤销；有失败的报原因
     async confirm(): Promise<void> {
       const gallery = useGalleryStore()
-      const toast = useToastStore()
       const query = gallery.query()
       const mode = this.mode
       if (!query || !mode || this.picked.length === 0 || this.busy) {
         return
       }
       this.busy = true
-      // 都是响应式数组，IPC 只能传普通数组
-      const ids = [...gallery.targets()]
-      const picked = [...this.picked]
-      try {
-        const res = mode === 'move' ? await moveImages(query, ids, picked[0]) : await copyImages(query, ids, picked)
-        this.busy = false
+      const ok = await this.runDirect(mode, query, gallery.targets(), this.picked)
+      this.busy = false
+      if (ok) {
         this.mode = null
+      }
+    },
+    // 执行移动 / 复制（对话框确认、拖到侧栏源目录上都走这里）；成功返回 true
+    async runDirect(mode: TransferMode, query: GalleryQueryDTO, rawIds: number[], rawTargets: string[]): Promise<boolean> {
+      const gallery = useGalleryStore()
+      const toast = useToastStore()
+      // 都可能是响应式数组，IPC 只能传普通数组
+      const ids = [...rawIds]
+      const targets = [...rawTargets]
+      this.imageCount = ids.length
+      try {
+        const res = mode === 'move' ? await moveImages(query, ids, targets[0]) : await copyImages(query, ids, targets)
         await gallery.afterEdit()
-        this.report(mode, res, picked)
+        this.report(mode, res, targets)
+        return true
       } catch (err) {
-        this.busy = false
         toast.show(errText(err), 'error')
+        return false
       }
     },
     // 结果提示：全失败、部分失败报红；都在原处时说明没动；成功带撤销
@@ -131,7 +140,8 @@ export const useTransferStore = defineStore('transfer', {
         toast.show(mode === 'move' ? '已经在这个目录里了' : '这些目录里已经有了')
         return
       }
-      const text = mode === 'move' ? `已移动 ${res.done} 张到「${lastName(picked[0])}」` : `已复制 ${this.imageCount} 张到 ${picked.length} 个目录`
+      const where = picked.length === 1 ? `「${lastName(picked[0])}」` : ` ${picked.length} 个目录`
+      const text = mode === 'move' ? `已移动 ${res.done} 张到「${lastName(picked[0])}」` : `已复制 ${this.imageCount} 张到${where}`
       const batchId = res.batchId
       toast.show(
         text,

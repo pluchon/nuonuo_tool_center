@@ -17,36 +17,93 @@
         </button>
       </div>
       <div class="side-nav__rows">
-        <div v-for="row in sec.rows" :key="row.key" class="side-nav__row">
-          <button
-            class="side-nav__item"
-            :class="{ 'side-nav__item--on': row.active, 'side-nav__item--tree': row.tree }"
-            type="button"
-            :disabled="row.disabled"
-            :aria-current="row.active ? 'page' : undefined"
-            @click="row.go"
+        <template v-for="row in sec.rows" :key="row.key">
+          <div
+            v-if="row.type === 'item'"
+            class="side-nav__row"
+            :class="{ 'side-nav__row--drop': gallery.dropKey === row.key }"
+            @contextmenu="onContextMenu(row, $event)"
+            @dragover="onDragOver(row, $event)"
+            @dragleave="onDragLeave(row)"
+            @drop="onDrop(row, $event)"
           >
-            <span v-if="row.tree" class="side-nav__caret" :style="{ visibility: row.hasChildren ? 'visible' : 'hidden' }" aria-hidden="true">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6" /></svg>
-            </span>
-            <svg
-              class="side-nav__icon"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              :stroke="row.active ? 'var(--a-ink)' : row.ink"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
+            <span
+              v-for="(g, i) in row.guides"
+              :key="i"
+              class="side-nav__guide"
+              :style="{ left: g.left, top: g.top, height: g.height, width: g.width, borderBottomStyle: g.bottom ? 'solid' : 'none', borderRadius: g.radius }"
               aria-hidden="true"
+            />
+            <button
+              class="side-nav__item"
+              :class="{ 'side-nav__item--on': row.active, 'side-nav__item--tree': row.tree }"
+              :style="row.depth ? { marginLeft: `${row.depth * 14 + 2}px`, paddingLeft: '2px' } : undefined"
+              type="button"
+              :disabled="row.disabled"
+              :aria-current="row.active ? 'page' : undefined"
+              @click="row.go"
             >
-              <path :d="row.icon" />
-            </svg>
-            <span class="side-nav__label" :style="row.labelInk ? { color: row.labelInk } : undefined">{{ row.label }}</span>
-            <span class="side-nav__count" :style="row.countInk ? { color: row.countInk } : undefined">{{ row.count }}</span>
-          </button>
-        </div>
+              <span
+                v-if="row.tree"
+                class="side-nav__caret"
+                :class="{ 'side-nav__caret--open': row.expanded }"
+                :style="{ visibility: row.hasChildren ? 'visible' : 'hidden' }"
+                role="button"
+                :aria-label="row.expanded ? '收起' : '展开'"
+                :aria-expanded="row.expanded"
+                @click="onToggle(row, $event)"
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+              </span>
+              <svg
+                class="side-nav__icon"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                :stroke="row.active ? 'var(--a-ink)' : row.ink"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path :d="row.icon" />
+              </svg>
+              <span class="side-nav__label" :style="row.labelInk ? { color: row.labelInk } : undefined">{{ row.label }}</span>
+              <span class="side-nav__count" :style="row.countInk ? { color: row.countInk } : undefined">{{ row.count }}</span>
+            </button>
+          </div>
+
+          <div v-else class="side-nav__edit-wrap">
+            <span
+              v-for="(g, i) in row.guides"
+              :key="i"
+              class="side-nav__guide"
+              :style="{ left: g.left, top: g.top, height: g.height, width: g.width, borderBottomStyle: g.bottom ? 'solid' : 'none', borderRadius: g.radius }"
+              aria-hidden="true"
+            />
+            <label
+              class="side-nav__edit"
+              :style="{ marginLeft: row.depth ? `${row.depth * 14 + 2}px` : '0px', borderColor: folders.draftOver ? 'var(--c-b-A23D62)' : row.ink }"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" :stroke="row.ink" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="side-nav__icon">
+                <path :d="row.icon" />
+              </svg>
+              <span class="side-nav__sr">目录名</span>
+              <input
+                class="side-nav__edit-input"
+                :value="folders.draft"
+                :placeholder="row.placeholder"
+                :style="{ caretColor: row.ink }"
+                @input="onDraft"
+                @keydown="onDraftKey"
+                @blur="onDraftBlur"
+              />
+              <span class="side-nav__edit-len" :class="{ 'side-nav__edit-len--over': folders.draftOver }">{{ draftLen }}/{{ maxName }}</span>
+            </label>
+            <span v-if="folders.draftOver" class="side-nav__edit-over" role="alert">最多 {{ maxName }} 个字</span>
+          </div>
+        </template>
         <span v-if="!sec.rows.length && sec.hint" class="side-nav__hint">{{ sec.hint }}</span>
       </div>
     </section>

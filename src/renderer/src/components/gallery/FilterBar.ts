@@ -2,6 +2,7 @@ import { computed, defineComponent, onBeforeUnmount, ref, watch } from 'vue'
 import { FILTER_MAX, type DirCountVO, type DirKeyDTO, type MoreFilterDTO } from '@shared/api'
 import type { SortKey } from '@shared/settings'
 import { fetchUntaggedDirs } from '@/api/edit'
+import { useFoldersStore } from '@/stores/folders'
 import { useGalleryStore } from '@/stores/gallery'
 import { useLibraryStore } from '@/stores/library'
 import { useTagsStore } from '@/stores/tags'
@@ -96,6 +97,7 @@ export default defineComponent({
     const gallery = useGalleryStore()
     const viewStore = useViewStore()
     const library = useLibraryStore()
+    const folders = useFoldersStore()
     const tagsStore = useTagsStore()
     const draft = ref(gallery.q)
     const open = ref<'tag' | 'dir' | 'more' | 'sort' | null>(null)
@@ -124,10 +126,7 @@ export default defineComponent({
       if (viewStore.view !== 'dir' || !dir) {
         return false
       }
-      const ov = library.overview
-      return dir.kind === 'source'
-        ? (ov?.sources.find((s) => s.id === dir.id)?.hasChildren ?? false)
-        : (ov?.categories.find((c) => c.name === dir.name)?.hasChildren ?? false)
+      return folders.hasChildren(dir)
     })
 
     // “还没打标签”的目录项：进入这个视图、列表刷新后重新读

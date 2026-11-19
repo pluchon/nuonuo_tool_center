@@ -1,6 +1,6 @@
 import { and, asc, eq } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
-import { libraryRoot } from '../db/schema'
+import { imageFile, libraryRoot } from '../db/schema'
 
 export type LibraryRootEntity = typeof libraryRoot.$inferSelect
 export type NewLibraryRoot = typeof libraryRoot.$inferInsert
@@ -43,6 +43,15 @@ export async function updateRootPath(id: number, path: string): Promise<LibraryR
 export async function updateRootLastScan(id: number, at: Date): Promise<void> {
   const { db } = getDatabase()
   await db.update(libraryRoot).set({ lastScanAt: at }).where(eq(libraryRoot.id, id))
+}
+
+// 从图库移除一个目录：目录和它下面的文件记录都逻辑删除（磁盘上的文件不动；图片记录和标签保留，重新导入后按哈希认回）
+export async function removeRootWithFiles(id: number): Promise<void> {
+  const { db } = getDatabase()
+  await db.transaction(async (tx) => {
+    await tx.update(imageFile).set({ deleteState: 1 }).where(and(eq(imageFile.rootId, id), eq(imageFile.deleteState, 0)))
+    await tx.update(libraryRoot).set({ deleteState: 1 }).where(eq(libraryRoot.id, id))
+  })
 }
 
 // 新增目录

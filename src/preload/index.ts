@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import {
   IpcChannel,
   IpcEvent,
@@ -21,6 +21,8 @@ import {
   type DeleteResultVO,
   type FileOpDoneVO,
   type TransferResultVO,
+  type DirNodeVO,
+  type FolderRefDTO,
   type TransferRootsVO,
   type SaveTagDTO,
   type DirCountVO,
@@ -65,6 +67,9 @@ const api = {
     commonTags: (imageIds: number[]): Promise<ApiResponse<ImageTagVO[]>> => ipcRenderer.invoke(IpcChannel.imageCommonTags, imageIds)
   },
   files: {
+    // 拖进窗口的文件或文件夹在磁盘上的路径（Electron 新版本里 File 不再带 path）
+    pathOf: (file: File): string => webUtils.getPathForFile(file),
+    copyImage: (fileId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.fileCopyImage, fileId),
     remove: (query: GalleryQueryDTO, imageIds: number[]): Promise<ApiResponse<DeleteResultVO>> =>
       ipcRenderer.invoke(IpcChannel.fileDelete, query, imageIds),
     undoDelete: (batchId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.fileUndoDelete, batchId),
@@ -80,6 +85,14 @@ const api = {
       ipcRenderer.on(IpcEvent.fileOpDone, handler)
       return () => ipcRenderer.removeListener(IpcEvent.fileOpDone, handler)
     }
+  },
+  folders: {
+    children: (ref: FolderRefDTO): Promise<ApiResponse<DirNodeVO[]>> => ipcRenderer.invoke(IpcChannel.libraryDirChildren, ref),
+    create: (parent: FolderRefDTO, name: string | null): Promise<ApiResponse<string>> => ipcRenderer.invoke(IpcChannel.folderCreate, parent, name),
+    rename: (ref: FolderRefDTO, name: string): Promise<ApiResponse<string>> => ipcRenderer.invoke(IpcChannel.folderRename, ref, name),
+    remove: (ref: FolderRefDTO): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.folderDelete, ref),
+    open: (ref: FolderRefDTO): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.folderOpen, ref),
+    removeSource: (id: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.sourceRemove, id)
   },
   tags: {
     create: (dto: CreateTagDTO): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.tagCreate, dto),

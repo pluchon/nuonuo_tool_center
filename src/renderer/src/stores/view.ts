@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import type { FolderRefDTO } from '@shared/api'
 
 // 图库视图：全部图片 / 还没打标签 / 最近导入 / R-18 图 / 某个目录
 export type GalleryView = 'all' | 'untagged' | 'recent' | 'r18' | 'dir'
@@ -6,8 +7,40 @@ export type GalleryView = 'all' | 'untagged' | 'recent' | 'r18' | 'dir'
 // 主区页面：图库，或标签管理
 export type MainPage = 'gallery' | 'tags'
 
-// 正在看的目录：源目录按 id，类目录按顶层文件夹名
-export type DirRef = { kind: 'source'; id: number } | { kind: 'category'; name: string }
+// 正在看的目录：源目录按 id（sub 是子文件夹，空表示整个源目录），类目录按相对图库文件夹的路径（可以带子目录）
+export type DirRef = { kind: 'source'; id: number; sub?: string } | { kind: 'category'; name: string }
+
+// 目录引用换成主进程用的格式
+export function toFolderRef(dir: DirRef): FolderRefDTO {
+  return dir.kind === 'source' ? { kind: 'source', id: dir.id, sub: dir.sub ?? '' } : { kind: 'category', path: dir.name }
+}
+
+// 两个目录是不是同一个（不区分大小写）
+export function sameDir(a: DirRef | null, b: DirRef | null): boolean {
+  if (!a || !b || a.kind !== b.kind) {
+    return false
+  }
+  if (a.kind === 'source' && b.kind === 'source') {
+    return a.id === b.id && (a.sub ?? '').toLowerCase() === (b.sub ?? '').toLowerCase()
+  }
+  return a.kind === 'category' && b.kind === 'category' && a.name.toLowerCase() === b.name.toLowerCase()
+}
+
+// dir 是不是 parent 本身或在它下面
+export function dirWithin(dir: DirRef | null, parent: FolderRefDTO): boolean {
+  if (!dir) {
+    return false
+  }
+  const under = (rel: string, base: string): boolean => {
+    const r = rel.toLowerCase()
+    const b = base.toLowerCase()
+    return b === '' || r === b || r.startsWith(`${b}\\`)
+  }
+  if (dir.kind === 'source' && parent.kind === 'source') {
+    return dir.id === parent.id && under(dir.sub ?? '', parent.sub)
+  }
+  return dir.kind === 'category' && parent.kind === 'category' && under(dir.name, parent.path)
+}
 
 // 当前页面和视图（和原型一样是单页切换，不用路由）
 export const useViewStore = defineStore('view', {

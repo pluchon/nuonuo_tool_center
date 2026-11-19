@@ -68,6 +68,32 @@ export default defineComponent({
     // 行很多时让浏览器跳过屏幕外的行（缩略图本身也是懒加载）
     const rowStyle = computed(() => ({ containIntrinsicSize: `auto ${gallery.rowHeight + 40}px` }))
 
+    // 开始拖：跟手的是一个小方块缩略图，多张时角上显示张数（只能拖到侧栏的源目录上）
+    const onDragStart = (e: DragEvent, id: number): void => {
+      const ids = gallery.startDrag(id)
+      if (!e.dataTransfer) {
+        return
+      }
+      e.dataTransfer.effectAllowed = 'copyMove'
+      e.dataTransfer.setData('application/x-ltm-images', ids.join(','))
+      const ghost = document.createElement('div')
+      ghost.className = 'drag-ghost'
+      const pic = item(id)
+      if (pic.thumb === 'READY') {
+        ghost.style.backgroundImage = `url("${thumbUrl(pic.hash)}")`
+      }
+      if (ids.length > 1) {
+        const badge = document.createElement('span')
+        badge.className = 'drag-ghost__count'
+        badge.textContent = String(ids.length)
+        ghost.appendChild(badge)
+      }
+      document.body.appendChild(ghost)
+      e.dataTransfer.setDragImage(ghost, 28, 28)
+      // 浏览器截完拖动图后就可以移走
+      setTimeout(() => ghost.remove(), 0)
+    }
+
     const onTileClick = (e: MouseEvent, id: number): void => {
       gridRef.value?.focus({ preventScroll: true })
       if (e.shiftKey) {
@@ -127,6 +153,12 @@ export default defineComponent({
         gallery.askDelete()
         return
       }
+      // Ctrl + C：把选中的这张图复制到剪贴板
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+        e.preventDefault()
+        void gallery.copyToClipboard()
+        return
+      }
       const order = gallery.items.map((i) => i.imageId)
       if (order.length === 0) {
         return
@@ -179,6 +211,6 @@ export default defineComponent({
       }
     )
 
-    return { gallery, gridRef, groups, rowStyle, item, masked, thumbUrl, onTileClick, onWheel }
+    return { gallery, gridRef, groups, rowStyle, item, masked, thumbUrl, onTileClick, onDragStart, onWheel }
   }
 })

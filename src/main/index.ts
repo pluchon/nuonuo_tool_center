@@ -10,6 +10,7 @@ import { handleLtmProtocol, registerLtmSchemePrivileges } from './protocol/ltmPr
 import { bootDatabase, shutdownDatabase, type DatabaseLocation } from './services/databaseService'
 import { configureFileOps, flushPendingDeletes, recoverFileOps } from './services/fileOps/fileOpsService'
 import { configureTransfer } from './services/fileOps/transferService'
+import { configureFolderOps } from './services/fileOps/folderOpsService'
 import { configureScan, onScanState, startScan, stopScanAndWait } from './services/scan/scanService'
 import { getSettings } from './services/settingsService'
 import { windowBackground } from './window/windowControl'
@@ -143,6 +144,7 @@ async function bootstrap(): Promise<void> {
   onScanState(broadcastScanState)
   configureFileOps({ trash: trashFunction(), onDone: broadcastFileOpDone })
   configureTransfer(paths.categoryHomeOverride)
+  configureFolderOps(paths.categoryHomeOverride)
   registerIpcHandlers(paths, dbLocation)
   if (state === 'READY') {
     // 上次没做完的文件操作（崩溃、断电）先按日志补做，再扫描

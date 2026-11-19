@@ -223,8 +223,9 @@ async function settleTransferOp(op: FileOpEntity): Promise<string | null> {
   }
   const to = await stat(op.toPath).catch(() => null)
   const from = await stat(op.fromPath).catch(() => null)
-  const complete = !!to && (op.opType === 'MOVE' ? !from : !!from && from.size === to.size)
-  if (to && !complete && from) {
+  // 复制看大小是否一致；移动、改名看来源是否已经不在
+  const complete = !!to && (op.opType === 'COPY' ? !!from && from.size === to.size : !from)
+  if (to && to.isFile() && !complete && from) {
     await unlink(op.toPath).catch((err: unknown) => log.warn(`清理没做完的目标文件失败：${op.toPath}`, err))
   }
   await updateOpStatus(db, op.id, complete ? 'DONE' : 'REVERTED')

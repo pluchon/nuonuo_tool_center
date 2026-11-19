@@ -44,6 +44,13 @@ export const IpcChannel = {
   fileMove: 'file:move',
   fileCopy: 'file:copy',
   fileUndoTransfer: 'file:undoTransfer',
+  libraryDirChildren: 'library:dirChildren',
+  folderCreate: 'folder:create',
+  folderRename: 'folder:rename',
+  folderDelete: 'folder:delete',
+  folderOpen: 'folder:open',
+  sourceRemove: 'source:remove',
+  fileCopyImage: 'file:copyImage',
   windowSetTheme: 'window:setTheme',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',
@@ -92,6 +99,21 @@ export interface CategoryDirVO {
   count: number
   hasChildren: boolean
 }
+
+// 侧栏目录树里的一个目录：源目录（按 id + 子路径）或类目录（相对图库文件夹的路径；空串表示图库文件夹本身）
+export type FolderRefDTO = { kind: 'source'; id: number; sub: string } | { kind: 'category'; path: string }
+
+// 侧栏目录树展开后的一个子目录
+export interface DirNodeVO {
+  name: string
+  // 相对所属根目录的路径（源目录相对源目录，类目录相对图库文件夹）
+  rel: string
+  count: number
+  hasChildren: boolean
+}
+
+// 目录名最多几个字（和图片名一样）
+export const DIR_NAME_MAX = 15
 
 // 侧栏和底栏需要的全部数据
 export interface LibraryOverviewVO {
@@ -158,7 +180,9 @@ export interface GalleryQueryDTO {
   view: GalleryViewKey
   // view = source 时的源目录 id
   sourceId?: number
-  // view = category 时的顶层类目录名
+  // view = source 时的子文件夹（相对源目录，用反斜杠分隔；空表示整个源目录）
+  sub?: string
+  // view = category 时的类目录（相对图库文件夹的路径，可以带子目录，用反斜杠分隔）
   category?: string
   // 按图片名（全部图片、R-18、类目录里还按标签名）搜索
   q?: string

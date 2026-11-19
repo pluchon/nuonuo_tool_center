@@ -49,3 +49,33 @@ body {
   --r18-row-bg: rgba(194, 51, 90, 0.16);
   --r18-row-line: rgba(194, 51, 90, 0.35);
 }
+
+// 拖图片时跟手的小方块（拖动图要放在 body 下才能截到，所以写成全局样式）
+.drag-ghost {
+  position: fixed;
+  top: -200px;
+  left: -200px;
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  background: var(--c-b-F4F0FA) center / cover no-repeat;
+  border: 2px solid #ffffff;
+  box-shadow: 0 6px 16px rgba(var(--sh), 0.25);
+}
+
+.drag-ghost__count {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--a);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+}

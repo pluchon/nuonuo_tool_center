@@ -1,12 +1,28 @@
 import { BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import { IpcChannel, type AddTagDTO, type CreateTagDTO, type GalleryQueryDTO, type SaveTagDTO, type ThemeMode } from '@shared/api'
+import {
+  IpcChannel,
+  type AddTagDTO,
+  type CreateTagDTO,
+  type FolderRefDTO,
+  type GalleryQueryDTO,
+  type SaveTagDTO,
+  type ThemeMode
+} from '@shared/api'
 import type { DataPaths } from '../config/paths'
 import { BizError } from '../common/bizError'
 import { bootDatabase, getDbBootState, type DatabaseLocation } from '../services/databaseService'
 import { deleteImages, recoverFileOps, undoDelete } from '../services/fileOps/fileOpsService'
 import { copyImages, moveImages, undoTransfer } from '../services/fileOps/transferService'
-import { listFolders, transferRoots } from '../services/folderService'
-import { getImageDetail, listGallery, listUntaggedDirs, openFileWithDefault, showFileInFolder } from '../services/galleryService'
+import { createFolder, deleteCategoryFolder, removeSource, renameCategoryFolder } from '../services/fileOps/folderOpsService'
+import { dirChildren, listFolders, openFolder, transferRoots } from '../services/folderService'
+import {
+  copyImageToClipboard,
+  getImageDetail,
+  listGallery,
+  listUntaggedDirs,
+  openFileWithDefault,
+  showFileInFolder
+} from '../services/galleryService'
 import { addTag, getCommonTags, getTagCatalog, removeTag, renameImage, setR18 } from '../services/imageEditService'
 import { addRoot, getOverview, relocateRoot } from '../services/libraryService'
 import {
@@ -180,6 +196,34 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   handle(IpcChannel.fileUndoTransfer, async (_event, batchId: number) => {
     requireDatabase()
     return undoTransfer(batchId)
+  })
+  handle(IpcChannel.libraryDirChildren, async (_event, ref: FolderRefDTO) => {
+    requireDatabase()
+    return dirChildren(ref)
+  })
+  handle(IpcChannel.folderCreate, async (_event, parent: FolderRefDTO, name: string | null) => {
+    requireDatabase()
+    return createFolder(parent, name)
+  })
+  handle(IpcChannel.folderRename, async (_event, ref: FolderRefDTO, name: string) => {
+    requireDatabase()
+    return renameCategoryFolder(ref, name)
+  })
+  handle(IpcChannel.folderDelete, async (_event, ref: FolderRefDTO) => {
+    requireDatabase()
+    return deleteCategoryFolder(ref)
+  })
+  handle(IpcChannel.folderOpen, async (_event, ref: FolderRefDTO) => {
+    requireDatabase()
+    await openFolder(ref)
+  })
+  handle(IpcChannel.fileCopyImage, async (_event, fileId: number) => {
+    requireDatabase()
+    await copyImageToClipboard(fileId)
+  })
+  handle(IpcChannel.sourceRemove, async (_event, id: number) => {
+    requireDatabase()
+    await removeSource(id)
   })
   handle(IpcChannel.fileOpen, async (_event, fileId: number) => {
     requireDatabase()

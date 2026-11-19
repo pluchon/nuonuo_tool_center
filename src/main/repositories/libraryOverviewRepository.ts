@@ -1,6 +1,6 @@
 import { and, eq, ne, sql } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
-import { col } from '../db/sqlUtil'
+import { col, likeEscape } from '../db/sqlUtil'
 import { image, imageFile, imageTag, tag } from '../db/schema'
 
 // 侧栏用的各项计数（未拆出“还没打标签”，由服务层用 total - tagged 得到）
@@ -45,14 +45,20 @@ export async function countImagesByRoot(): Promise<Map<number, number>> {
   return new Map(rows.map((r) => [r.rootId, r.n]))
 }
 
-// 类目录根下每个顶层文件夹的图片数
-export async function countImagesByTopFolder(rootId: number): Promise<Map<string, number>> {
+// 某个目录（prefix 为相对根目录的路径，空串表示根目录本身）下每个直接子文件夹的图片数（含更深的子目录）
+export async function countImagesByChildFolder(rootId: number, prefix: string): Promise<Map<string, number>> {
   const { db } = getDatabase()
-  const top = sql<string>`split_part(${imageFile.relPath}, '\\', 1)`
+  const rest = prefix ? sql`substr(${imageFile.relPath}, ${prefix.length + 2})` : sql`${imageFile.relPath}`
+  const child = sql<string>`split_part(${rest}, '\\', 1)`
+  const conds = [eq(imageFile.rootId, rootId), eq(imageFile.deleteState, 0), ne(imageFile.status, 'DELETED'), sql`strpos(${rest}, '\\') > 0`]
+  if (prefix) {
+    conds.push(sql`lower(${imageFile.relPath}) like ${likeEscape(prefix.toLowerCase()) + '\\\\%'}`)
+  }
   const rows = await db
-    .select({ top, n: sql<number>`count(distinct ${imageFile.imageId})::int` })
+    .select({ child, n: sql<number>`count(distinct ${imageFile.imageId})::int` })
     .from(imageFile)
-    .where(and(eq(imageFile.rootId, rootId), eq(imageFile.deleteState, 0), ne(imageFile.status, 'DELETED')))
-    .groupBy(top)
-  return new Map(rows.map((r) => [r.top.toLowerCase(), r.n]))
+    .where(and(...conds))
+    // 按第 1 列分组：子路径表达式里带参数，select 和 group by 里各算一个占位符，Postgres 认不出是同一个表达式
+    .groupBy(sql`1`)
+  return new Map(rows.map((r) => [r.child.toLowerCase(), r.n]))
 }

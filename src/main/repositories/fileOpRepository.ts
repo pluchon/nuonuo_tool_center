@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import type { AppDatabase } from '../db/client'
 import { getDatabase } from '../db/client'
 import { fileOp, fileOpBatch, imageFile } from '../db/schema'
+import { likeEscape } from '../db/sqlUtil'
 
 export type FileOpBatchEntity = typeof fileOpBatch.$inferSelect
 export type FileOpEntity = typeof fileOp.$inferSelect
@@ -13,7 +14,8 @@ type Db = AppDatabase | Tx
 // 一步要写进日志的文件操作
 export interface PlannedOp {
   opType: FileOpEntity['opType']
-  imageFileId: number
+  // 整个文件夹的操作（改名、删除类目录）没有对应的文件记录
+  imageFileId: number | null
   fromPath: string
   toPath: string | null
   contentHash: string
@@ -150,6 +152,45 @@ export async function findImagesInDir(dbx: Db, imageIds: number[], rootId: numbe
       )
     )
   return new Set(rows.map((r) => r.imageId))
+}
+
+// 某个文件夹下（含子目录）文件的条件：相对路径以 “prefix\” 开头（不区分大小写）
+function underPrefix(rootId: number, prefix: string) {
+  return and(eq(imageFile.rootId, rootId), eq(imageFile.deleteState, 0), sql`lower(${imageFile.relPath}) like ${likeEscape(prefix.toLowerCase()) + '\\\\%'}`)
+}
+
+// 文件夹改名：下面所有文件记录的相对路径前缀跟着换
+export async function renameRowsUnder(dbx: Db, rootId: number, oldPrefix: string, newPrefix: string): Promise<void> {
+  await dbx
+    .update(imageFile)
+    .set({ relPath: sql`${newPrefix} || substr(${imageFile.relPath}, ${oldPrefix.length + 1})` })
+    .where(underPrefix(rootId, oldPrefix))
+}
+
+// 整个文件夹要进回收站：下面的文件记录先藏起来，返回它们的 id
+export async function hideRowsUnder(dbx: Db, rootId: number, prefix: string): Promise<number[]> {
+  const rows = await dbx
+    .update(imageFile)
+    .set({ status: 'DELETED' })
+    .where(underPrefix(rootId, prefix))
+    .returning({ id: imageFile.id, imageId: imageFile.imageId })
+  return rows.map((r) => r.id)
+}
+
+// 文件夹已进回收站：下面藏起来的记录逻辑删除
+export async function retireRowsUnder(dbx: Db, rootId: number, prefix: string): Promise<void> {
+  await dbx
+    .update(imageFile)
+    .set({ deleteState: 1 })
+    .where(and(underPrefix(rootId, prefix), eq(imageFile.status, 'DELETED')))
+}
+
+// 文件夹没删掉：藏起来的记录恢复正常
+export async function unhideRowsUnder(dbx: Db, rootId: number, prefix: string): Promise<void> {
+  await dbx
+    .update(imageFile)
+    .set({ status: 'NORMAL' })
+    .where(and(underPrefix(rootId, prefix), eq(imageFile.status, 'DELETED')))
 }
 
 // 某个目录下正在等着进回收站的文件（相对路径）：扫描时跳过它们

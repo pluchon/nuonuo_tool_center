@@ -34,7 +34,10 @@
           :aria-label="item(t.id).name"
           :aria-pressed="gallery.isSelected(t.id)"
           :style="{ width: `${t.width}px` }"
+          :draggable="!item(t.id).missing && !item(t.id).offline"
           @click="onTileClick($event, t.id)"
+          @dragstart="onDragStart($event, t.id)"
+          @dragend="gallery.endDrag()"
         >
           <span
             class="tile__chk"
