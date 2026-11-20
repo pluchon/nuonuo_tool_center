@@ -6,10 +6,10 @@ import { afterEach, describe, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance } from './support/app'
 import { importFolder } from './support/picker'
 
-// README 里的界面截图：用画出来的风景图建一个示例图库，浅色、深色各截一张。只在 LTM_SHOTS=1 时跑
+// README 里的界面截图：用画出来的风景图建一个示例图库，浅色、深色各截一张，存到 test-output/readme-shots/，再手动传 OSS。只在 LTM_SHOTS=1 时跑
 sharp.cache(false)
 const run = process.env.LTM_SHOTS === '1' ? it : it.skip
-const OUT = resolve('docs/images')
+const OUT = resolve('test-output/readme-shots')
 
 afterEach(async () => {
   await closeLeftoverApps()

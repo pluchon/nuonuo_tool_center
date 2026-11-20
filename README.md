@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/readme-hero.jpg" alt="诺诺的图床" width="100%" />
+  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/readme-hero.jpg" alt="诺诺的图床" width="100%" />
 </p>
 
 <p align="center">一个只在自己电脑上运行的图库管理工具：把散在各处的图片文件夹收进来，起名字、打标签、分类、找图、看大图。</p>
@@ -17,8 +17,8 @@
 诺诺的图床就是为这件事做的。它不搬动你的原图，只在旁边建一份索引：原来的文件夹照旧能用，图库里多了名字、标签、分类和缩略图。所有数据都在本机，不需要账号，也不连服务器。
 
 <p align="center">
-  <img src="docs/images/screenshot-light.png" alt="浅色界面" width="49%" />
-  <img src="docs/images/screenshot-dark.png" alt="深色界面" width="49%" />
+  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/screenshot-light.png" alt="浅色界面" width="49%" />
+  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/screenshot-dark.png" alt="深色界面" width="49%" />
 </p>
 
 ## 能做什么
