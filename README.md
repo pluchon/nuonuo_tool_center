@@ -49,7 +49,7 @@
 整个应用分三层：界面只负责显示和交互，所有读写文件、数据库的事都在主进程里做，两边通过一组有类型的 IPC 接口说话。图片本身不经过 IPC，界面用自定义协议 `ltm://` 直接取缩略图和原图。
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph R["界面（Vue 3 + Pinia）"]
         V["网格 / 详情 / 大图 / 设置"]
     end
