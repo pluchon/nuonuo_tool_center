@@ -27,6 +27,8 @@ export default defineComponent({
     // 原图读不到（文件不见了、目录离线）时退回缩略图
     const originalFailed = ref(false)
     const thumbFailed = ref(false)
+    // 当前这张读完了没有：读完之前先垫着缩略图，读完再淡入（换图不闪黑）
+    const picReady = ref(false)
 
     const zoom = ref(100)
     const rot = ref(0)
@@ -39,6 +41,11 @@ export default defineComponent({
     const item = computed(() => gallery.primaryItem ?? null)
     const multi = computed(() => gallery.items.length > 1)
     const title = computed(() => Array.from(item.value?.name ?? '').slice(0, TITLE_MAX).join(''))
+    // 标题旁的“第几张 / 共几张”
+    const position = computed(() => {
+      const i = gallery.items.findIndex((x) => x.imageId === gallery.primary)
+      return i < 0 || gallery.items.length < 2 ? '' : `${i + 1} / ${gallery.items.length}`
+    })
 
     // 显示什么：原图 / 缩略图（格式浏览器显示不了，或原图读不到）/ 都没有
     const source = computed<{ kind: 'original' | 'thumb' | 'none'; src: string }>(() => {
@@ -53,6 +60,15 @@ export default defineComponent({
         return { kind: 'thumb', src: thumbUrl(it.hash) }
       }
       return { kind: 'none', src: '' }
+    })
+
+    // 原图还没读完时垫在下面的缩略图
+    const placeholder = computed(() => {
+      const it = item.value
+      if (source.value.kind !== 'original' || picReady.value || !it || it.thumb !== 'READY' || thumbFailed.value) {
+        return ''
+      }
+      return thumbUrl(it.hash)
     })
 
     // 舞台上方的一行说明（只看得到缩略图时）
@@ -71,7 +87,7 @@ export default defineComponent({
         width: `${natW.value * fit.value}px`,
         height: `${natH.value * fit.value}px`,
         transform: `translate(${panX.value}px, ${panY.value}px) scale(${s * (flipped.value ? -1 : 1)}, ${s}) rotate(${rot.value}deg)`,
-        transition: dragging.value ? 'none' : 'transform 0.2s'
+        transition: dragging.value ? 'opacity 0.2s' : 'transform 0.2s, opacity 0.2s'
       }
     })
 
@@ -117,8 +133,30 @@ export default defineComponent({
       flipped.value = !flipped.value
     }
 
+    // 预读前后两张的原图，换图时基本不用等（只留最近的两张引用）
+    let preloads: HTMLImageElement[] = []
+    const preloadNeighbors = (): void => {
+      const list = gallery.items
+      const i = list.findIndex((x) => x.imageId === gallery.primary)
+      if (i < 0 || list.length < 2) {
+        return
+      }
+      preloads = [list[(i + 1) % list.length], list[(i - 1 + list.length) % list.length]]
+        .filter((x) => canShowOriginal(x.format))
+        .map((x) => {
+          const img = new Image()
+          img.decoding = 'async'
+          img.src = originalUrl(x.fileId, x.hash)
+          return img
+        })
+    }
+
     const onLoad = (e: Event): void => {
       const img = e.target as HTMLImageElement
+      picReady.value = true
+      if (source.value.kind === 'original') {
+        preloadNeighbors()
+      }
       // 缩略图只用来定比例：按库里记的原图宽高算大小，和原图一致
       if (source.value.kind === 'original' || !item.value?.width || !item.value?.height) {
         natW.value = img.naturalWidth
@@ -126,6 +164,7 @@ export default defineComponent({
       }
     }
     const onError = (): void => {
+      picReady.value = false
       if (source.value.kind === 'original') {
         originalFailed.value = true
       } else if (source.value.kind === 'thumb') {
@@ -223,7 +262,8 @@ export default defineComponent({
         e.preventDefault()
         e.stopPropagation()
         viewer.step(e.key === 'ArrowLeft' ? -1 : 1)
-      } else if (e.key === 'Escape') {
+      } else if (e.key === 'Escape' || e.key === ' ') {
+        // Esc 或空格关闭（空格和网格里的空格打开成对，像“快速预览”）
         e.preventDefault()
         e.stopPropagation()
         viewer.close()
@@ -250,6 +290,7 @@ export default defineComponent({
       () => viewer.seq,
       async () => {
         resetView()
+        picReady.value = false
         originalFailed.value = false
         thumbFailed.value = false
         natW.value = item.value?.width ?? 0
@@ -271,6 +312,7 @@ export default defineComponent({
       window.removeEventListener('keydown', onKey, true)
       onMouseUp()
       observer?.disconnect()
+      preloads = []
     })
 
     return {
@@ -278,7 +320,10 @@ export default defineComponent({
       item,
       multi,
       title,
+      position,
       source,
+      placeholder,
+      picReady,
       note,
       zoom,
       flipped,

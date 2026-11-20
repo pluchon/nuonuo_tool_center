@@ -27,8 +27,11 @@ export function handleLtmProtocol(thumbsDir: string, backgroundsDir: string, res
   protocol.handle(LTM_SCHEME, async (request) => {
     const url = new URL(request.url)
     const name = url.pathname.replace(/^\//, '')
+    // 缩略图：先确认文件在（被手动删掉时 net.fetch 会一直挂着），在就照常流式给，不在马上回 404
     if (url.host === 'thumb' && THUMB_NAME.test(name)) {
-      return net.fetch(pathToFileURL(join(thumbsDir, name)).toString())
+      const file = join(thumbsDir, name)
+      const isFile = await stat(file).then((s) => s.isFile(), () => false)
+      return isFile ? net.fetch(pathToFileURL(file).toString()) : new Response('Not Found', { status: 404 })
     }
     // 自定义背景图：只认应用自己生成的文件名；整张读进内存再给（不留文件句柄，换图时旧图马上能删）
     if (url.host === 'bg' && CUSTOM_BACKGROUND_NAME.test(name)) {

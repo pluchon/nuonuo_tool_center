@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { isIgnoredChange, isSelfChange, muteWhile, rootOf, SELF_CHANGE_GRACE_MS } from '../../src/main/services/scan/watchService'
+import { isIgnoredChange, isRootGoneSignal, isSelfChange, muteWhile, rootOf, SELF_CHANGE_GRACE_MS } from '../../src/main/services/scan/watchService'
 
 describe('实时监听', () => {
+  it('被监听的目录自己被删时报的是带 \\?\ 前缀的绝对路径，普通变化是相对路径', () => {
+    expect(isRootGoneSignal('\\\\?\\D:\\pics')).toBe(true)
+    expect(isRootGoneSignal('D:\\pics')).toBe(true)
+    expect(isRootGoneSignal('sub\\a.jpg')).toBe(false)
+    expect(isRootGoneSignal('')).toBe(false)
+  })
+
   it('只关心图片文件和普通文件夹', () => {
     expect(isIgnoredChange('a.JPG')).toBe(false)
     expect(isIgnoredChange('sub\\deep\\b.webp')).toBe(false)

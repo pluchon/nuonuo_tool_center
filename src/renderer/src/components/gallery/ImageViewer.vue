@@ -6,6 +6,7 @@
           <div class="viewer__head">
             <span class="viewer__dot" aria-hidden="true"></span>
             <h2 class="viewer__title" :title="item.name">{{ title }}</h2>
+            <span v-if="position" class="viewer__pos">{{ position }}</span>
             <button ref="closeRef" class="viewer__close" type="button" aria-label="关闭" @click="viewer.close()">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M8.5 8.5l7 7M15.5 8.5l-7 7" /></svg>
             </button>
@@ -22,7 +23,19 @@
             </template>
 
             <div v-if="source.kind !== 'none'" class="viewer__pan" :style="{ cursor }" @mousedown="onMouseDown" @dblclick="onDblClick" @wheel="onWheel">
-              <img :key="source.src" class="viewer__pic nn-appear" :src="source.src" :style="picStyle" alt="" draggable="false" @load="onLoad" @error="onError" />
+              <img v-if="placeholder" class="viewer__ph" :src="placeholder" :style="picStyle" alt="" draggable="false" />
+              <img
+                :key="source.src"
+                class="viewer__pic"
+                :class="{ 'viewer__pic--wait': !picReady }"
+                :src="source.src"
+                :style="picStyle"
+                alt=""
+                draggable="false"
+                decoding="async"
+                @load="onLoad"
+                @error="onError"
+              />
             </div>
             <div v-else class="viewer__empty">
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>

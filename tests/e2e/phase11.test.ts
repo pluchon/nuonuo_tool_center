@@ -159,7 +159,7 @@ describe('第十一阶段：设置', () => {
     await shot(page, 'settings-data-light')
 
     await openTab(page, '快捷键')
-    await expect(page.locator('.set-dlg__row').count()).resolves.toBe(14)
+    await expect(page.locator('.set-dlg__row').count()).resolves.toBe(17)
     await openTab(page, '关于')
     await expect(row(page, '图片总数').locator('.set-dlg__value').textContent()).resolves.toBe('3 张')
     await page.click('.set-dlg__upd')

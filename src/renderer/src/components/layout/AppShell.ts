@@ -89,6 +89,21 @@ export default defineComponent({
       }
     }
 
+    // Ctrl + F：跳到当前页面的搜索框并选中已有的字（弹窗、大图开着时不抢）
+    const onFindKey = (e: KeyboardEvent): void => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'f' || document.querySelector('[aria-modal="true"]')) {
+        return
+      }
+      const input = document.querySelector<HTMLInputElement>('.filter-bar__input, .tags-view__input')
+      if (input) {
+        e.preventDefault()
+        input.focus()
+        input.select()
+      }
+    }
+    window.addEventListener('keydown', onFindKey)
+    onBeforeUnmount(() => window.removeEventListener('keydown', onFindKey))
+
     onMounted(() => {
       void library.load()
       tags.load().catch((err: unknown) => toast.show(`标签读不出来：${errText(err)}`, 'error'))

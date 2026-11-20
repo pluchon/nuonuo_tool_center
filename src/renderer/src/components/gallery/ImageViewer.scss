@@ -135,6 +135,25 @@
     flex: none;
     display: block;
     pointer-events: none;
+
+    // 还没读完：透明，读完淡入（过渡写在行内样式里，和缩放的过渡合在一起）
+    &--wait {
+      opacity: 0;
+    }
+  }
+
+  // 原图读完之前垫着的缩略图：绝对定位在同一个位置（弹性容器里居中），大小和变换与原图一致
+  &__ph {
+    position: absolute;
+    display: block;
+    pointer-events: none;
+  }
+
+  &__pos {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--c-i-9C90B3);
+    font-variant-numeric: tabular-nums;
   }
 
   &__empty {

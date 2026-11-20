@@ -329,6 +329,9 @@ export default defineComponent({
               title: '浏览与选择',
               rows: [
                 kbd('打开大图', ['Enter']),
+                kbd('快速预览', ['空格']),
+                kbd('第一张 / 最后一张', ['Home', 'End']),
+                kbd('搜索', ['Ctrl', 'F']),
                 kbd('上一张 / 下一张', ['←', '→']),
                 kbd('上一行 / 下一行', ['↑', '↓']),
                 kbd('多选', ['Ctrl', '点击']),

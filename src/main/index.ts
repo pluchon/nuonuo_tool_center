@@ -1,4 +1,4 @@
-import { app, BrowserWindow, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, screen, shell } from 'electron'
 import { mkdir, rename } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,6 +16,7 @@ import { configureScan, onScanState, requeueScan, startScan, stopScanAndWait } f
 import { configureWatch, stopWatching, syncWatching } from './services/scan/watchService'
 import { getSettings } from './services/settingsService'
 import { windowBackground } from './window/windowControl'
+import { loadWindowState, MIN_HEIGHT, MIN_WIDTH, trackWindowState } from './window/windowState'
 import { attachCloseBehavior, markQuitting } from './window/trayControl'
 import { applySystemSettings } from './window/systemSettings'
 import { pruneBackgrounds } from './services/systemService'
@@ -63,12 +64,19 @@ async function initialTheme(dbReady: boolean): Promise<ThemeMode> {
 function createMainWindow(theme: ThemeMode): BrowserWindow {
   // Windows 用多尺寸的 ico（小尺寸更清楚），其它系统用 png
   const iconPath = join(app.getAppPath(), 'resources', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
+  // 上次关闭时的位置和大小（看不见了就居中）；没有记录时用默认大小
+  const stateFile = join(paths.root, 'window-state.json')
+  const saved = loadWindowState(
+    stateFile,
+    screen.getAllDisplays().map((d) => d.workArea)
+  )
+  const bounds = saved
+    ? { width: saved.width, height: saved.height, ...(saved.x !== null && saved.y !== null ? { x: saved.x, y: saved.y } : {}) }
+    : { width: 1280, height: 820, useContentSize: true }
   const win = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    useContentSize: true,
-    minWidth: 960,
-    minHeight: 600,
+    ...bounds,
+    minWidth: MIN_WIDTH,
+    minHeight: MIN_HEIGHT,
     show: false,
     autoHideMenuBar: true,
     title: '诺诺的图床',
@@ -83,7 +91,13 @@ function createMainWindow(theme: ThemeMode): BrowserWindow {
       sandbox: true
     }
   })
-  win.once('ready-to-show', () => win.show())
+  win.once('ready-to-show', () => {
+    if (saved?.maximized) {
+      win.maximize()
+    }
+    win.show()
+  })
+  trackWindowState(win, stateFile)
   attachCloseBehavior(win, iconPath)
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) {

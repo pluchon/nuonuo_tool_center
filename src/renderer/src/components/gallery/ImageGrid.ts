@@ -114,10 +114,10 @@ export default defineComponent({
       gallery.zoomBy(e.deltaY < 0 ? -1 : 1)
     }
 
-    // 把某张图滚到看得见的位置
-    const reveal = (id: number): void => {
+    // 把某张图滚到看得见的位置：单按一下平滑滚过去，按住不放连续跳时直接到位（平滑滚动会跟不上）
+    const reveal = (id: number, smooth = false): void => {
       void nextTick(() => {
-        gridRef.value?.querySelector(`[data-id="${id}"]`)?.scrollIntoView({ block: 'nearest' })
+        gridRef.value?.querySelector(`[data-id="${id}"]`)?.scrollIntoView({ block: 'nearest', behavior: smooth ? 'smooth' : 'auto' })
       })
     }
 
@@ -170,11 +170,14 @@ export default defineComponent({
         next = order[Math.min(order.length - 1, Math.max(0, i + (e.key === 'ArrowLeft' ? -1 : 1)))]
       } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         next = verticalNeighbor(cur, e.key === 'ArrowUp' ? -1 : 1)
+      } else if (e.key === 'Home' || e.key === 'End') {
+        // Home / End：跳到第一张、最后一张
+        next = e.key === 'Home' ? order[0] : order[order.length - 1]
       } else if (e.key === 'Escape') {
         gallery.collapse()
         return
-      } else if (e.key === 'Enter') {
-        // Enter：打开大图（看的是详情面板那张）；焦点在别的按钮上时让按钮自己处理
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        // Enter / 空格：打开大图（看的是详情面板那张；空格再按一次关掉，像“快速预览”）；焦点在别的按钮上时让按钮自己处理
         if (el && (el.tagName === 'BUTTON' || el.tagName === 'A') && !el.classList.contains('tile')) {
           return
         }
@@ -191,7 +194,7 @@ export default defineComponent({
       e.preventDefault()
       if (next !== null) {
         gallery.selectOne(next)
-        reveal(next)
+        reveal(next, !e.repeat)
       }
     }
 

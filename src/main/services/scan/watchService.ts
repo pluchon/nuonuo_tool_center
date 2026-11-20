@@ -1,5 +1,5 @@
-import { watch, type FSWatcher } from 'node:fs'
-import { basename, join } from 'node:path'
+import { existsSync, watch, type FSWatcher } from 'node:fs'
+import { basename, isAbsolute, join } from 'node:path'
 import { getLogger } from '../../common/logger'
 import { isSkippedDir, isWithin } from '../../common/pathUtil'
 import { findActiveRoots, type LibraryRootEntity } from '../../repositories/libraryRootRepository'
@@ -79,9 +79,19 @@ function touch(path: string): void {
     return
   }
   const id = rootOf(path, watching)
-  if (id === null) {
-    return
+  if (id !== null) {
+    schedule(id)
   }
+}
+
+// 被监听的目录本身被删掉（或移走）时，Windows 上的递归监听会不停地报带 \\?\ 前缀的绝对路径，一秒几万次，把主进程占满。
+// 回调里给的是绝对路径就看看目录还在不在：不在了马上关掉这个监听，重扫一次（扫描会把它标成“找不到”）
+export function isRootGoneSignal(rel: string): boolean {
+  return rel.startsWith('\\\\?\\') || isAbsolute(rel)
+}
+
+// 排一次重扫（同一个目录在停下来之前的变化合成一次）
+function schedule(id: number): void {
   const old = timers.get(id)
   if (old) {
     clearTimeout(old)
@@ -135,6 +145,15 @@ export async function refreshWatching(enabled: boolean): Promise<void> {
     try {
       const w = watch(root, { recursive: true }, (_event, file) => {
         const rel = file ? String(file) : ''
+        if (isRootGoneSignal(rel)) {
+          if (!existsSync(root)) {
+            log.warn(`目录 ${id} 不见了，停止监听：${root}`)
+            w.close()
+            watchers = watchers.filter((x) => x !== w)
+            schedule(id)
+          }
+          return
+        }
         if (!isIgnoredChange(rel)) {
           touch(rel ? join(root, rel) : root)
         }

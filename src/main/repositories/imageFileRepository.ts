@@ -13,6 +13,8 @@ export interface ScanFileRow {
   status: ImageFileEntity['status']
   byteSize: number
   thumbReady: number
+  // 图片内容哈希（缩略图文件名）
+  hash: string
 }
 
 // 某个目录下全部未删除的文件记录（含 MISSING；DELETED 是用户自己删进回收站的，不参与对账）
@@ -26,7 +28,8 @@ export async function findScanRowsByRoot(rootId: number): Promise<ScanFileRow[]>
       mtime: imageFile.mtime,
       status: imageFile.status,
       byteSize: image.byteSize,
-      thumbReady: image.thumbReady
+      thumbReady: image.thumbReady,
+      hash: image.contentHash
     })
     .from(imageFile)
     .innerJoin(image, eq(image.id, imageFile.imageId))

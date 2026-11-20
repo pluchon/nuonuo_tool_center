@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { cpus } from 'node:os'
 import { join } from 'node:path'
 import type { ScanProgressVO, ScanResultVO, ScanStateVO } from '@shared/api'
@@ -264,6 +264,8 @@ async function scanRoot(plan: RootPlan): Promise<RootOutcome> {
   const byKey = new Map(rows.map((r) => [pathKey(r.relPath), r]))
   // 刚删除、还在撤销窗口里等着进回收站的文件：不能当成新文件再登记一遍
   const hidden = new Set((await findHiddenRelPaths(root.id)).map(pathKey))
+  // 缩略图文件夹里现有的文件：记着“已生成”但文件没了（手动清过缓存）的，当成变了的文件重新登记，补回缩略图
+  const thumbs = new Set(await readdir(config!.thumbsDir).catch(() => [] as string[]))
   // 磁盘上还在的文件（含这次按设置不处理的、读不了的）：它们的记录不能当成“不见了”
   const present = new Set([...walk.files.map((f) => pathKey(f.relPath)), ...walk.unreadableFiles.map(pathKey)])
   const reappeared: number[] = []
@@ -277,7 +279,7 @@ async function scanRoot(plan: RootPlan): Promise<RootOutcome> {
       try {
         if (!row && hidden.has(pathKey(file.relPath))) {
           // 等着进回收站的文件：不登记，计入已处理
-        } else if (row && isUnchanged(row, file)) {
+        } else if (row && isUnchanged(row, file) && (row.thumbReady !== THUMB_READY || thumbs.has(`${row.hash}.webp`))) {
           if (row.status !== 'NORMAL') {
             reappeared.push(row.id)
           }

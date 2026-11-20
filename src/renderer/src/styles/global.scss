@@ -203,6 +203,27 @@ body {
   animation: nn-rise-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1) both;
 }
 
+// 可点的东西悬停、按下、选中时颜色和描边平滑过渡，不硬切（组件自己写了 transition 的以组件为准，选择器更具体）
+button,
+a,
+input,
+textarea,
+[role='button'],
+[role='option'],
+.el-tree-node__content {
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease,
+    scale 0.12s ease;
+}
+
+// 按钮按下时轻轻一沉，松开回弹（有确切反馈又不打扰）；缩略图卡片不沉（要拖动、双击）
+button:not(:disabled):not(.tile):active {
+  scale: 0.96;
+}
+
 // 系统开了“减少动画”：全部几乎瞬间完成（保留结束状态，不影响逻辑）
 @media (prefers-reduced-motion: reduce) {
   *,
