@@ -37,3 +37,4 @@
 - 同一主题继续对话用 `codex exec resume --last "<追加指令>"`（默认只在当前目录的会话里找）；开始无关的新任务就新开会话。
 - 交给 Codex 的任务要写清：要改的文件、验收标准、不许动的东西。它的产出由我审查并跑类型检查和构建后才算数。
 - 生成的图片放在 `src/renderer/src/assets/` 下合适的位置；临时产物放 `test-output/`。
+- 生图一律照 `docs/codex-imagegen.md`：`-m gpt-6.2-sol -c model_reasoning_effort="high"`，一个系列一个持久会话（首轮立底线，之后 `resume <会话 id>` 只写几行简报），中文提示词用 UTF-8 从标准输入喂；出图后放大到 100% 检查噪点和条纹，不满意在原会话里精准返工。
