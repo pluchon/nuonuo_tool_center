@@ -22,10 +22,13 @@ const log = getLogger('settings')
 // 单项校验：合法时返回规范化后的值，不合法时返回 undefined
 type Validator = (value: unknown) => unknown
 
+// drizzle 读 jsonb 时会把像数字的字符串（"10"）再 JSON.parse 成数字，读回来按字符串比
 const oneOf =
   (options: readonly string[]): Validator =>
-  (v) =>
-    typeof v === 'string' && options.includes(v) ? v : undefined
+  (v) => {
+    const s = typeof v === 'number' ? String(v) : v
+    return typeof s === 'string' && options.includes(s) ? s : undefined
+  }
 
 const bool: Validator = (v) => (typeof v === 'boolean' ? v : undefined)
 

@@ -75,7 +75,8 @@ export default defineComponent({
       }
     })
 
-    const cursor = computed(() => (zoom.value > 100 ? (dragging.value ? 'grabbing' : 'grab') : 'default'))
+    // 适应窗口时是放大镜（双击放大），放大后是抓手（拖动）
+    const cursor = computed(() => (zoom.value > 100 ? (dragging.value ? 'grabbing' : 'grab') : 'zoom-in'))
 
     // 换图或重新打开：缩放、旋转、平移都还原
     const resetView = (): void => {
@@ -144,6 +145,18 @@ export default defineComponent({
       setZoom(zoom.value + (e.deltaY < 0 ? WHEEL_STEP : -WHEEL_STEP), anchor)
     }
 
+    // 双击：适应窗口和原始大小之间切换（图本身比窗口小时放大到 2 倍），以双击的位置为中心
+    const onDblClick = (e: MouseEvent): void => {
+      if (zoom.value > 100) {
+        setZoom(100)
+        return
+      }
+      const box = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      const anchor = { x: e.clientX - (box.left + box.width / 2), y: e.clientY - (box.top + box.height / 2) }
+      const real = actualZoom(fit.value)
+      setZoom(real > 100 ? real : 200, anchor)
+    }
+
     // 放大后按住左键拖动；松手在哪都算
     const onMouseMove = (e: MouseEvent): void => {
       if (drag) {
@@ -191,9 +204,19 @@ export default defineComponent({
       }
     }
 
+    // 看图软件通行的缩放键：+ / − 缩放，0 适应窗口，1 原始大小
+    const ZOOM_KEYS: Record<string, () => void> = { '+': zoomIn, '=': zoomIn, '-': zoomOut, '0': fitWindow, '1': actual }
+
     // ← / → 换图，Esc 关闭；在捕获阶段处理，网格的快捷键就收不到了
     const onKey = (e: KeyboardEvent): void => {
       if (!viewer.open) {
+        return
+      }
+      const zoomKey = e.ctrlKey || e.altKey || e.metaKey ? undefined : ZOOM_KEYS[e.key]
+      if (zoomKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        zoomKey()
         return
       }
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -274,6 +297,7 @@ export default defineComponent({
       onLoad,
       onError,
       onWheel,
+      onDblClick,
       onMouseDown,
       onMaskDown,
       onMaskClick,

@@ -63,6 +63,15 @@ body {
   --switch-off-knob: #a89dbb;
 }
 
+// 滑块轨道（未填充的部分）：浅色是淡灰紫，深色是一层浅白
+:root {
+  --range-track: #e6e0ef;
+}
+
+:root.dark {
+  --range-track: rgba(255, 255, 255, 0.14);
+}
+
 // 图片的衬底（详情预览、大图舞台）：不管浅色深色都用近黑，图片两边的留白不抢颜色（看图软件的通行做法）
 :root {
   --viewer-stage: #141118;

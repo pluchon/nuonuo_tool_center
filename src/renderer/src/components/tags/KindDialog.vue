@@ -35,7 +35,6 @@
                 type="button"
                 aria-label="删除分类"
                 :aria-disabled="!r.canDel"
-                :title="r.used > 0 ? '还有标签在用，先把它们改到别的分类' : '删除分类'"
                 @click="remove(r.id, r.canDel)"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>

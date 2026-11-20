@@ -9,7 +9,6 @@
           type="button"
           :style="{ color: sec.dot }"
           :aria-label="sec.add.label"
-          :title="sec.add.label"
           :disabled="sec.add.disabled"
           @click="sec.add.run"
         >

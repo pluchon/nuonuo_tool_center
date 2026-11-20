@@ -112,12 +112,12 @@
     <div class="filter-chips__list nn-noscroll">
       <span v-for="c in chips" :key="c.key" class="filter-chips__chip" :style="{ background: c.bg, color: c.ink }">
         <span class="filter-chips__hole" aria-hidden="true" />
-        <span class="filter-chips__label" :title="c.kind">{{ c.label }}</span>
+        <span class="filter-chips__label">{{ c.label }}</span>
         <button class="filter-chips__x" type="button" aria-label="去掉这个筛选" @click="c.remove">✕</button>
       </span>
     </div>
     <!-- 没有筛选条件时不显示筛选出的张数 -->
-    <span v-if="chips.length > 0" class="filter-chips__count" title="筛选出的图片">
+    <span v-if="chips.length > 0" class="filter-chips__count">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>
       <span class="filter-chips__bar" aria-hidden="true" />
       <span class="filter-chips__num">{{ gallery.items.length.toLocaleString('zh-CN') }}</span>张

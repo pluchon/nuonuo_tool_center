@@ -13,7 +13,6 @@
           role="checkbox"
           :aria-checked="g.allOn"
           :aria-label="g.allOn ? '取消选择' : '选择本月'"
-          :title="g.allOn ? '取消选择' : '选择本月'"
           @click="gallery.toggleGroup(g.ids)"
         >
           {{ g.allOn ? '✓' : '' }}
@@ -45,7 +44,6 @@
             role="checkbox"
             :aria-checked="gallery.multi && gallery.isSelected(t.id)"
             aria-label="选择这张图"
-            title="选择（同 Ctrl + 点击）"
             @click.stop="gallery.toggle(t.id)"
           >{{ gallery.multi && gallery.isSelected(t.id) ? '✓' : '' }}</span>
           <div
@@ -74,11 +72,11 @@
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg><span class="tile__r18-text">R-18</span>
             </span>
             <span class="tile__badge tile__badge--fmt">{{ item(t.id).format }}</span>
-            <span v-if="t.crop" class="tile__badge tile__badge--crop" title="缩略图只显示中间部分">{{ t.crop }}</span>
+            <span v-if="t.crop" class="tile__badge tile__badge--crop">{{ t.crop }}</span>
           </div>
           <div class="tile__foot">
             <span class="tile__name">{{ item(t.id).name }}</span>
-            <span v-if="!item(t.id).tagged" class="tile__dot" title="还没打标签" />
+            <span v-if="!item(t.id).tagged" class="tile__dot" aria-label="还没打标签" />
           </div>
         </button>
       </div>

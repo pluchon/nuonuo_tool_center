@@ -322,10 +322,39 @@
     color: var(--c-i-6E6280);
   }
 
+  // 滑块：已拖过的部分是主题色，剩下的轨道跟着深浅色走；圆钮白底主题色描边
   &__range {
     flex: 1;
     max-width: 220px;
-    accent-color: var(--a);
+    height: 6px;
+    margin: 0;
+    border-radius: 999px;
+    appearance: none;
+    background:
+      linear-gradient(var(--a), var(--a)) 0 / var(--fill, 0%) 100% no-repeat,
+      var(--range-track);
+    cursor: pointer;
+    outline: none;
+
+    &::-webkit-slider-thumb {
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      border: 2px solid var(--a);
+      box-shadow: 0 1px 4px rgba(var(--sh), 0.3);
+      transition: transform 0.15s;
+    }
+
+    &:hover::-webkit-slider-thumb,
+    &:active::-webkit-slider-thumb {
+      transform: scale(1.12);
+    }
+
+    &:focus-visible::-webkit-slider-thumb {
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--a) 25%, transparent);
+    }
   }
 
   &__range-val {

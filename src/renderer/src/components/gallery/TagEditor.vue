@@ -6,7 +6,7 @@
     </div>
     <div class="tag-editor__box">
       <div class="tag-editor__list">
-        <span v-for="t in tags" :key="t.id" class="tag-editor__tag" :title="categoryName(t.categoryId)">
+        <span v-for="t in tags" :key="t.id" class="tag-editor__tag">
           <span class="tag-editor__dot" :style="{ background: colorOf(t.categoryId).dot }" aria-hidden="true" />{{ t.name }}
           <button class="tag-editor__x" type="button" aria-label="移除标签" :disabled="busy" @click="onRemove(t.id)">✕</button>
         </span>
@@ -18,7 +18,6 @@
             class="tag-editor__kind"
             :class="{ 'tag-editor__kind--locked': !!exact }"
             type="button"
-            :title="exact ? '已有标签，分类在标签管理里改' : '新标签的分类'"
             aria-haspopup="listbox"
             :aria-expanded="kindOpen"
             @click="toggleKind"
@@ -56,7 +55,7 @@
         />
         <Transition name="nn-pop">
           <div v-if="suggestions.length > 0 && !kindOpen" class="tag-editor__pop tag-editor__pop--sugg" role="listbox" aria-label="匹配的标签">
-            <button v-for="s in suggestions" :key="s.tag.id" class="tag-editor__sugg" type="button" role="option" :title="categoryName(s.tag.categoryId)" @click="pick(s.tag.name)">
+            <button v-for="s in suggestions" :key="s.tag.id" class="tag-editor__sugg" type="button" role="option" @click="pick(s.tag.name)">
               <span class="tag-editor__dot" :style="{ background: colorOf(s.tag.categoryId).dot }" aria-hidden="true" />
               <span class="tag-editor__sugg-name">{{ s.tag.name }}</span>
               <span class="tag-editor__sugg-alias">{{ s.alias ? `别名 ${s.alias}` : '' }}</span>

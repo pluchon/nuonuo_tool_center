@@ -85,6 +85,15 @@ describe('第十一阶段：设置', () => {
     await expect(page.evaluate(() => window.api.settings.get().then((r) => (r as { data: { backgroundDim: number } }).data.backgroundDim))).resolves.toBe(60)
     await shot(page, 'settings-halftone-light')
 
+    // 组件透明度调到最大：面板变透明，设置弹窗自己的底不变；滑块已拖过的部分是主题色
+    const dlgBg = (): Promise<string> => page.evaluate(() => getComputedStyle(document.querySelector('.set-dlg__card')!).backgroundColor)
+    const dlgBefore = await dlgBg()
+    await row(page, '组件透明度').locator('input').fill('80')
+    await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--look-pane-bg').endsWith('0.08)'))
+    await expect(dlgBg()).resolves.toBe(dlgBefore)
+    await expect(row(page, '组件透明度').locator('input').evaluate((el) => (el as HTMLElement).style.getPropertyValue('--fill'))).resolves.toBe('100%')
+    await row(page, '组件透明度').locator('input').fill('40')
+
     // 磨砂玻璃关掉，“模糊程度”跟着藏起来
     await row(page, '磨砂玻璃').locator('.set-dlg__switch').click()
     await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--look-blur') === 'none')
@@ -127,6 +136,11 @@ describe('第十一阶段：设置', () => {
     await page.click('.set-dlg__chip:text-is("RAW")')
     await expect(page.locator('.set-dlg__chip:text-is("RAW")').getAttribute('aria-pressed')).resolves.toBe('false')
     await page.click('.set-dlg__chip:text-is("RAW")')
+    // 跳过小图：像数字的选项（"10"）存进库再读回来还是选中的
+    await row(page, '跳过小图').locator('.set-dlg__seg-btn:has-text("小于 10 KB")').click()
+    await page.waitForSelector('.set-dlg__seg-btn[aria-checked="true"]:has-text("小于 10 KB")')
+    await expect(page.evaluate(() => window.api.settings.get().then((r) => (r as { data: { skipSmall: string } }).data.skipSmall))).resolves.toBe('10')
+    await row(page, '跳过小图').locator('.set-dlg__seg-btn:has-text("不跳过")').click()
     await shot(page, 'settings-library-light')
 
     // 数据与缓存：缓存大小、清理（只删用不到的）、导出备份
@@ -145,7 +159,7 @@ describe('第十一阶段：设置', () => {
     await shot(page, 'settings-data-light')
 
     await openTab(page, '快捷键')
-    await expect(page.locator('.set-dlg__row').count()).resolves.toBe(11)
+    await expect(page.locator('.set-dlg__row').count()).resolves.toBe(14)
     await openTab(page, '关于')
     await expect(row(page, '图片总数').locator('.set-dlg__value').textContent()).resolves.toBe('3 张')
     await page.click('.set-dlg__upd')

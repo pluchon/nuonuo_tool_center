@@ -10,7 +10,7 @@
       {{ scanText }}
     </span>
     <!-- 扫描中不显示“重新扫描” -->
-    <button v-if="!scanning" class="status-footer__scan" type="button" title="重新扫描所有源目录" @click="onRescan">
+    <button v-if="!scanning" class="status-footer__scan" type="button" @click="onRescan">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" /></svg>重新扫描
     </button>
   </footer>

@@ -1,11 +1,14 @@
-// 由 resources/icon.png 生成 Windows 用的多尺寸 resources/icon.ico（窗口、任务栏、桌面快捷方式用）
+// 由 resources/icon.png 生成 Windows 用的多尺寸 resources/icon.ico（窗口、任务栏、桌面快捷方式用），以及标题栏左上角用的小图
 // 用法：node scripts/make-icon.mjs
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import sharp from 'sharp'
 
 const SIZES = [16, 24, 32, 48, 64, 128, 256]
 const source = 'resources/icon.png'
 const target = 'resources/icon.ico'
+// 标题栏图标显示 24px，按 4 倍屏出 96px
+const brand = 'src/renderer/src/assets/brand/app-icon.png'
+const BRAND_SIZE = 96
 
 // 每个尺寸一张 PNG（ICO 允许直接内嵌 PNG）
 const images = []
@@ -33,4 +36,6 @@ images.forEach((img, i) => {
   offset += img.data.length
 })
 writeFileSync(target, Buffer.concat([header, ...images.map((i) => i.data)]))
-console.log(`已生成 ${target}（${SIZES.join('/')}）`)
+mkdirSync('src/renderer/src/assets/brand', { recursive: true })
+await sharp(source).resize(BRAND_SIZE, BRAND_SIZE, { kernel: 'lanczos3' }).png({ compressionLevel: 9 }).toFile(brand)
+console.log(`已生成 ${target}（${SIZES.join('/')}）和 ${brand}`)

@@ -29,7 +29,6 @@ export default defineComponent({
     const blurR18 = computed(() => settings.values.r18Blur)
 
     const colorOf = (id: number) => tagsStore.colorOf(id)
-    const categoryName = (id: number): string => tagsStore.categoryById(id)?.name ?? ''
 
     // 跑一个批量操作，期间按钮不可点
     const run = async (fn: () => Promise<unknown>): Promise<void> => {
@@ -64,6 +63,6 @@ export default defineComponent({
     }
 
     const transfer = useTransferStore()
-    return { gallery, transfer, thumbs, more, blurR18, draft, busy, colorOf, categoryName, thumbUrl, onInput, onEnter, onRemove, onR18 }
+    return { gallery, transfer, thumbs, more, blurR18, draft, busy, colorOf, thumbUrl, onInput, onEnter, onRemove, onR18 }
   }
 })

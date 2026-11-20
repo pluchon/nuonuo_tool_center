@@ -196,8 +196,8 @@ function lookVars(accent: string, isDark: boolean, look: GlassLook, backdrop: Ba
     '--look-blur': blur,
     '--look-edge': hasBg ? 'rgba(var(--w), 0.8)' : tint(accent, 0.16),
     '--look-rule': hasBg ? 'rgba(var(--w), 0.75)' : tint(accent, 0.16),
-    // 设置弹窗本身的磨砂底
-    '--look-dlg-bg': `${isDark ? 'rgba(34, 30, 44, ' : 'rgba(250, 248, 255, '}${Math.max(0.55, 1 - clr * 0.55).toFixed(2)})`,
+    // 设置弹窗本身的底：不跟“组件透明度”走，调透明度时设置页始终看得清
+    '--look-dlg-bg': isDark ? 'rgba(34, 30, 44, 0.97)' : 'rgba(250, 248, 255, 0.97)',
     '--look-shadow': `0 12px 30px -24px ${tint(accent, 0.45)}, 0 1px 0 rgba(var(--w), 0.9) inset`,
     '--look-active-bg': `linear-gradient(90deg, ${accent}26, ${accent}08)`,
     // 数量胶囊、月份标题的星星和虚线

@@ -6,7 +6,6 @@
         class="batch-panel__bin"
         type="button"
         :aria-label="`删除选中的 ${gallery.selected.length} 张`"
-        :title="`删除选中的 ${gallery.selected.length} 张（进系统回收站）`"
         @click="gallery.askDelete()"
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
@@ -27,7 +26,7 @@
       </div>
       <div class="batch-panel__box">
         <div class="batch-panel__list">
-          <span v-for="t in gallery.commonTags" :key="t.id" class="batch-panel__tag" :title="categoryName(t.categoryId)">
+          <span v-for="t in gallery.commonTags" :key="t.id" class="batch-panel__tag">
             <span class="batch-panel__dot" :style="{ background: colorOf(t.categoryId).dot }" aria-hidden="true" />{{ t.name }}
             <button class="batch-panel__x" type="button" aria-label="从这些图上移除" :disabled="busy" @click="onRemove(t.id)">✕</button>
           </span>

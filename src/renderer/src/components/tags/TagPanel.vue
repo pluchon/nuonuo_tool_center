@@ -11,14 +11,13 @@
             <button
               class="tag-panel__pill"
               type="button"
-              title="在图库里查看这些图"
               :style="{ borderColor: color.line, background: color.bg, color: color.ink }"
               @click="$emit('view-images', tag.id)"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>
               {{ tag.count }} 张 ›
             </button>
-            <button class="tag-panel__pill tag-panel__pill--del" type="button" title="删除这个标签" @click="$emit('delete', tag.id)">
+            <button class="tag-panel__pill tag-panel__pill--del" type="button" aria-label="删除这个标签" @click="$emit('delete', tag.id)">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
               删除
             </button>

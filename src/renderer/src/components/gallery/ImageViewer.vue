@@ -6,22 +6,22 @@
           <div class="viewer__head">
             <span class="viewer__dot" aria-hidden="true"></span>
             <h2 class="viewer__title" :title="item.name">{{ title }}</h2>
-            <button ref="closeRef" class="viewer__close" type="button" aria-label="关闭" title="关闭（Esc）" @click="viewer.close()">
+            <button ref="closeRef" class="viewer__close" type="button" aria-label="关闭" @click="viewer.close()">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M8.5 8.5l7 7M15.5 8.5l-7 7" /></svg>
             </button>
           </div>
 
           <div ref="stageRef" class="viewer__stage">
             <template v-if="multi">
-              <button class="viewer__nav viewer__nav--prev" type="button" aria-label="上一张" title="上一张（←）" @click="viewer.step(-1)">
+              <button class="viewer__nav viewer__nav--prev" type="button" aria-label="上一张" @click="viewer.step(-1)">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
               </button>
-              <button class="viewer__nav viewer__nav--next" type="button" aria-label="下一张" title="下一张（→）" @click="viewer.step(1)">
+              <button class="viewer__nav viewer__nav--next" type="button" aria-label="下一张" @click="viewer.step(1)">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
               </button>
             </template>
 
-            <div v-if="source.kind !== 'none'" class="viewer__pan" :style="{ cursor }" title="按住拖动 · Ctrl + 滚轮缩放" @mousedown="onMouseDown" @wheel="onWheel">
+            <div v-if="source.kind !== 'none'" class="viewer__pan" :style="{ cursor }" @mousedown="onMouseDown" @dblclick="onDblClick" @wheel="onWheel">
               <img :key="source.src" class="viewer__pic nn-appear" :src="source.src" :style="picStyle" alt="" draggable="false" @load="onLoad" @error="onError" />
             </div>
             <div v-else class="viewer__empty">
@@ -35,11 +35,11 @@
 
           <div class="viewer__bar">
             <div class="viewer__group" role="toolbar" aria-label="缩放">
-              <button class="viewer__round" type="button" aria-label="缩小" title="缩小" @click="zoomOut">
+              <button class="viewer__round" type="button" aria-label="缩小" @click="zoomOut">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5M8 11h6" /></svg>
               </button>
               <span class="viewer__zoom">{{ zoom }}%</span>
-              <button class="viewer__round" type="button" aria-label="放大" title="放大" @click="zoomIn">
+              <button class="viewer__round" type="button" aria-label="放大" @click="zoomIn">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5M8 11h6M11 8v6" /></svg>
               </button>
               <span class="viewer__sep" aria-hidden="true"></span>
@@ -47,10 +47,10 @@
               <button class="viewer__pill" type="button" @click="actual">原始大小</button>
             </div>
             <div class="viewer__group" role="toolbar" aria-label="旋转与翻转">
-              <button class="viewer__round viewer__round--mint" type="button" aria-label="向左旋转" title="向左旋转" @click="rotL">
+              <button class="viewer__round viewer__round--mint" type="button" aria-label="向左旋转" @click="rotL">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v6h6" /><path d="M4.5 10A8 8 0 1 1 6 16.5" /></svg>
               </button>
-              <button class="viewer__round viewer__round--mint" type="button" aria-label="向右旋转" title="向右旋转" @click="rotR">
+              <button class="viewer__round viewer__round--mint" type="button" aria-label="向右旋转" @click="rotR">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 4v6h-6" /><path d="M19.5 10A8 8 0 1 0 18 16.5" /></svg>
               </button>
               <button
@@ -58,7 +58,6 @@
                 :class="{ 'viewer__round--on': flipped }"
                 type="button"
                 aria-label="水平翻转"
-                title="水平翻转"
                 :aria-pressed="flipped"
                 @click="flip"
               >

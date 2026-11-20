@@ -8,7 +8,6 @@
       :class="{ 'title-bar__gear--on': settings.dialogOpen }"
       type="button"
       aria-label="设置"
-      title="设置"
       :aria-pressed="settings.dialogOpen"
       :disabled="!settings.loaded"
       @click="onGear"

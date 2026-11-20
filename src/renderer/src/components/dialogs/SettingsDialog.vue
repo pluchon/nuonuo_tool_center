@@ -8,7 +8,7 @@
             <circle cx="12" cy="12" r="3" />
           </svg>
           <h2 class="set-dlg__title">设置</h2>
-          <button ref="closeRef" class="set-dlg__close" type="button" aria-label="关闭" title="关闭（Esc）" @click="close">
+          <button ref="closeRef" class="set-dlg__close" type="button" aria-label="关闭" @click="close">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M8.5 8.5l7 7M15.5 8.5l-7 7" /></svg>
           </button>
         </div>
@@ -76,7 +76,6 @@
                       class="set-dlg__swatch"
                       type="button"
                       :aria-label="a.label"
-                      :title="a.label"
                       :aria-pressed="a.on"
                       :style="{ background: a.color, boxShadow: `0 0 0 2px ${a.on ? a.color : 'transparent'}` }"
                       @click="save({ accent: a.color })"
@@ -103,7 +102,6 @@
                           class="set-dlg__bg-swap"
                           role="button"
                           aria-label="更换图片"
-                          title="更换图片"
                           @click.stop="replaceBg()"
                         >
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3M20 4v5h-5M20 12a8 8 0 0 1-14 5.3M4 20v-5h5" /></svg>
@@ -121,6 +119,7 @@
                       :min="r.min"
                       :max="r.max"
                       :value="settings.values[r.key]"
+                      :style="{ '--fill': `${((settings.values[r.key] - r.min) / (r.max - r.min)) * 100}%` }"
                       @input="onRange(r.key, $event)"
                     />
                     <span class="set-dlg__range-val">{{ settings.values[r.key] }}{{ r.unit }}</span>
@@ -157,7 +156,6 @@
                       :class="`set-dlg__upd--${update}`"
                       type="button"
                       :aria-label="updateUi.tip"
-                      :title="updateUi.tip"
                       @click="runUpdate"
                     >
                       <svg :class="{ 'set-dlg__spin': update === 'checking' }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="updateUi.icon" /></svg>

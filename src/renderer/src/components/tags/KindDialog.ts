@@ -78,8 +78,13 @@ export default defineComponent({
       delete drafts[id]
     }
 
+    // 删不了时用提示说明原因（不用悬停小字）
     const remove = async (id: number, canDel: boolean): Promise<void> => {
-      if (!canDel || busy.value) {
+      if (busy.value) {
+        return
+      }
+      if (!canDel) {
+        toast.show(tagsStore.categories.length > 1 ? '还有标签在用这个分类，先把它们改到别的分类' : '至少要留一个分类')
         return
       }
       busy.value = true

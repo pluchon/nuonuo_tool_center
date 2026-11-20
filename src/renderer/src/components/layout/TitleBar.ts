@@ -1,6 +1,7 @@
 import { defineComponent } from 'vue'
 import { closeWindow, minimizeWindow, toggleMaximizeWindow } from '@/api/window'
-import brandAvatar from '@/assets/nono/brand-avatar.webp'
+// 应用图标（和桌面快捷方式、任务栏同一张，scripts/make-icon.mjs 生成）
+import brandAvatar from '@/assets/brand/app-icon.png'
 import { useSettingsStore } from '@/stores/settings'
 
 // 自绘标题栏：左边品牌和设置，右边三颗窗口按钮；整条可拖动窗口

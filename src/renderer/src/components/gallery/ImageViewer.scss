@@ -71,6 +71,14 @@
     border: 1px solid var(--a-line2);
     overflow: hidden;
     color: var(--viewer-stage-ink);
+
+    &:hover .viewer__nav {
+      opacity: 0.7;
+    }
+
+    &:hover .viewer__nav:hover {
+      opacity: 1;
+    }
   }
 
   &__nav {
@@ -82,14 +90,28 @@
     height: 38px;
     padding: 0;
     border-radius: 50%;
-    border: 1px solid var(--a-line2);
-    background: rgba(var(--w), 0.86);
-    color: var(--a-ink);
+    // 浮在近黑舞台上的淡色半透明圆钮：平时很淡，鼠标进舞台稍亮，指着它才完全显出来，不抢图片
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(6px);
+    color: rgba(255, 255, 255, 0.85);
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    box-shadow: 0 2px 8px rgba(var(--sh), 0.12);
+    opacity: 0.35;
+    transition:
+      opacity 0.2s,
+      background 0.2s;
+
+    &:hover {
+      opacity: 1;
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    &:focus-visible {
+      opacity: 1;
+    }
 
     &--prev {
       left: 12px;

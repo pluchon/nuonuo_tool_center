@@ -83,6 +83,12 @@ describe('设置读写（PGlite）', () => {
     expect(after.accent).toBe('#C25B85')
   })
 
+  it('像数字的选项（跳过小图 10 KB）存进去读回来还是原值', async () => {
+    const after = await updateSettings({ skipSmall: '10' })
+    expect(after.skipSmall).toBe('10')
+    expect((await getSettings()).skipSmall).toBe('10')
+  })
+
   it('不合法的修改整体不写入', async () => {
     await expect(updateSettings({ appearance: 'light', glassBlur: 0 })).rejects.toThrow()
     expect((await getSettings()).appearance).toBe('system')
