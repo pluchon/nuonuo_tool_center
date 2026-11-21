@@ -10,10 +10,10 @@ const target = 'resources/icon.ico'
 const brand = 'src/renderer/src/assets/brand/app-icon.png'
 const BRAND_SIZE = 96
 
-// 每个尺寸一张 PNG（ICO 允许直接内嵌 PNG）
+// 每个尺寸一张 PNG（ICO 允许直接内嵌 PNG）；固定写 96 DPI，源图的分辨率字段坏了（横向为 0）时 Windows 会整份拒读
 const images = []
 for (const size of SIZES) {
-  images.push({ size, data: await sharp(source).resize(size, size, { kernel: 'lanczos3' }).png({ compressionLevel: 9 }).toBuffer() })
+  images.push({ size, data: await sharp(source).resize(size, size, { kernel: 'lanczos3' }).withMetadata({ density: 96 }).png({ compressionLevel: 9 }).toBuffer() })
 }
 
 // ICO 文件头 6 字节 + 每张 16 字节的目录，然后依次是图片数据
