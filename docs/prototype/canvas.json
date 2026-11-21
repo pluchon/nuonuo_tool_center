@@ -1,125 +1,148 @@
 {
   "v": 3,
-  "attachments": {},
-  "boards": {
-    "Main.dc.html": {
-      "h": 820,
-      "is_interactive": true,
-      "title": "应用原型",
-      "w": 1280,
-      "x": 0,
-      "y": 0
-    },
-    "State-Broken.dc.html": {
-      "h": 820,
-      "is_interactive": true,
-      "title": "单张图异常：生成中 / 无法预览 / 文件不见了",
-      "w": 1280,
-      "x": 4080,
-      "y": 1340
-    },
-    "State-DbError.dc.html": {
-      "h": 820,
-      "is_interactive": true,
-      "title": "图库数据打不开",
-      "w": 1280,
-      "x": 2720,
-      "y": 2280
-    },
-    "State-First.dc.html": {
-      "h": 820,
-      "is_interactive": true,
-      "title": "第一次打开：还没有任何图片",
-      "w": 1280,
-      "x": 0,
-      "y": 1340
-    },
-    "State-NoResult.dc.html": {
-      "h": 820,
-      "is_interactive": true,
-      "title": "搜索没有结果",
-      "w": 1280,
-      "x": 0,
-      "y": 2280
-    },
-    "State-Offline.dc.html": {
-      "h": 820,
-      "is_interactive": true,
-      "title": "源目录找不到（移动硬盘没接）",
-      "w": 1280,
-      "x": 2720,
-      "y": 1340
-    },
-    "State-OpFail.dc.html": {
-      "h": 820,
-      "is_interactive": true,
-      "title": "操作失败提示",
-      "w": 1280,
-      "x": 1360,
-      "y": 2280
-    },
-    "State-Scanning.dc.html": {
-      "h": 820,
-      "is_interactive": true,
-      "title": "导入后正在扫描",
-      "w": 1280,
-      "x": 1360,
-      "y": 1340
-    }
-  },
-  "createdOnFiles": {
-    "at": "2026-11-15T03:10:00Z",
-    "v": 1
-  },
-  "designSystems": [],
+  "title": "诺诺的图床 · AI 阶段（按现在的软件）",
   "launch": {
     "view": "canvas"
   },
-  "noteOrder": [
-    "rowTitle",
-    "feedback",
-    "stateTitle"
-  ],
-  "notes": {
-    "feedback": {
-      "fill": "purple",
-      "text": "主画板是完整原型\n点左侧导航切换图库、目录、R-18 和标签管理\n图库里可以点选、多选（Ctrl / Shift）、改标签、开关 R-18\n目录右键有菜单；图片可拖到源目录\n删除直接进系统回收站，不设回收站页面\n所有 AI 功能暂不出现；看板娘位置留空等新角色。",
-      "w": 360,
-      "x": 1477,
+  "boards": {
+    "AiMain.dc.html": {
+      "h": 820,
+      "is_interactive": true,
+      "title": "应用原型（按现在的软件）",
+      "w": 1280,
+      "x": 0,
       "y": 0
     },
-    "rowTitle": {
-      "kind": "title1",
-      "maxW": 2640,
-      "text": "诺诺的图床 · 本地版",
-      "w": 240,
+    "AiState-New.dc.html": {
       "x": 0,
-      "y": -135
+      "y": 1340,
+      "w": 1280,
+      "h": 820,
+      "is_interactive": true,
+      "title": "新对话：示例问题按图库内容换"
     },
-    "stateTitle": {
-      "kind": "title1",
-      "maxW": 5360,
-      "text": "特殊状态与异常状态",
-      "w": 240,
+    "AiState-Thinking.dc.html": {
+      "x": 1360,
+      "y": 1340,
+      "w": 1280,
+      "h": 820,
+      "is_interactive": true,
+      "title": "诺诺在翻图库"
+    },
+    "AiState-NoResult.dc.html": {
+      "x": 2720,
+      "y": 1340,
+      "w": 1280,
+      "h": 820,
+      "is_interactive": true,
+      "title": "对话里没找到"
+    },
+    "AiState-Offline.dc.html": {
+      "x": 4080,
+      "y": 1340,
+      "w": 1280,
+      "h": 820,
+      "is_interactive": true,
+      "title": "诺诺暂时连不上（可重试）"
+    },
+    "AiState-NoKey.dc.html": {
       "x": 0,
-      "y": 1060
+      "y": 2280,
+      "w": 1280,
+      "h": 820,
+      "is_interactive": true,
+      "title": "诺诺还没连上云端"
+    },
+    "AiState-Viewer.dc.html": {
+      "x": 1360,
+      "y": 2280,
+      "w": 1280,
+      "h": 820,
+      "is_interactive": true,
+      "title": "从对话里双击看大图"
+    },
+    "AiState-Queue.dc.html": {
+      "x": 2720,
+      "y": 2280,
+      "w": 1280,
+      "h": 820,
+      "is_interactive": true,
+      "title": "诺诺在看图：有图出错"
+    },
+    "AiState-QueueEmpty.dc.html": {
+      "x": 4080,
+      "y": 2280,
+      "w": 1280,
+      "h": 820,
+      "is_interactive": true,
+      "title": "诺诺没在看图"
+    },
+    "AiState-Suggest.dc.html": {
+      "x": 0,
+      "y": 3220,
+      "w": 1280,
+      "h": 820,
+      "is_interactive": true,
+      "title": "AI 建议：逐条确认"
+    },
+    "AiState-SuggestDone.dc.html": {
+      "x": 1360,
+      "y": 3220,
+      "w": 1280,
+      "h": 820,
+      "is_interactive": true,
+      "title": "AI 建议都处理完了"
     }
   },
   "order": [
-    "Main.dc.html",
-    "State-First.dc.html",
-    "State-Scanning.dc.html",
-    "State-Offline.dc.html",
-    "State-Broken.dc.html",
-    "State-NoResult.dc.html",
-    "State-OpFail.dc.html",
-    "State-DbError.dc.html"
+    "AiMain.dc.html",
+    "AiState-New.dc.html",
+    "AiState-Thinking.dc.html",
+    "AiState-NoResult.dc.html",
+    "AiState-Offline.dc.html",
+    "AiState-NoKey.dc.html",
+    "AiState-Viewer.dc.html",
+    "AiState-Queue.dc.html",
+    "AiState-QueueEmpty.dc.html",
+    "AiState-Suggest.dc.html",
+    "AiState-SuggestDone.dc.html"
   ],
-  "pages": [
-    {
-      "id": "page-1",
-      "name": "图床_本地非AI"
+  "notes": {
+    "aiFeedback": {
+      "fill": "purple",
+      "text": "从本地版原型复制，按现在的真实软件改过：\n标题栏换成应用图标；首页、空列表、出错页放上诺诺插画\n详情预览和大图用近黑衬底；路径框的文件夹按钮在左边\nR-18 和设置里的开关关着是中性色\n网格右侧有主题色滚动条；大图标题旁显示第几张\n没有筛选条件时不显示“N 张”；去掉了说明性的悬停提示\n快捷键列表补齐\n导入时真实软件弹的是 Windows 自己的选文件夹对话框，这里仍用原来的对话框代替演示\nAI 功能在这一页上加",
+      "w": 360,
+      "x": 1327,
+      "y": 0
+    },
+    "aiRowTitle": {
+      "kind": "title1",
+      "maxW": 2640,
+      "text": "诺诺的图床 · 微调后（AI 阶段）",
+      "w": 240,
+      "x": 0,
+      "y": -260
+    },
+    "aiStateTitle": {
+      "kind": "title1",
+      "maxW": 5360,
+      "text": "AI 相关的特殊状态与异常状态",
+      "w": 240,
+      "x": 0,
+      "y": 1060
+    },
+    "aiDesign": {
+      "fill": "blue",
+      "w": 360,
+      "x": 1727,
+      "y": 0,
+      "text": "AI 草图（可以直接点）：\n侧栏“AI”：诺诺助手（对话页）、AI 建议（诺诺给了名字、标签、角色、作品、出处的图，详情里逐条采用或不要）\n侧栏：鼠标在某个目录分组上滚动只滚这个分组，其他地方滚整个侧栏\n对话页顶栏右边：新对话、对话记录（下拉带尖角；今天只写时间，今年写日期，更早加年份；右键重命名、置顶、删除）\n输入框：+ 菜单（上传 / 粘贴 / 从图库挑），目录选择，包含 R-18；发送键悬停时箭头往上走；示例问题按图库内容每次换一批\n结果图：单击选中（Ctrl + C 复制、可拖到别的软件），双击看大图（左右只在这次的结果里切换）；名字在图片右上角\n底栏左边只有“诺诺在看图”\n本地分级判成 R-18 的直接打上标记，详情里标“诺诺判的”\n原型里的检索是假的：问题里出现标签名或图片名就算命中"
     }
-  ],
-  "title": "诺诺的图床 本地版界面"
+  },
+  "noteOrder": [
+    "aiRowTitle",
+    "aiFeedback",
+    "aiStateTitle",
+    "aiDesign"
+  ]
 }

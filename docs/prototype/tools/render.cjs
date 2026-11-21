@@ -1,15 +1,23 @@
-// 应用原型的本地静态预览：把 Main.dc.html 的模板按 renderVals() 展开成普通 HTML，只看样式，不带交互。
+// 应用原型的本地静态预览：把 AiMain.dc.html 的模板按 renderVals() 展开成普通 HTML，只看样式，不带交互。
 // 用法：
 //   node docs/prototype/tools/render.cjs                 渲染全部预设到 test-output/prototype/
 //   node docs/prototype/tools/render.cjs <名字> '<state-json>' [scene]   渲染一个自定义状态
-// 预设名见下方 PRESETS；state 的字段就是 Main.dc.html 里 this.state 的字段（如 page、set.theme、set.bg、viewer、setOpen）。
+// 预设名见下方 PRESETS；state 的字段就是 AiMain.dc.html 里 this.state 的字段（如 page、set.theme、set.bg、viewer、setOpen）。
 // 生成的 .html 直接用浏览器打开即可（字体从 Google Fonts 加载，离线时退回系统字体）。
 const fs = require('fs')
 const path = require('path')
 
 const ROOT = path.resolve(__dirname, '..')
 const OUT = path.resolve(__dirname, '../../../test-output/prototype')
-const SRC = path.join(ROOT, 'Main.dc.html')
+const SRC = path.join(ROOT, 'AiMain.dc.html')
+
+// 画布上传的图片（/_blob/<id>）换成仓库里对应的文件，相对 test-output/prototype/
+const BLOBS = {
+  '0622a7c355ef5d887fc6a6005f83e5f3': '../../src/renderer/src/assets/brand/app-icon.png',
+  b0ab6ce76dbbeb61ff791f106a6cf44d: '../../src/renderer/src/assets/nono/welcome.webp',
+  '20406dab7373dc5efa41ae653f152aa0': '../../src/renderer/src/assets/nono/empty.webp',
+  '02fcdc67981742029bd848f5deb8e629': '../../src/renderer/src/assets/nono/db-error.webp'
+}
 
 const PRESETS = {
   'main-light': [{}, ''],
@@ -28,14 +36,25 @@ const PRESETS = {
   'settings-about': [{ setOpen: true, set: { tab: 'about' } }, ''],
   'tags': [{ page: 'tags' }, ''],
   'tags-dark': [{ page: 'tags', set: { theme: 'dark' } }, ''],
-  'import-dialog': [{ dlg: 'import', dlgOpen: { 'D:': true } }, ''],
   'state-first': [{}, 'first'],
   'state-scanning': [{}, 'scanning'],
   'state-offline': [{}, 'offline'],
   'state-broken': [{}, 'broken'],
   'state-noresult': [{}, 'noresult'],
   'state-opfail': [{}, 'opfail'],
-  'state-dberror': [{}, 'dberror']
+  'state-dberror': [{}, 'dberror'],
+  'ai-chat': [{}, 'aiThinking'],
+  'ai-chat-dark': [{ set: { theme: 'dark' } }, 'aiThinking'],
+  'ai-new': [{}, 'aiNew'],
+  'ai-noresult': [{}, 'aiNoResult'],
+  'ai-offline': [{}, 'aiOffline'],
+  'ai-nokey': [{}, 'aiNoKey'],
+  'ai-viewer': [{}, 'aiViewer'],
+  'ai-queue': [{}, 'aiQueue'],
+  'ai-queue-empty': [{}, 'aiQueueEmpty'],
+  'ai-suggest': [{}, 'aiSuggest'],
+  'ai-suggest-dark': [{ set: { theme: 'dark' } }, 'aiSuggest'],
+  'ai-suggest-done': [{}, 'aiSuggestDone']
 }
 
 function loadComponent(html) {
@@ -132,7 +151,8 @@ function renderPage(html, state, scene) {
     '</head><body style="margin:0;background:#888">' + render(root, [vals]) + '</body></html>'
 }
 
-const html = fs.readFileSync(SRC, 'utf8')
+let html = fs.readFileSync(SRC, 'utf8')
+for (const [id, file] of Object.entries(BLOBS)) html = html.split('/_blob/' + id).join(file)
 fs.mkdirSync(OUT, { recursive: true })
 const [, , name, stateJson, scene] = process.argv
 const jobs = name ? { [name]: [JSON.parse(stateJson || '{}'), scene || ''] } : PRESETS
