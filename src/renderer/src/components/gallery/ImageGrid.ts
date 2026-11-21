@@ -6,6 +6,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useTransferStore } from '@/stores/transfer'
 import { useViewerStore } from '@/stores/viewer'
 import { groupConsecutive, layoutRows, monthKey, monthLabel, TILE_GAP, type LayoutRow } from '@/utils/gridLayout'
+import GridScrollbar from './GridScrollbar.vue'
 
 // 一个月份分组（不分组时只有一组，没有标题）
 export interface GridGroup {
@@ -17,13 +18,14 @@ export interface GridGroup {
   rows: LayoutRow[]
 }
 
-// 网格右侧留白和每行左右的内边距（照原型）
-const GRID_PAD_RIGHT = 2
+// 网格右侧给自绘滚动条留的窄边（和 ImageGrid.scss 的 padding-right 一致）和每行左右的内边距
+const GRID_PAD_RIGHT = 14
 const ROW_PAD_X = 2
 
 // 图片网格：按月分组、固定行高排版、单选 / Ctrl / Shift 多选、键盘移动、Ctrl + 滚轮换档
 export default defineComponent({
   name: 'ImageGrid',
+  components: { GridScrollbar },
   setup() {
     const gallery = useGalleryStore()
     const settings = useSettingsStore()

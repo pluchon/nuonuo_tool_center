@@ -1,0 +1,108 @@
+// 自绘滚动条：贴在网格右侧留出的窄边里，平时一根半透明的细滑块，悬停、拖动、滚动时变粗变亮
+.grid-scroll {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+
+  // 轨道：平时看不见，悬停或拖动时浮出一条淡色细槽
+  &__rail {
+    position: absolute;
+    top: 6px;
+    bottom: 6px;
+    right: 4px;
+    width: 6px;
+    border-radius: 999px;
+    background: var(--a-line);
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+
+  // 滑块：和月份标题竖条同一组紫粉渐变
+  &__thumb {
+    position: absolute;
+    top: 0;
+    right: 4px;
+    width: 6px;
+    border-radius: 999px;
+    background: linear-gradient(180deg, var(--a), var(--c-b-D86F95));
+    box-shadow: 0 2px 6px -1px rgba(var(--sh), 0.35);
+    opacity: 0.45;
+    cursor: grab;
+    will-change: transform;
+    transition:
+      width 0.18s ease,
+      right 0.18s ease,
+      opacity 0.2s ease;
+  }
+
+  &--active &__thumb {
+    opacity: 0.9;
+  }
+
+  &:hover &__rail,
+  &--drag &__rail {
+    opacity: 0.55;
+  }
+
+  &:hover &__thumb,
+  &--drag &__thumb {
+    right: 2px;
+    width: 10px;
+    opacity: 1;
+  }
+
+  &--drag &__thumb {
+    cursor: grabbing;
+  }
+
+  // 月份气泡：跟着滑块中心，停在滚动条左边
+  &__bubble {
+    position: absolute;
+    top: 0;
+    right: 20px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    margin-top: -13px;
+    padding: 0 11px;
+    border-radius: 999px;
+    border: 1.5px solid var(--a-line);
+    background: var(--c-surface);
+    box-shadow: 0 8px 20px -10px rgba(var(--sh), 0.55);
+    color: var(--a-ink);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    scale: 0.92;
+    transform-origin: right center;
+    transition:
+      opacity 0.2s ease,
+      scale 0.2s ease;
+
+    svg {
+      fill: var(--look-star);
+    }
+
+    &--on {
+      opacity: 1;
+      scale: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &__thumb,
+    &__bubble {
+      transition: none;
+    }
+  }
+}

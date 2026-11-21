@@ -69,6 +69,9 @@ describe('第四阶段：图片网格', () => {
     const months = await page.locator('.image-grid__title').allTextContents()
     const now = new Date()
     expect(months).toEqual([`${now.getFullYear()} 年 ${now.getMonth() + 1} 月`])
+    // 等详情面板滑入完、网格按最终宽度排好再量
+    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'))
+    await page.waitForTimeout(100)
     const rowsAligned = await page.evaluate(() => {
       const rows = [...document.querySelectorAll<HTMLElement>('.image-grid__row')]
       return rows.slice(0, -1).map((r) => {

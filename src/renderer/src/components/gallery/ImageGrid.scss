@@ -8,6 +8,16 @@
   }
 }
 
+// 外层：滚动区和自绘滚动条叠在一起
+.image-grid-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+// 右边留 14px 给滚动条，免得盖住卡片右上角的勾选圈
 .image-grid {
   position: relative;
   flex: 1;
@@ -17,7 +27,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 0 2px 18px 0;
+  padding: 0 14px 18px 0;
   outline: none;
 
   &__group {
