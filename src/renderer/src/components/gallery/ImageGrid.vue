@@ -22,6 +22,20 @@
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>{{ g.ids.length }} 张
           </span>
         </div>
+        <!-- “AI 建议”视图：按建议放进的类目录分组，组头可以一起采用 -->
+        <div v-else-if="g.aiDir" class="image-grid__head image-grid__head--dir">
+          <span class="image-grid__bar" aria-hidden="true" />
+          <svg v-if="g.aiDir.name" class="image-grid__arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+          <h3 class="image-grid__title">{{ g.label }}</h3>
+          <span v-if="g.aiDir.isNew" class="image-grid__new">新建</span>
+          <span class="image-grid__dash" aria-hidden="true" />
+          <span class="image-grid__count">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>{{ g.ids.length }} 张
+          </span>
+          <button class="image-grid__accept" type="button" :disabled="suggest.busy" @click="suggest.decide(g.ids, true)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>这一组全部采用
+          </button>
+        </div>
 
         <div v-for="(row, ri) in g.rows" :key="ri" class="image-grid__row" :style="rowStyle">
           <button
@@ -35,6 +49,7 @@
             :aria-pressed="gallery.isSelected(t.id)"
             :style="{ width: `${t.width}px` }"
             :draggable="!item(t.id).missing && !item(t.id).offline"
+            @mousedown="onTileDown"
             @click="onTileClick($event, t.id)"
             @dblclick="viewer.show(t.id)"
             @dragstart="onDragStart($event, t.id)"

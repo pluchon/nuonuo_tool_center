@@ -1,4 +1,4 @@
-import { app, BrowserWindow, nativeTheme, screen, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, powerMonitor, screen, shell } from 'electron'
 import { mkdir, rename } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,7 +13,12 @@ import { configureTransfer } from './services/fileOps/transferService'
 import { configureFolderOps } from './services/fileOps/folderOpsService'
 import { originalPathOf } from './services/galleryService'
 import { configureScan, getScanState, onScanState, requeueScan, startScan, stopScanAndWait } from './services/scan/scanService'
-import { configureRating, scheduleRating, stopRating, thresholdFromEnv } from './services/rating/ratingService'
+import { configureRating, isRatingBusy, scheduleRating, stopRating, thresholdFromEnv } from './services/rating/ratingService'
+import { configureLook, enqueueNewImages, initLook, isLookBusy, stopLook } from './services/ai/lookService'
+import { checkLooking, configureOrganize, initOrganize } from './services/ai/organizeService'
+import { startDreaming, stopDreaming } from './services/ai/dreamService'
+import { isAnswering } from './services/ai/assistantService'
+import { configureEmbedding, isEmbedBusy, scheduleEmbedding, stopEmbedding } from './services/ai/embeddingService'
 import { configureWatch, stopWatching, syncWatching } from './services/scan/watchService'
 import { getSettings } from './services/settingsService'
 import { windowBackground } from './window/windowControl'
@@ -117,6 +122,15 @@ function createMainWindow(theme: ThemeMode): BrowserWindow {
   return win
 }
 
+// 推一个事件给所有窗口
+function broadcast(channel: string, payload: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send(channel, payload)
+    }
+  }
+}
+
 // 扫描状态推给所有窗口
 function broadcastScanState(state: ScanStateVO): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -171,13 +185,32 @@ async function bootstrap(): Promise<void> {
     workerPath: join(currentDir, 'ratingWorker.js'),
     canRun: () => getScanState().progress === null,
     threshold: thresholdFromEnv(process.env.LTM_R18_THRESHOLD),
-    onR18: (count) => {
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) {
-          win.webContents.send(IpcEvent.ratingR18, count)
-        }
-      }
+    onR18: (count) => broadcast(IpcEvent.ratingR18, count),
+    onProgress: (p) => broadcast(IpcEvent.ratingProgress, p),
+    // 整台电脑 1 分钟没有键盘鼠标操作、插着电：分级可以多用两个线程
+    machineIdle: () => powerMonitor.getSystemIdleTime() >= 60 && !powerMonitor.isOnBatteryPower(),
+    // 判完的新图过了上云闸门：排进看图队列，补语义向量
+    onDone: () => {
+      void enqueueNewImages().catch((err: unknown) => log.error('排看图队列失败', err))
+      scheduleEmbedding()
     }
+  })
+  configureEmbedding({ thumbsDir: paths.thumbs, tempDir: join(paths.root, 'tmp'), canRun: () => getScanState().progress === null })
+  // 诺诺看图：扫描进行中让路；队列变化和新建议推给界面
+  configureLook({
+    thumbsDir: paths.thumbs,
+    tempDir: join(paths.root, 'tmp'),
+    canRun: () => getScanState().progress === null,
+    onState: (state) => {
+      broadcast(IpcEvent.lookState, state)
+      // 一键整理在等看图：看完了就出方案
+      void checkLooking().catch((err: unknown) => log.error('一键整理检查看图进度失败', err))
+    },
+    onSuggested: () => broadcast(IpcEvent.aiSuggested, null)
+  })
+  configureOrganize({
+    onState: (state) => broadcast(IpcEvent.organizeState, state),
+    onSuggested: () => broadcast(IpcEvent.aiSuggested, null)
   })
   // 扫描做完（目录可能有增删、移动硬盘接回来了）后重新对一遍监听的目录，再给新图分级
   let scanning = false
@@ -214,6 +247,13 @@ async function bootstrap(): Promise<void> {
     await syncWatching()
     // 上次没判完的接着判（自动扫描在跑时先让路，扫完会再叫一次）
     scheduleRating()
+    // 看图队列：上次没做完的接着做，查已提交的批量任务
+    await initLook().catch((err: unknown) => log.error('看图队列启动失败', err))
+    await initOrganize().catch((err: unknown) => log.error('一键整理启动失败', err))
+    // 做梦：几分钟没操作、扫描分级看图对话都不在跑时，把事件整理成记忆和核心档案
+    startDreaming({ isBusy: () => getScanState().progress !== null || isRatingBusy() || isLookBusy() || isAnswering() || isEmbedBusy() })
+    // 上次没补完的向量接着补
+    scheduleEmbedding()
   }
 }
 
@@ -254,6 +294,11 @@ app.on('will-quit', (event) => {
     .catch((err: unknown) => log.error('退出前执行删除失败', err))
     .then(() => stopScanAndWait())
     .catch((err: unknown) => log.error('停止扫描失败', err))
+    .then(() => {
+      stopDreaming()
+      stopLook()
+      stopEmbedding()
+    })
     .then(() => stopRating())
     .catch((err: unknown) => log.error('停止本地分级失败', err))
     .then(() => shutdownDatabase(paths.lockFile))

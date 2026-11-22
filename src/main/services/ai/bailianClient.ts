@@ -142,9 +142,20 @@ export async function chatCall(input: ChatCallInput): Promise<ChatCallResult> {
   }
 }
 
-// 带联网搜索的 Responses 调用：图片放在最后，来源只取搜索工具返回的链接
+// 批量推理的结果回来后按条记账
+export async function recordBatchUsage(meta: CallMeta, usage: unknown): Promise<NormalizedUsage> {
+  const u = normalizeChatUsage(usage)
+  try {
+    await insertApiUsage({ api: meta.kind, model: meta.model, imageId: meta.imageId, ...u, batch: true })
+  } catch (err) {
+    log.error('记录云端用量失败', err)
+  }
+  return u
+}
+
+// Responses 调用（看图）：图片放在最后；search 为真时带联网搜索，来源只取搜索工具返回的链接
 export async function searchCall(
-  meta: CallMeta & { instructions: string; text: string; imageDataUrl?: string; timeoutMs?: number }
+  meta: CallMeta & { instructions: string; text: string; imageDataUrl?: string; timeoutMs?: number; search?: boolean }
 ): Promise<SearchCallResult> {
   const t0 = Date.now()
   try {
@@ -157,7 +168,7 @@ export async function searchCall(
         model: meta.model,
         instructions: meta.instructions,
         input: [{ role: 'user', content }],
-        tools: [{ type: 'web_search' }],
+        ...(meta.search === false ? {} : { tools: [{ type: 'web_search' }] }),
         enable_thinking: false
       } as never,
       { timeout: meta.timeoutMs ?? BAILIAN_CONFIG.requestTimeoutMs }

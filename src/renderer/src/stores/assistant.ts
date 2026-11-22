@@ -31,6 +31,8 @@ export const useAssistantStore = defineStore('assistant', {
     // 新对话的示例问题
     ideas: [] as string[],
     draft: '',
+    // 要一起发的图（上传或粘贴），有它时按图找相似
+    attach: null as { dataUrl: string; name: string } | null,
     // 在哪里找：空表示全部图库
     scope: null as DirKeyDTO | null,
     includeR18: false,
@@ -45,7 +47,7 @@ export const useAssistantStore = defineStore('assistant', {
       return s.conversations.find((c) => c.id === s.currentId) ?? null
     },
     canSend(s): boolean {
-      return s.draft.trim() !== '' && !s.waiting
+      return (s.draft.trim() !== '' || s.attach !== null) && !s.waiting
     }
   },
   actions: {
@@ -115,14 +117,16 @@ export const useAssistantStore = defineStore('assistant', {
     // 发送：先存下这句话（新对话会出现在对话记录里），再等诺诺的回复
     async send(text?: string): Promise<void> {
       const q = (text ?? this.draft).trim()
-      if (!q || this.waiting) {
+      const image = text === undefined ? this.attach?.dataUrl : undefined
+      if ((!q && !image) || this.waiting) {
         return
       }
       this.waiting = true
       this.failure = null
       try {
-        const res = await askNono({ conversationId: this.currentId, text: q, scope: this.scope, includeR18: this.includeR18 })
+        const res = await askNono({ conversationId: this.currentId, text: q, scope: this.scope, includeR18: this.includeR18, ...(image ? { image } : {}) })
         this.draft = ''
+        this.attach = null
         this.currentId = res.conversation.id
         if (!this.conversations.some((c) => c.id === res.conversation.id)) {
           this.conversations = [res.conversation, ...this.conversations]

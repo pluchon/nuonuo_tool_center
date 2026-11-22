@@ -1,0 +1,164 @@
+// 其他 AI 辅助整理（照原型 assist）
+.assist {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  &__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &__label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--c-i-7F7494);
+  }
+
+  &__look {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--a-ink);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s;
+
+    &:hover {
+      background: var(--a06);
+    }
+  }
+
+  &__sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+  }
+
+  // 内容框：识别到 json 时描边变绿，贴了东西但找不到时变红
+  &__box {
+    position: relative;
+    border-radius: 12px;
+    background: var(--look-field-bg);
+    border: 1px solid var(--a-line2);
+    transition: border-color 0.15s;
+
+    &--ok {
+      border-color: var(--c-b-BFE3D6);
+    }
+
+    &--bad {
+      border-color: var(--c-b-F2C6D4);
+    }
+  }
+
+  &__field {
+    display: block;
+  }
+
+  &__input {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    resize: none;
+    border: none;
+    outline: none;
+    background: transparent;
+    padding: 9px 38px 9px 11px;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--c-i-3B3047);
+    user-select: text;
+
+    &::placeholder {
+      color: var(--c-i-9C90B3);
+    }
+  }
+
+  &__copy {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--c-i-9C90B3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      color 0.15s;
+
+    &:hover {
+      background: var(--a06);
+      color: var(--a-ink);
+    }
+
+    &--ok {
+      color: var(--c-i-1F6B57);
+    }
+  }
+
+  &__found {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__count {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--c-b-E2F4EE);
+    color: var(--c-i-1F6B57);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  &__hand {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 12px 0 10px;
+    box-sizing: border-box;
+    border-radius: 999px;
+    border: 1.5px solid var(--a);
+    background: var(--c-surface);
+    color: var(--a-ink);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+  }
+
+  &__bad {
+    font-size: 11px;
+    color: var(--c-i-A23D62);
+  }
+}

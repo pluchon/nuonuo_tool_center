@@ -1,14 +1,22 @@
 import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { GalleryItemVO } from '@shared/api'
 import { thumbUrl } from '@/api/gallery'
+import { startNativeDrag } from '@/api/files'
 import { useGalleryStore } from '@/stores/gallery'
+import { useToastStore } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
 import { useTransferStore } from '@/stores/transfer'
 import { useViewerStore } from '@/stores/viewer'
+import { useViewStore } from '@/stores/view'
+import { useSuggestStore } from '@/stores/suggest'
+import { useOrganizeStore } from '@/stores/organize'
 import { groupConsecutive, layoutRows, monthKey, monthLabel, TILE_GAP, type LayoutRow } from '@/utils/gridLayout'
 import GridScrollbar from './GridScrollbar.vue'
 
-// 一个月份分组（不分组时只有一组，没有标题）
+// 按住多久再拖算系统原生拖拽（毫秒）
+export const LONG_PRESS_MS = 400
+
+// 一个月份分组（不分组时只有一组，没有标题）；“AI 建议”视图里按建议放进的类目录分组
 export interface GridGroup {
   key: string
   timeline: boolean
@@ -16,6 +24,8 @@ export interface GridGroup {
   ids: number[]
   allOn: boolean
   rows: LayoutRow[]
+  // 只在“AI 建议”视图：目标类目录（null 是没有这类建议的那组）、目录还不存在
+  aiDir?: { name: string | null; isNew: boolean }
 }
 
 // 网格右侧给自绘滚动条留的窄边（和 ImageGrid.scss 的 padding-right 一致）和每行左右的内边距
@@ -28,9 +38,13 @@ export default defineComponent({
   components: { GridScrollbar },
   setup() {
     const gallery = useGalleryStore()
+    const toast = useToastStore()
     const settings = useSettingsStore()
     const viewer = useViewerStore()
     const transfer = useTransferStore()
+    const viewStore = useViewStore()
+    const suggest = useSuggestStore()
+    const organize = useOrganizeStore()
     const gridRef = ref<HTMLElement | null>(null)
     const width = ref(0)
 
@@ -46,23 +60,32 @@ export default defineComponent({
         return []
       }
       const sort = gallery.nameOnly ? 'new' : gallery.sort
-      const timeline = settings.values.groupByMonth && (sort === 'new' || sort === 'old' || sort === 'taken')
+      // “AI 建议”视图：主进程已经按目标类目录排在一起，这里按目录分组（有这类建议时才分）
+      const aiView = viewStore.page === 'gallery' && viewStore.view === 'ai'
+      const byDir = aiView && gallery.items.some((i) => i.aiDir)
+      const timeline = !aiView && settings.values.groupByMonth && (sort === 'new' || sort === 'old' || sort === 'taken')
       const keyOf = (i: GalleryItemVO): string => (sort === 'taken' ? monthKey(i.takenAt) : monthKey(i.importedAt))
-      const parts = timeline ? groupConsecutive(gallery.items, keyOf) : [{ key: 'all', items: gallery.items }]
+      const parts = byDir
+        ? groupConsecutive(gallery.items, (i) => (i.aiDir ? `dir:${i.aiDir.name}` : 'dir:'))
+        : timeline
+          ? groupConsecutive(gallery.items, keyOf)
+          : [{ key: 'all', items: gallery.items }]
       const ratioOf = (i: GalleryItemVO): number => (i.width && i.height ? i.width / i.height : 1)
       return parts.map((p) => {
         const ids = p.items.map((i) => i.imageId)
+        const dir = byDir ? (p.items[0].aiDir ?? null) : undefined
         return {
           key: p.key,
           timeline,
-          label: monthLabel(p.key),
+          label: byDir ? (dir?.name ?? '其他建议') : monthLabel(p.key),
           ids,
           allOn: gallery.multi && ids.every((id) => gallery.isSelected(id)),
           rows: layoutRows(
             p.items.map((i) => ({ id: i.imageId, ratio: ratioOf(i) })),
             rowWidth,
             gallery.rowHeight
-          )
+          ),
+          aiDir: dir === undefined ? undefined : { name: dir?.name ?? null, isNew: dir?.isNew ?? false }
         }
       })
     })
@@ -70,9 +93,22 @@ export default defineComponent({
     // 行很多时让浏览器跳过屏幕外的行（缩略图本身也是懒加载）
     const rowStyle = computed(() => ({ containIntrinsicSize: `auto ${gallery.rowHeight + 40}px` }))
 
+    // 按下的时间：按住约 0.4 秒再拖是系统原生拖拽（带出原文件到别的软件），直接拖是拖到侧栏源目录
+    let pressAt = 0
+    const onTileDown = (): void => {
+      pressAt = Date.now()
+    }
+
     // 开始拖：跟手的是一个小方块缩略图，多张时角上显示张数（只能拖到侧栏的源目录上）
     const onDragStart = (e: DragEvent, id: number): void => {
       const ids = gallery.startDrag(id)
+      if (Date.now() - pressAt >= LONG_PRESS_MS) {
+        e.preventDefault()
+        gallery.endDrag()
+        const fileIds = ids.map((x) => item(x)).filter((p) => !p.missing && !p.offline).map((p) => p.fileId)
+        startNativeDrag(fileIds, item(id).hash).catch((err: unknown) => toast.show(err instanceof Error ? err.message : String(err), 'error'))
+        return
+      }
       if (!e.dataTransfer) {
         return
       }
@@ -146,7 +182,7 @@ export default defineComponent({
     // 网格的键盘操作；焦点在输入框里或对话框开着时不处理
     const onKey = (e: KeyboardEvent): void => {
       const el = e.target as HTMLElement | null
-      if (viewer.open || settings.dialogOpen || gallery.deleteAsk || transfer.mode || (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))) {
+      if (viewer.open || settings.dialogOpen || gallery.deleteAsk || transfer.mode || organize.dialog || (el &&(el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))) {
         return
       }
       // Delete：删除选中的图（走确认）
@@ -159,6 +195,13 @@ export default defineComponent({
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
         e.preventDefault()
         void gallery.copyToClipboard()
+        return
+      }
+      // “AI 建议”视图快审：A 采用选中图的全部建议、X 全部不要，处理完选中移到下一张
+      const key = e.key.toLowerCase()
+      if (viewStore.page === 'gallery' && viewStore.view === 'ai' && !e.ctrlKey && !e.metaKey && !e.altKey && (key === 'a' || key === 'x')) {
+        e.preventDefault()
+        void suggest.decide(gallery.targets(), key === 'a')
         return
       }
       const order = gallery.items.map((i) => i.imageId)
@@ -234,6 +277,6 @@ export default defineComponent({
       }
     )
 
-    return { gallery, viewer, gridRef, groups, rowStyle, item, masked, thumbUrl, onTileClick, onDragStart, onWheel }
+    return { gallery, viewer, suggest, gridRef, groups, rowStyle, item, masked, thumbUrl, onTileClick, onTileDown, onDragStart, onWheel }
   }
 })

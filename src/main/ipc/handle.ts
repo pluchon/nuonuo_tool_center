@@ -2,6 +2,7 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import type { ApiResponse } from '@shared/api'
 import { BizError } from '../common/bizError'
 import { getLogger } from '../common/logger'
+import { markActivity } from '../services/ai/dreamService'
 
 const log = getLogger('ipc')
 
@@ -11,6 +12,8 @@ export function handle<TArgs extends unknown[], TResult>(
   fn: (event: IpcMainInvokeEvent, ...args: TArgs) => Promise<TResult>
 ): void {
   ipcMain.handle(channel, async (event, ...args): Promise<ApiResponse<TResult>> => {
+    // 界面上的每次调用都算“你在用”，诺诺空闲几分钟后才开始做梦
+    markActivity()
     try {
       const data = await fn(event, ...(args as TArgs))
       return { ok: true, data }

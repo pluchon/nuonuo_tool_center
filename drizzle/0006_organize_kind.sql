@@ -1,0 +1,1 @@
+ALTER TYPE "public"."ai_result_kind" ADD VALUE 'ORGANIZE';

@@ -1,6 +1,6 @@
 import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AI_TEXT_MAX, AI_TITLE_MAX, type AiMessageVO, type DirKeyDTO, type GalleryItemVO } from '@shared/api'
-import { copyImageToClipboard } from '@/api/files'
+import { copyImageToClipboard, startNativeDrag } from '@/api/files'
 import { thumbUrl } from '@/api/gallery'
 import NonoArt from '@/components/nono/NonoArt.vue'
 import { useAssistantStore } from '@/stores/assistant'
@@ -60,8 +60,9 @@ export default defineComponent({
     const scroller = ref<HTMLElement | null>(null)
     const inputRef = ref<HTMLTextAreaElement | null>(null)
     const histList = ref<HTMLElement | null>(null)
-    // 打开着的弹出：对话记录 / 范围下拉
-    const menu = ref<'hist' | 'dir' | null>(null)
+    // 打开着的弹出：对话记录 / 范围下拉 / “+”菜单
+    const menu = ref<'hist' | 'dir' | 'plus' | null>(null)
+    const fileRef = ref<HTMLInputElement | null>(null)
     // 对话记录里的右键菜单
     const ctx = ref<{ id: number; top: number } | null>(null)
     const renaming = ref<number | null>(null)
@@ -103,7 +104,59 @@ export default defineComponent({
       return s.kind === 'category' ? s.name : (library.overview?.sources.find((x) => x.id === s.id)?.name ?? '全部图库')
     })
 
-    const toggleMenu = (which: 'hist' | 'dir'): void => {
+    // 一个图片文件读成 data URL，放进输入框上方等着一起发
+    const attachFile = (file: File | null | undefined, name?: string): void => {
+      if (!file || !file.type.startsWith('image/')) {
+        return
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        toast.show('图片太大了（最多 20 MB）', 'error')
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = () => {
+        store.attach = { dataUrl: String(reader.result), name: name ?? (file.name || '粘贴的图片') }
+        inputRef.value?.focus()
+      }
+      reader.readAsDataURL(file)
+    }
+    // 上传图片：系统的选文件框
+    const pickFile = (): void => {
+      menu.value = null
+      fileRef.value?.click()
+    }
+    const onFilePicked = (e: Event): void => {
+      const input = e.target as HTMLInputElement
+      attachFile(input.files?.[0])
+      input.value = ''
+    }
+    // 粘贴图片：从剪贴板读第一张图
+    const pasteFromClipboard = async (): Promise<void> => {
+      menu.value = null
+      try {
+        for (const item of await navigator.clipboard.read()) {
+          const type = item.types.find((t) => t.startsWith('image/'))
+          if (type) {
+            const blob = await item.getType(type)
+            attachFile(new File([blob], '粘贴的图片', { type }), '粘贴的图片')
+            return
+          }
+        }
+        toast.show('剪贴板里没有图片', 'error')
+      } catch {
+        toast.show('读不到剪贴板', 'error')
+      }
+    }
+    // 在输入框里 Ctrl + V：剪贴板里是图就当附件，是字照常粘贴
+    const onPaste = (e: ClipboardEvent): void => {
+      const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'))
+      if (file) {
+        e.preventDefault()
+        attachFile(file, '粘贴的图片')
+      }
+    }
+
+    const toggleMenu = (which: 'hist' | 'dir' | 'plus'): void => {
       menu.value = menu.value === which ? null : which
       ctx.value = null
     }
@@ -181,6 +234,9 @@ export default defineComponent({
         void store.send()
       } else if (e.key === 'Escape') {
         closeMenus()
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'u') {
+        e.preventDefault()
+        pickFile()
       }
     }
 
@@ -199,6 +255,12 @@ export default defineComponent({
       const key = pickKey(messageId, imageId)
       picked.value = picked.value === key ? null : key
       closeMenus()
+    }
+    // 按住拖到别的软件：系统原生拖拽带出原文件（这里没有站内的拖放目标）
+    const dragOut = (e: DragEvent, messageId: number, p: GalleryItemVO): void => {
+      e.preventDefault()
+      picked.value = pickKey(messageId, p.imageId)
+      startNativeDrag([p.fileId], p.hash).catch((err: unknown) => toast.show(err instanceof Error ? err.message : String(err), 'error'))
     }
     // 双击打开大图，只在这次回复的结果里切换
     const openViewer = (images: GalleryItemVO[], imageId: number): void => {
@@ -278,6 +340,11 @@ export default defineComponent({
       store,
       scroller,
       inputRef,
+      fileRef,
+      pickFile,
+      onFilePicked,
+      pasteFromClipboard,
+      onPaste,
       histList,
       menu,
       ctx,
@@ -315,6 +382,7 @@ export default defineComponent({
       picStyle,
       pickKey,
       pick,
+      dragOut,
       openViewer,
       copyText
     }

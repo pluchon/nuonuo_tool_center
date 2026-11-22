@@ -3,7 +3,8 @@
 import { join } from 'node:path'
 import { utilityProcess, type UtilityProcess } from 'electron'
 import { getLogger } from '../../common/logger'
-import { findRatingCandidates, saveModelRating } from '../../repositories/imageRepository'
+import type { RatingProgressVO } from '@shared/api'
+import { countRatingCandidates, findRatingCandidates, saveModelRating } from '../../repositories/imageRepository'
 import type { RatingRequest, RatingResponse } from './ratingProtocol'
 import { ensureModel, modelDirOf } from './modelStore'
 import type { WdRating } from './wdTagger'
@@ -18,6 +19,11 @@ const PER_IMAGE_TIMEOUT_MS = 120_000
 const IDLE_EXIT_MS = 2 * 60_000
 // 明显 R-18 的口径：questionable + explicit ≥ 0.5（用户确认过的阈值）
 export const R18_THRESHOLD = 0.5
+// 推理线程：平时 2 个；电脑 1 分钟没人操作且插着电时 4 个（实测一张从约 0.97 秒降到 0.66 秒，再多几乎不快了）
+export const THREADS_ACTIVE = 2
+export const THREADS_IDLE = 4
+// 换到更多线程前至少等多久（换线程要重新加载模型约 3 秒，免得来回切）；换回少线程是立即的
+const RAISE_AFTER_MS = 60_000
 
 // 分级服务需要的外部信息
 export interface RatingConfig {
@@ -30,6 +36,48 @@ export interface RatingConfig {
   onR18: (count: number) => void
   // 明显 R-18 的阈值（正常就是 R18_THRESHOLD）
   threshold: number
+  // 一轮判完（新图过了上云闸门，可以排进看图队列了）
+  onDone: () => void
+  // 进度变了：推给界面（底栏“本地分级中…”）
+  onProgress?: (p: RatingProgressVO) => void
+  // 电脑现在是不是没人在用（系统空闲 1 分钟以上且插着电）；不给时一直按有人在用
+  machineIdle?: () => boolean
+}
+
+// 当前用的线程数和上次切换的时间
+let threads = THREADS_ACTIVE
+let switchedAt = 0
+
+// 这一张用几个线程：有人在用就立刻回到 2 个；没人用了要稳定一会儿才加到 4 个
+export function pickThreads(idle: boolean, current: number, sinceSwitchMs: number): number {
+  if (!idle) {
+    return THREADS_ACTIVE
+  }
+  return current < THREADS_IDLE && sinceSwitchMs < RAISE_AFTER_MS ? current : THREADS_IDLE
+}
+
+// 按电脑现在忙不忙定线程数
+function threadsNow(): number {
+  const next = pickThreads(config?.machineIdle?.() ?? false, threads, Date.now() - switchedAt)
+  if (next !== threads) {
+    threads = next
+    switchedAt = Date.now()
+  }
+  return threads
+}
+
+// 当前进度（这一轮）
+let progress: RatingProgressVO = { running: false, done: 0, total: 0 }
+
+// 改进度并推给界面
+function setProgress(next: RatingProgressVO): void {
+  progress = next
+  config?.onProgress?.(next)
+}
+
+// 当前进度（界面打开时读一次）
+export function getRatingProgress(): RatingProgressVO {
+  return progress
 }
 
 let config: RatingConfig | null = null
@@ -101,7 +149,7 @@ function killWorker(): void {
 }
 
 // 发一张给工作进程，等结果或超时
-function rateFile(file: string, modelDir: string): Promise<RatingResponse> {
+function rateFile(file: string, modelDir: string, threadCount: number): Promise<RatingResponse> {
   const id = ++seq
   const child = ensureWorker()
   return new Promise((resolve) => {
@@ -113,7 +161,7 @@ function rateFile(file: string, modelDir: string): Promise<RatingResponse> {
       clearTimeout(timer)
       resolve(r)
     })
-    const req: RatingRequest = { id, file, modelDir }
+    const req: RatingRequest = { id, file, modelDir, threads: threadCount }
     child.postMessage(req)
   })
 }
@@ -136,11 +184,13 @@ async function runOnce(): Promise<void> {
     if (batch.length === 0) {
       break
     }
+    // 中途又导入了新图时分母跟着变大
+    setProgress({ running: true, done: rated, total: rated + (await countRatingCandidates()) })
     for (const img of batch) {
       if (stopping || !cfg.canRun()) {
         break
       }
-      const res = await rateFile(join(cfg.thumbsDir, `${img.contentHash}.webp`), modelDir)
+      const res = await rateFile(join(cfg.thumbsDir, `${img.contentHash}.webp`), modelDir, threadsNow())
       if (res.ok) {
         const hit = isObviousR18(res.scores, cfg.threshold)
         if ((await saveModelRating(img.id, ratingOf(res.scores), res.scores, hit)) && hit) {
@@ -152,14 +202,17 @@ async function runOnce(): Promise<void> {
         await saveModelRating(img.id, 'UNKNOWN', { error: res.error }, false)
       }
       rated++
+      setProgress({ running: true, done: rated, total: Math.max(progress.total, rated) })
     }
   }
+  setProgress({ running: false, done: rated, total: rated })
   if (rated > 0) {
     log.info(`本地分级：判了 ${rated} 张，其中 ${r18} 张判为 R-18`)
   }
   if (r18 > 0) {
     cfg.onR18(r18)
   }
+  cfg.onDone()
 }
 
 // 有新图或扫描结束后调用：没在跑就开始一轮；跑完一段时间没新活就关掉工作进程
@@ -171,11 +224,34 @@ export function scheduleRating(): void {
     .catch((err: unknown) => log.error('本地分级出错', err))
     .finally(() => {
       running = null
+      if (progress.running) {
+        setProgress({ ...progress, running: false })
+      }
       if (idleTimer) {
         clearTimeout(idleTimer)
       }
       idleTimer = setTimeout(killWorker, IDLE_EXIT_MS)
     })
+}
+
+// 现在就给一个文件分级（诺诺助手里上传的图，上云前过本地闸门）；模型不可用时返回 null
+export async function rateFileNow(file: string): Promise<{ scores: Record<WdRating, number>; r18: boolean } | null> {
+  const cfg = config
+  if (!cfg || !(await ensureModel(cfg.modelsRoot))) {
+    return null
+  }
+  // 你在等结果：用当前已加载的线程数，不为一张图重新加载模型
+  const res = await rateFile(file, modelDirOf(cfg.modelsRoot), threads)
+  if (idleTimer) {
+    clearTimeout(idleTimer)
+  }
+  idleTimer = setTimeout(killWorker, IDLE_EXIT_MS)
+  return res.ok ? { scores: res.scores, r18: isObviousR18(res.scores, cfg.threshold) } : null
+}
+
+// 本地分级是不是正在跑（做梦时看忙不忙）
+export function isRatingBusy(): boolean {
+  return running !== null
 }
 
 // 退出前：不再开始新的一张，等手上这张做完，关掉工作进程

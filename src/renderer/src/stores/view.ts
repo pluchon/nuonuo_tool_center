@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia'
 import type { FolderRefDTO } from '@shared/api'
 
-// 图库视图：全部图片 / 还没打标签 / 最近导入 / R-18 图 / 某个目录
-export type GalleryView = 'all' | 'untagged' | 'recent' | 'r18' | 'dir'
+// 图库视图：全部图片 / 还没打标签 / 最近导入 / R-18 图 / AI 建议 / 某个目录
+export type GalleryView = 'all' | 'untagged' | 'recent' | 'r18' | 'ai' | 'dir'
 
 // 主区页面：图库、标签管理，或诺诺助手
 export type MainPage = 'gallery' | 'tags' | 'assistant'

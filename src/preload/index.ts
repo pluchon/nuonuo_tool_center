@@ -2,6 +2,11 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 import {
   IpcChannel,
   IpcEvent,
+  type OrganizeEstimateVO,
+  type OrganizeFolderVO,
+  type OrganizeStateVO,
+  type RatingProgressVO,
+  type SuggestionBatchVO,
   type AddTagDTO,
   type AddTagResultVO,
   type ApiResponse,
@@ -33,7 +38,9 @@ import {
   type AiAskResultVO,
   type AiConversationVO,
   type AiMessageVO,
-  type AiStatusVO
+  type AiStatusVO,
+  type AiSuggestionVO,
+  type LookStateVO
 } from '@shared/api'
 
 // 暴露给渲染进程的接口：只开放具体方法，不暴露 ipcRenderer 本身
@@ -84,6 +91,8 @@ const api = {
     // 拖进窗口的文件或文件夹在磁盘上的路径（Electron 新版本里 File 不再带 path）
     pathOf: (file: File): string => webUtils.getPathForFile(file),
     copyImage: (fileId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.fileCopyImage, fileId),
+    // 系统原生拖拽：带出这些文件位置的原图（hash 是跟手小图用的缩略图）
+    startDrag: (fileIds: number[], hash: string): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.fileStartDrag, fileIds, hash),
     remove: (query: GalleryQueryDTO, imageIds: number[]): Promise<ApiResponse<DeleteResultVO>> =>
       ipcRenderer.invoke(IpcChannel.fileDelete, query, imageIds),
     undoDelete: (batchId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.fileUndoDelete, batchId),
@@ -129,7 +138,55 @@ const api = {
       return () => ipcRenderer.removeListener(IpcEvent.scanState, wrapped)
     }
   },
+  look: {
+    state: (): Promise<ApiResponse<LookStateVO>> => ipcRenderer.invoke(IpcChannel.lookState),
+    retry: (jobId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.lookRetry, jobId),
+    now: (imageId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.lookNow, imageId),
+    cancelAll: (): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.lookCancelAll),
+    // 订阅看图队列的变化，返回取消订阅的函数
+    onState: (listener: (state: LookStateVO) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, state: LookStateVO): void => listener(state)
+      ipcRenderer.on(IpcEvent.lookState, handler)
+      return () => ipcRenderer.removeListener(IpcEvent.lookState, handler)
+    },
+    // 订阅“有新的 AI 建议”
+    onSuggested: (listener: () => void): (() => void) => {
+      const handler = (): void => listener()
+      ipcRenderer.on(IpcEvent.aiSuggested, handler)
+      return () => ipcRenderer.removeListener(IpcEvent.aiSuggested, handler)
+    }
+  },
+  suggestion: {
+    list: (imageId: number): Promise<ApiResponse<AiSuggestionVO[]>> => ipcRenderer.invoke(IpcChannel.suggestionList, imageId),
+    decide: (imageId: number, key: string, accept: boolean): Promise<ApiResponse<AiSuggestionVO[]>> =>
+      ipcRenderer.invoke(IpcChannel.suggestionDecide, imageId, key, accept),
+    acceptAll: (imageId: number): Promise<ApiResponse<AiSuggestionVO[]>> => ipcRenderer.invoke(IpcChannel.suggestionAcceptAll, imageId),
+    assistPrompt: (imageId: number): Promise<ApiResponse<string>> => ipcRenderer.invoke(IpcChannel.assistPrompt, imageId),
+    assistImport: (imageId: number, raw: unknown): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.assistImport, imageId, raw),
+    decideMany: (imageIds: number[], accept: boolean): Promise<ApiResponse<SuggestionBatchVO>> =>
+      ipcRenderer.invoke(IpcChannel.suggestionDecideMany, imageIds, accept)
+  },
+  organize: {
+    state: (): Promise<ApiResponse<OrganizeStateVO>> => ipcRenderer.invoke(IpcChannel.organizeState),
+    estimate: (): Promise<ApiResponse<OrganizeEstimateVO>> => ipcRenderer.invoke(IpcChannel.organizeEstimate),
+    start: (): Promise<ApiResponse<OrganizeStateVO>> => ipcRenderer.invoke(IpcChannel.organizeStart),
+    approve: (plan: OrganizeFolderVO[]): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.organizeApprove, plan),
+    cancel: (): Promise<ApiResponse<OrganizeStateVO>> => ipcRenderer.invoke(IpcChannel.organizeCancel),
+    // 订阅一键整理的状态变化
+    onState: (listener: (state: OrganizeStateVO) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, state: OrganizeStateVO): void => listener(state)
+      ipcRenderer.on(IpcEvent.organizeState, handler)
+      return () => ipcRenderer.removeListener(IpcEvent.organizeState, handler)
+    }
+  },
   rating: {
+    progress: (): Promise<ApiResponse<RatingProgressVO>> => ipcRenderer.invoke(IpcChannel.ratingProgress),
+    // 订阅本地分级的进度
+    onProgress: (listener: (p: RatingProgressVO) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, p: RatingProgressVO): void => listener(p)
+      ipcRenderer.on(IpcEvent.ratingProgress, handler)
+      return () => ipcRenderer.removeListener(IpcEvent.ratingProgress, handler)
+    },
     // 订阅“本地分级判出了 R-18”，返回取消订阅的函数
     onR18: (listener: (count: number) => void): (() => void) => {
       const handler = (_event: IpcRendererEvent, count: number): void => listener(count)

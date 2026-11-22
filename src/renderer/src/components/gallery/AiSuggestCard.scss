@@ -1,0 +1,121 @@
+// 诺诺的建议卡（照原型 sugg）
+.sugg {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  background: var(--a-bg);
+  border: 1px solid var(--a-line);
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  &__title {
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--a-ink);
+  }
+
+  &__all {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 26px;
+    padding: 0 10px 0 8px;
+    box-sizing: border-box;
+    border-radius: 999px;
+    border: 1.5px solid var(--a);
+    background: var(--c-surface);
+    color: var(--a-ink);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  &__row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 4px 0 8px;
+    box-sizing: border-box;
+    border-radius: 10px;
+    background: var(--c-surface);
+    border: 1px dashed var(--a-line);
+
+    svg {
+      flex: none;
+    }
+  }
+
+  &__kind {
+    flex: none;
+    width: 26px;
+    font-size: 11px;
+    color: var(--c-i-7F7494);
+  }
+
+  &__val {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--c-i-2E2440);
+    user-select: text;
+  }
+
+  // 放进的类目录还不存在：采用时新建
+  &__new {
+    flex: none;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--c-b-FCE7EE);
+    color: var(--c-i-C25B85);
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  &__ok,
+  &__no {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: 50%;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: scale 0.15s;
+
+    &:hover:not(:disabled) {
+      scale: 1.1;
+    }
+
+    &:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
+  }
+
+  &__ok {
+    background: var(--c-b-E2F4EE);
+    color: var(--c-i-1F6B57);
+  }
+
+  &__no {
+    background: var(--c-b-FCE7EE);
+    color: var(--c-i-C25B85);
+  }
+}

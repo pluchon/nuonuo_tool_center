@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { image } from '../db/schema'
 
@@ -65,6 +65,16 @@ export async function findRatingCandidates(limit: number): Promise<Array<{ id: n
     .where(and(eq(image.deleteState, 0), isNull(image.ratingSource), eq(image.thumbReady, THUMB_READY)))
     .orderBy(asc(image.id))
     .limit(limit)
+}
+
+// 还有多少张等着本地分级（进度条的分母）
+export async function countRatingCandidates(): Promise<number> {
+  const { db } = getDatabase()
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(image)
+    .where(and(eq(image.deleteState, 0), isNull(image.ratingSource), eq(image.thumbReady, THUMB_READY)))
+  return Number(row?.n ?? 0)
 }
 
 // 记下本地模型的分级；只在这张图还没被手动开关过时写（和手动操作并发时手动的赢），返回是否写入

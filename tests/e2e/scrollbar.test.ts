@@ -45,7 +45,7 @@ describe('网格滚动条', () => {
 
     // 滚动条占着右侧窄边，不盖住任何卡片（等详情面板滑入、网格按新宽度排好）
     await page.mouse.move(5, 400)
-    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'))
+    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity))
     await page.waitForTimeout(300)
     const overlap = await page.evaluate(() => {
       const bar = document.querySelector('.grid-scroll')!.getBoundingClientRect()
@@ -106,7 +106,7 @@ describe('网格滚动条', () => {
     // 重载后默认在“全部图片”（只显示打过标签的），回到“还没打标签”
     await page.locator('.side-nav__item').filter({ hasText: '还没打标签' }).first().click()
     await page.waitForSelector('.grid-scroll', { state: 'visible' })
-    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'))
+    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity))
     const b2 = (await thumb.boundingBox())!
     await page.mouse.move(b2.x + b2.width / 2, b2.y + b2.height / 2)
     await page.mouse.down()

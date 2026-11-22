@@ -105,7 +105,8 @@
 
             <template v-for="m in store.messages" :key="m.id">
               <div v-if="m.role === 'user'" class="assistant__user">
-                <div class="assistant__bubble">{{ m.text }}</div>
+                <img v-if="m.image" class="assistant__sent-img" :src="m.image" alt="发的图片" draggable="false" />
+                <div v-if="m.text" class="assistant__bubble">{{ m.text }}</div>
               </div>
               <article v-else class="assistant__reply">
                 <div v-if="m.how" class="assistant__how">
@@ -123,8 +124,10 @@
                     :style="picStyle(p)"
                     :aria-label="p.name"
                     :aria-pressed="picked === pickKey(m.id, p.imageId)"
+                    :draggable="!p.missing && !p.offline"
                     @click="pick(m.id, p.imageId)"
                     @dblclick="openViewer(m.images, p.imageId)"
+                    @dragstart="dragOut($event, m.id, p)"
                   >
                     <span v-if="p.isR18" class="assistant__pic-r18">R-18</span>
                     <span class="assistant__pic-name" :style="{ maxWidth: `${picWidth(p) - (p.isR18 ? 62 : 14)}px` }">{{ p.name }}</span>
@@ -207,6 +210,29 @@
                 </div>
               </div>
             </Transition>
+            <!-- “+”：往上弹出带尖角的菜单 -->
+            <Transition name="nn-pop">
+              <div v-if="menu === 'plus'" class="assistant__plus-menu" role="menu" aria-label="添加" data-ai-menu>
+                <span class="assistant__caret assistant__caret--down assistant__caret--plus" aria-hidden="true" />
+                <button role="menuitem" class="assistant__mi" type="button" @click="pickFile">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l8-8" /></svg>
+                  <span class="assistant__mi-label">上传图片</span><kbd class="assistant__kbd">Ctrl + U</kbd>
+                </button>
+                <button role="menuitem" class="assistant__mi" type="button" @click="pasteFromClipboard">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6v3H9zM8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /></svg>
+                  <span class="assistant__mi-label">粘贴图片</span><kbd class="assistant__kbd">Ctrl + V</kbd>
+                </button>
+              </div>
+            </Transition>
+            <input ref="fileRef" class="assistant__file" type="file" accept="image/*" @change="onFilePicked" />
+            <div v-if="store.attach" class="assistant__attach">
+              <span class="assistant__attach-img" :style="{ backgroundImage: `url(&quot;${store.attach.dataUrl}&quot;)` }">
+                <button class="assistant__attach-x" type="button" aria-label="去掉这张图" @click="store.attach = null">
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" /></svg>
+                </button>
+              </span>
+              <span class="assistant__attach-name">{{ store.attach.name }}</span>
+            </div>
             <label class="assistant__input-wrap">
               <span class="assistant__sr">问诺诺</span>
               <textarea
@@ -217,9 +243,22 @@
                 placeholder="搜你所想..."
                 :maxlength="textMax"
                 @keydown="onInputKey"
+                @paste="onPaste"
               />
             </label>
             <div class="assistant__controls">
+              <button
+                class="assistant__plus"
+                :class="{ 'assistant__plus--on': menu === 'plus' }"
+                type="button"
+                aria-label="添加图片"
+                aria-haspopup="menu"
+                :aria-expanded="menu === 'plus'"
+                data-ai-menu
+                @click="toggleMenu('plus')"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              </button>
               <button
                 class="assistant__dir"
                 :class="{ 'assistant__dir--on': menu === 'dir' || store.scope }"

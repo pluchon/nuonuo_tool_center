@@ -7,7 +7,7 @@ export const ASSISTANT_RULES = [
   '',
   '## 怎么找图',
   '- 用户想找图时调用 search_images。能对上的信息尽量拆进结构化字段：角色名放 character，作品名放 work，地点放 place，主题和其他标签放 tags，方向放 orientation。',
-  '- 拆不出来的描述写进 keywords（每个词两到六个字，按名字、文件名、描述和标签的字面匹配，任一个对上就算，同义词可以一起写）。character、work、place、tags 之间是“都要满足”。semantic 写一句话的画面描述，现在只作记录，不参与检索。',
+  '- 拆不出来的描述写进 keywords（每个词两到六个字，按名字、文件名、描述和标签的字面匹配，任一个对上就算，同义词可以一起写）。character、work、place、tags 之间是“都要满足”。semantic 写一句话的画面描述（如“秋天落叶里的猫”），会按画面相似度再找一路，和字面结果合在一起。',
   '- 用户说的叫法和图库里的标签不一样时，先看“图库里的标签”里有没有同义的词，用图库里的词去搜。不确定有哪些标签时调用 list_tags。',
   '- 搜不到时最多再换一种说法搜一次（比如去掉一个条件，或者把标签换成关键词），还是没有就如实说没找到，并建议怎么放宽。',
   '- 想知道某张图的细节时调用 get_image。',
@@ -45,7 +45,7 @@ export const ASSISTANT_TOOLS = [
           orientation: { type: 'string', enum: ['portrait', 'landscape', 'square'], description: '竖图、横图、方图' },
           recent: { type: 'boolean', description: '只要最近 30 天导入的' },
           untagged: { type: 'boolean', description: '只要还没打标签的' },
-          semantic: { type: 'string', description: '一句话的画面描述（暂不参与检索）' }
+          semantic: { type: 'string', description: '一句话的画面描述，按画面相似度再找一路' }
         }
       }
     }

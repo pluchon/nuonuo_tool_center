@@ -62,15 +62,15 @@ export async function findMessages(conversationId: number): Promise<AiMessageEnt
     .orderBy(asc(aiMessage.id))
 }
 
-// 给一条回复点赞、踩或取消；只对诺诺的回复有效
-export async function updateVote(messageId: number, vote: 'UP' | 'DOWN' | null): Promise<number> {
+// 给一条回复点赞、踩或取消；只对诺诺的回复有效，返回改后的这条（不存在时为空）
+export async function updateVote(messageId: number, vote: 'UP' | 'DOWN' | null): Promise<AiMessageEntity | undefined> {
   const { db } = getDatabase()
-  const rows = await db
+  const [row] = await db
     .update(aiMessage)
     .set({ vote })
     .where(and(eq(aiMessage.id, messageId), eq(aiMessage.role, 'ASSISTANT'), eq(aiMessage.deleteState, 0)))
-    .returning({ id: aiMessage.id })
-  return rows.length
+    .returning()
+  return row
 }
 
 // 记下一条对话里明说的偏好

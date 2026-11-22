@@ -8,7 +8,16 @@ import { getImageDetail } from '../../src/main/services/galleryService'
 
 // ratingService 引用了 electron 的 utilityProcess；这里只测纯函数，换成空壳
 vi.mock('electron', () => ({ utilityProcess: {}, clipboard: {}, ClipboardItem: class {}, nativeImage: {}, shell: {} }))
-const { isObviousR18, ratingOf, thresholdFromEnv } = await import('../../src/main/services/rating/ratingService')
+const { isObviousR18, pickThreads, ratingOf, thresholdFromEnv, THREADS_ACTIVE, THREADS_IDLE } = await import('../../src/main/services/rating/ratingService')
+
+describe('分级线程', () => {
+  it('有人在用立刻回到 2 线程；没人用了稳定 1 分钟才加到 4 线程，之后保持', () => {
+    expect(pickThreads(false, THREADS_IDLE, 0)).toBe(THREADS_ACTIVE)
+    expect(pickThreads(true, THREADS_ACTIVE, 10_000)).toBe(THREADS_ACTIVE)
+    expect(pickThreads(true, THREADS_ACTIVE, 61_000)).toBe(THREADS_IDLE)
+    expect(pickThreads(true, THREADS_IDLE, 0)).toBe(THREADS_IDLE)
+  })
+})
 const { isModelReady, ensureModel, modelDirOf } = await import('../../src/main/services/rating/modelStore')
 
 describe('分级口径', () => {

@@ -28,6 +28,7 @@ import { ensureCategoryRoot } from '../categoryHome'
 import { filesForAction } from '../galleryService'
 import { getScanState } from '../scan/scanService'
 import { enqueue, trashPath } from './fileOpsService'
+import { recordEvents } from '../ai/eventService'
 
 const log = getLogger('fileOps')
 
@@ -233,6 +234,10 @@ export async function moveImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
       }
     }
     await finish(batchId, done, failed)
+    // 记进事件流：哪些图被移动到了哪个目录（做梦时整理成“什么图常放哪里”）
+    if (done > 0) {
+      await recordEvents('file.move', ids.slice(0, 50), { to: basename(target.abs) })
+    }
     return { batchId: done > 0 ? batchId : null, done, skipped, failed, error }
   })
 }
@@ -327,6 +332,11 @@ export async function copyImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
       }
     }
     await finish(batchId, done, failed)
+    if (done > 0) {
+      for (const t of targets) {
+        await recordEvents('file.copy', ids.slice(0, 50), { to: basename(t.abs) })
+      }
+    }
     return { batchId: done > 0 ? batchId : null, done, skipped, failed, error }
   })
 }

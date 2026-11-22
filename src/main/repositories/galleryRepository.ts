@@ -2,6 +2,7 @@ import { and, eq, inArray, ne, or, sql, type SQL } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { col, likeEscape } from '../db/sqlUtil'
 import { image, imageFile, imageTag, libraryRoot, tag } from '../db/schema'
+import { hasPendingSuggestion } from './aiResultRepository'
 
 // 网格查询的一行：一个文件位置连同它的图片
 export interface GalleryRow {
@@ -27,7 +28,7 @@ export interface GalleryRow {
 // 查询条件（服务层已经校验和规范化过）
 export interface GalleryFilter {
   // 视图条件：all 只要打过标签的，untagged 只要没打过的，recent 只要最近 N 天导入的，r18 只要 R-18
-  scope: 'all' | 'untagged' | 'recent' | 'r18' | 'dir'
+  scope: 'all' | 'untagged' | 'recent' | 'r18' | 'ai' | 'dir'
   recentDays: number
   // 目录条件：哪个目录、相对路径前缀（不含结尾反斜杠，空串表示整个目录）、是否不含子目录
   rootId?: number
@@ -88,6 +89,8 @@ export async function findGalleryRows(f: GalleryFilter): Promise<GalleryRow[]> {
     conds.push(sql`${image.createTime} >= now() - make_interval(days => ${f.recentDays})`)
   } else if (f.scope === 'r18') {
     conds.push(eq(image.isR18, true))
+  } else if (f.scope === 'ai') {
+    conds.push(hasPendingSuggestion)
   }
   if (f.rootId !== undefined) {
     conds.push(eq(imageFile.rootId, f.rootId))

@@ -26,6 +26,9 @@
         </button>
       </div>
 
+      <!-- “AI 建议”视图里：诺诺的建议 -->
+      <AiSuggestCard v-if="aiView" :image-id="detail.imageId" />
+
       <div class="detail-panel__block">
         <div class="detail-panel__row-head">
           <label class="detail-panel__label" for="nameInput">图片好名字</label>
@@ -106,6 +109,8 @@
           <span class="detail-panel__knob" />
         </button>
       </div>
+
+      <AssistBox :image-id="detail.imageId" :r18="detail.isR18" />
 
       <div class="detail-panel__foot">
         <div class="detail-panel__acts">

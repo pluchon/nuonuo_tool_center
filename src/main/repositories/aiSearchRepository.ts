@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { col, likeEscape } from '../db/sqlUtil'
-import { image, imageFile, imageTag, libraryRoot, tag, tagAlias } from '../db/schema'
+import { image, imageEmbedding, imageFile, imageTag, libraryRoot, tag, tagAlias } from '../db/schema'
 
 // 诺诺找图的检索条件（服务层已经解析好：词已对到标签 id，对不上的留作关键词）
 export interface AiSearchFilter {
@@ -19,6 +19,8 @@ export interface AiSearchFilter {
   // 普通检索排除 R-18；R-18 那一路只查 R-18
   r18: 'exclude' | 'only'
   limit: number
+  // 语义那一路：按和这个向量的相似度排（只在已经有向量的图里找），低于 minSimilarity 的不要
+  vector?: { values: number[]; model: string; minSimilarity: number }
 }
 
 // 检索结果：按导入时间从新到旧的图片 id（最多 limit 张）和总数
@@ -96,6 +98,20 @@ export async function searchImages(f: AiSearchFilter): Promise<AiSearchHit> {
   if (f.untagged) {
     conds.push(sql`not exists (select 1 from ${imageTag} where ${col(imageTag.imageId)} = ${col(image.id)} and ${acceptedTag})`)
   }
+  if (f.vector) {
+    // 余弦距离 = 1 - 相似度；向量用字面量传进去
+    const lit = `[${f.vector.values.join(',')}]`
+    const distance = sql<number>`(select ${col(imageEmbedding.embedding)} <=> ${lit}::vector from ${imageEmbedding}
+      where ${col(imageEmbedding.imageId)} = ${col(image.id)} and ${col(imageEmbedding.model)} = ${f.vector.model} and ${col(imageEmbedding.deleteState)} = 0 limit 1)`
+    conds.push(sql`${distance} <= ${1 - f.vector.minSimilarity}`)
+    const rows = await db
+      .select({ id: image.id, total: sql<number>`count(*) over ()::int` })
+      .from(image)
+      .where(and(...conds))
+      .orderBy(distance, desc(image.id))
+      .limit(f.limit)
+    return { ids: rows.map((r) => r.id), total: rows[0]?.total ?? 0 }
+  }
   const rows = await db
     .select({ id: image.id, total: sql<number>`count(*) over ()::int` })
     .from(image)
@@ -103,6 +119,45 @@ export async function searchImages(f: AiSearchFilter): Promise<AiSearchHit> {
     .orderBy(desc(image.createTime), desc(image.id))
     .limit(f.limit)
   return { ids: rows.map((r) => r.id), total: rows[0]?.total ?? 0 }
+}
+
+// 还没有向量、又过了上云闸门的图（本地模型判过且不是明显 R-18，或你手动关过 R-18），先导入的先做
+export async function findEmbedCandidates(model: string, limit: number): Promise<number[]> {
+  const { db } = getDatabase()
+  const hasVec = sql`exists (select 1 from ${imageEmbedding} where ${col(imageEmbedding.imageId)} = ${col(image.id)} and ${col(imageEmbedding.model)} = ${model} and ${col(imageEmbedding.deleteState)} = 0)`
+  const rows = await db
+    .select({ id: image.id })
+    .from(image)
+    .where(
+      and(
+        eq(image.deleteState, 0),
+        eq(image.isR18, false),
+        sql`(${image.ratingSource} = 'MANUAL' or (${image.ratingSource} = 'MODEL' and ${image.rating} in ('GENERAL', 'SENSITIVE')))`,
+        sql`not ${hasVec}`
+      )
+    )
+    .orderBy(image.id)
+    .limit(limit)
+  return rows.map((r) => r.id)
+}
+
+// 存一张图的向量（同一模型只留一份）
+export async function saveEmbedding(imageId: number, model: string, values: number[]): Promise<void> {
+  const { db } = getDatabase()
+  await db
+    .insert(imageEmbedding)
+    .values({ imageId, model, embedding: values })
+    .onConflictDoUpdate({
+      target: [imageEmbedding.imageId, imageEmbedding.model],
+      targetWhere: sql`${imageEmbedding.deleteState} = 0`,
+      set: { embedding: values, updateTime: new Date() }
+    })
+}
+
+// 有向量的图有几张
+export async function countEmbeddings(model: string): Promise<number> {
+  const { db } = getDatabase()
+  return db.$count(imageEmbedding, and(eq(imageEmbedding.model, model), eq(imageEmbedding.deleteState, 0)))
 }
 
 // 这些图上已确认的标签名（按图分组），给模型看结果用

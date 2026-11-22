@@ -28,7 +28,7 @@ afterAll(async () => {
 describe('侧栏概况', () => {
   it('新库：计数都是 0，没有源目录；类目录位置还不存在时没有类目录', async () => {
     expect(await getOverview(home)).toEqual({
-      counts: { total: 0, tagged: 0, untagged: 0, recent: 0, r18: 0, tags: 0 },
+      counts: { total: 0, tagged: 0, untagged: 0, recent: 0, r18: 0, tags: 0, aiSuggest: 0 },
       sources: [],
       categories: [],
       lastScanAt: null
@@ -69,7 +69,7 @@ describe('侧栏概况', () => {
       INSERT INTO image_tag (image_id, tag_id, source, status) VALUES (1, 1, 'MANUAL', 'ACCEPTED'), (2, 1, 'VLM', 'SUGGESTED');
     `)
     const ov = await getOverview(home)
-    expect(ov.counts).toEqual({ total: 2, tagged: 1, untagged: 1, recent: 2, r18: 1, tags: 1 })
+    expect(ov.counts).toEqual({ total: 2, tagged: 1, untagged: 1, recent: 2, r18: 1, tags: 1, aiSuggest: 0 })
     expect(ov.sources).toEqual([{ id: 1, name: 'pics', path: sourceA, count: 2, hasChildren: true, offline: false }])
   })
 })

@@ -17,6 +17,23 @@ export const BAILIAN_CONFIG = {
   chatTimeoutMs: 60_000
 } as const
 
+// 语义向量：DashScope 原生多模态向量接口（兼容端点的 /models 里没有它），图片和中文查询在同一个空间，输出 1024 维
+export const EMBEDDING_CONFIG = {
+  url: 'https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding',
+  model: 'qwen3-vl-embedding',
+  dimension: 1024,
+  timeoutMs: 30_000
+} as const
+
+// 一键整理开始前的费用估算（粗估，以账单为准）：实时看一张约 2.6k token，带联网搜索约 0.006 元；批量半价、不联网约 0.0004 元
+export const ORGANIZE_COST = {
+  tokensPerImage: 2600,
+  realtimeYuanPerImage: 0.006,
+  batchYuanPerImage: 0.0004,
+  // 队列里前这么多张实时看，其余走批量（和看图队列一致）
+  realtimeMax: 50
+} as const
+
 // 缓存命中率的检查：按文本 token 算（图片 token 每张都是新的，不计入），最近这么多次调用里低于目标时写警告
 export const CACHE_HIT_CHECK = {
   target: 0.95,

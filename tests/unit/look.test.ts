@@ -1,0 +1,235 @@
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import sharp from 'sharp'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { countAssistFields, parseAssistJson } from '../../src/shared/assistJson'
+import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
+import { localClues } from '../../src/main/services/ai/localClues'
+import { normalizeFields, pendingStatus } from '../../src/main/services/ai/suggestion'
+
+// 模型调用换成脚本：看图时返回预设的回复，记下请求
+const calls: Array<{ text: string; search: boolean | undefined; image: boolean }> = []
+let reply: { text: string; sources: Array<{ url: string }> } = { text: '', sources: [] }
+vi.mock('../../src/main/services/ai/bailianClient', () => ({
+  searchCall: vi.fn(async (meta: { text: string; search?: boolean; imageDataUrl?: string }) => {
+    calls.push({ text: meta.text, search: meta.search, image: !!meta.imageDataUrl?.startsWith('data:image/jpeg;base64,') })
+    return { ...reply, usage: {} }
+  }),
+  getBailianClient: vi.fn(),
+  recordBatchUsage: vi.fn(),
+  chatCall: vi.fn()
+}))
+vi.mock('electron', () => ({ clipboard: {}, ClipboardItem: class {}, nativeImage: {}, shell: {} }))
+
+const look = await import('../../src/main/services/ai/lookService')
+const sugg = await import('../../src/main/services/ai/suggestionService')
+
+describe('本地线索', () => {
+  it('Pixiv、图站、yande.re 文件名和相机型号', () => {
+    expect(localClues('12345678_p0.png', null)).toMatchObject({ source: 'https://www.pixiv.net/artworks/12345678', photo: false })
+    expect(localClues('12345678_p3_master1200.jpg', null).source).toBe('https://www.pixiv.net/artworks/12345678')
+    const booru = localClues('__ganyu_(genshin_impact)_drawn_by_someone_artist__0123456789abcdef0123456789abcdef.jpg', null)
+    expect(booru).toMatchObject({ character: 'ganyu', artist: 'someone artist', source: null })
+    expect(localClues('yande.re 98765 ganyu genshin.jpg', null).source).toBe('https://yande.re/post/show/98765')
+    const photo = localClues('IMG_0001.JPG', { make: 'Canon', model: 'EOS R6' })
+    expect(photo.photo).toBe(true)
+    expect(photo.notes.join()).toContain('Canon EOS R6')
+    expect(localClues('随便一张.jpg', null)).toMatchObject({ source: null, photo: false, notes: ['文件名：随便一张.jpg'] })
+  })
+})
+
+describe('建议整理', () => {
+  const ctx = { canonical: new Map([['椰羊', '甘雨'], ['genshin', '原神'], ['甘雨', '甘雨'], ['原神', '原神']]), existing: ['猫'] }
+
+  it('对齐叫法、去重、不和角色作品已有标签重复、字数和个数上限、出处只要链接', () => {
+    const f = normalizeFields(
+      {
+        name: '一个特别特别特别特别长的名字超过十五个字',
+        character: '椰羊',
+        work: 'Genshin',
+        tags: ['表情包', '表情包', '甘雨', '猫', 'Q版', '可爱', '举牌', '文字', '多余'],
+        source: 'pixiv 某某',
+        description: ' 甘雨举着牌子 '
+      },
+      ctx
+    )
+    expect(f).toEqual({
+      name: '一个特别特别特别特别长的名字超',
+      character: '甘雨',
+      work: '原神',
+      tags: ['表情包', 'Q版', '可爱', '举牌', '文字'],
+      source: '',
+      description: '甘雨举着牌子'
+    })
+    expect(Object.keys(pendingStatus(f))).toEqual(['name', 'tag:表情包', 'tag:Q版', 'tag:可爱', 'tag:举牌', 'tag:文字', 'who', 'work'])
+    expect(normalizeFields(null, ctx)).toEqual({ name: '', character: '', work: '', tags: [], source: '', description: '' })
+  })
+
+  it('外部 AI 的回复：找 json 代码块，没有就找大括号，数条数', () => {
+    const text = '好的，结果如下：\n```json\n{"name": "好椰", "character": "甘雨", "tags": ["表情包", ""], "source": ""}\n```\n希望有帮助'
+    const o = parseAssistJson(text)
+    expect(o).toMatchObject({ name: '好椰' })
+    expect(countAssistFields(o!)).toBe(3)
+    expect(parseAssistJson('{"name":"x"}')).toEqual({ name: 'x' })
+    expect(parseAssistJson('没有 json')).toBeNull()
+    expect(parseAssistJson('```json\n[1,2]\n```')).toBeNull()
+  })
+})
+
+describe('看图队列和 AI 建议', () => {
+  let dir: string
+  let source: string
+  const states: number[] = []
+  let suggested = 0
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'ltm-look-'))
+    source = join(dir, 'pics')
+    mkdirSync(source)
+    process.env.DASHSCOPE_API_KEY = 'test-key-not-real'
+    // 四张测试图：普通图、Pixiv 文件名、R-18、本地模型判过但分数不明（UNKNOWN，不放行）
+    for (const name of ['a.jpg', '12345678_p0.jpg', 'c.jpg', 'd.jpg']) {
+      await sharp({ create: { width: 1600, height: 900, channels: 3, background: '#BBD5EE' } }).jpeg().toFile(join(source, name))
+    }
+    await openDatabase(join(dir, 'pgdata'), resolve('drizzle'))
+    const { pg } = getDatabase()
+    await pg.query(`INSERT INTO library_root (kind, name, path) VALUES ('SOURCE', 'pics', $1)`, [source])
+    await pg.exec(`
+      INSERT INTO image (content_hash, format, byte_size, width, height, thumb_ready, rating, rating_source, is_r18) VALUES
+        ('h1', 'JPG', 1, 1600, 900, 1, 'GENERAL', 'MODEL', false),
+        ('h2', 'JPG', 1, 1600, 900, 1, 'SENSITIVE', 'MODEL', false),
+        ('h3', 'JPG', 1, 1600, 900, 1, 'EXPLICIT', 'MODEL', true),
+        ('h4', 'JPG', 1, 1600, 900, 1, 'UNKNOWN', 'MODEL', false),
+        ('h5', 'JPG', 1, 1600, 900, 1, 'UNKNOWN', NULL, false);
+      INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES
+        (1, 1, 'a.jpg', now()), (2, 1, '12345678_p0.jpg', now()), (3, 1, 'c.jpg', now()), (4, 1, 'd.jpg', now()), (5, 1, 'e.jpg', now());
+      INSERT INTO tag (name, category_id) VALUES ('甘雨', 1), ('原神', 2), ('猫', 4);
+      INSERT INTO tag_alias (tag_id, name) VALUES (1, '椰羊');
+      -- 自动看图从这个时间起导入的图（第一次启用时是“现在”，这里提前，让上面几张算新图）
+      INSERT INTO app_setting (key, value) VALUES ('ai.lookSince', '"2000-01-01T00:00:00.000Z"');
+    `)
+    look.configureLook({
+      thumbsDir: join(dir, 'thumbs'),
+      tempDir: join(dir, 'tmp'),
+      canRun: () => true,
+      onState: (s) => states.push(s.count),
+      onSuggested: () => suggested++
+    })
+  })
+
+  afterAll(async () => {
+    look.stopLook()
+    await closeDatabase()
+    rmSync(dir, { recursive: true, force: true })
+    delete process.env.DASHSCOPE_API_KEY
+  })
+
+  // 等队列里没有进行中的
+  async function idle(): Promise<void> {
+    for (let i = 0; i < 100; i++) {
+      const s = await look.getLookState()
+      if (!s.rows.some((r) => r.state !== 'FAILED')) {
+        return
+      }
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    throw new Error('队列一直没空')
+  }
+
+  it('只排过了闸门的非 R-18 新图；看图带本地线索，有出处线索的不联网；结果进 AI 建议，描述直接补上', async () => {
+    reply = {
+      text: '```json\n{"name": "落叶小猫", "character": "椰羊", "work": "", "tags": ["猫", "秋天"], "source": "https://example.com/made-up", "description": "一只猫"}\n```',
+      sources: [{ url: 'https://example.com/real' }]
+    }
+    await look.initLook()
+    await idle()
+    // 第 1、2 张放行；R-18、分数不明、没判过的都不排
+    expect(calls).toHaveLength(2)
+    expect(calls.every((c) => c.image)).toBe(true)
+    expect(calls[0].search).toBe(true)
+    // Pixiv 文件名：出处已经确定，不再联网
+    expect(calls[1].text).toContain('Pixiv 作品 12345678')
+    expect(calls[1].search).toBe(false)
+    expect(suggested).toBe(2)
+
+    const a = await sugg.listSuggestions(1)
+    // 模型自己写的链接不在搜索结果里，丢掉；叫法对齐成“甘雨”；已有标签以外的保留
+    expect(a.map((s) => `${s.kind}:${s.value}`)).toEqual(['name:落叶小猫', 'tag:猫', 'tag:秋天', 'who:甘雨'])
+    const b = await sugg.listSuggestions(2)
+    expect(b.find((s) => s.kind === 'src')?.value).toBe('https://www.pixiv.net/artworks/12345678')
+    const { pg } = getDatabase()
+    expect((await pg.query<{ description: string }>('SELECT description FROM image WHERE id = 1')).rows[0].description).toBe('一只猫')
+
+    // 再排一次不会重复排
+    await look.enqueueNewImages()
+    await idle()
+    expect(calls).toHaveLength(2)
+  })
+
+  it('逐项采用 / 不要、全部采用；处理完离开 AI 建议；事件流记下来', async () => {
+    let left = await sugg.decideSuggestion(1, 'name', true)
+    expect(left.map((s) => s.key)).toEqual(['tag:猫', 'tag:秋天', 'who'])
+    left = await sugg.decideSuggestion(1, 'tag:秋天', false)
+    left = await sugg.acceptAllSuggestions(1)
+    expect(left).toEqual([])
+    const { pg } = getDatabase()
+    expect((await pg.query<{ display_name: string }>('SELECT display_name FROM image WHERE id = 1')).rows[0].display_name).toBe('落叶小猫')
+    const tags = (await pg.query<{ name: string; cat: string }>(
+      `SELECT t.name, c.name AS cat FROM image_tag it JOIN tag t ON t.id = it.tag_id JOIN tag_category c ON c.id = t.category_id WHERE it.image_id = 1 AND it.status = 'ACCEPTED' ORDER BY t.name`
+    )).rows
+    expect(tags).toEqual([
+      { name: '猫', cat: '主题' },
+      { name: '甘雨', cat: '角色' }
+    ])
+    await sugg.acceptAllSuggestions(2)
+    expect((await pg.query<{ source: string }>('SELECT source FROM image WHERE id = 2')).rows[0].source).toBe('https://www.pixiv.net/artworks/12345678')
+    await expect(sugg.decideSuggestion(1, 'name', true)).rejects.toThrow('处理过了')
+    const events = (await pg.query<{ kind: string }>('SELECT kind FROM ai_event ORDER BY id')).rows.map((r) => r.kind)
+    expect(events.filter((k) => k === 'suggestion.reject')).toHaveLength(1)
+    expect(events.filter((k) => k === 'suggestion.accept').length).toBeGreaterThan(3)
+  })
+
+  it('外部 AI：R-18 图也能用，叫法对齐后存成外部来源的建议；提示词里只有非 R-18 图上的标签', async () => {
+    const prompt = await sugg.assistPrompt(3)
+    expect(prompt).toContain('文件名：c.jpg')
+    expect(prompt).toContain('```json')
+    const n = await sugg.importAssist(3, { name: '某张图', character: '椰羊', tags: ['猫', '猫'], source: 'https://example.com/x' })
+    expect(n).toBe(4)
+    const items = await sugg.listSuggestions(3)
+    expect(items.every((s) => s.origin === 'EXTERNAL')).toBe(true)
+    expect(items.find((s) => s.kind === 'who')?.value).toBe('甘雨')
+    await expect(sugg.importAssist(3, {})).rejects.toThrow()
+    await expect(sugg.importAssist(3, 'not json')).rejects.toThrow()
+  })
+
+  it('出错挂标签可重试；全部取消后不再自动排', async () => {
+    // 手动“让诺诺看看”也要过上云闸门：R-18 不行，本地还没判完（分数不明）不行
+    await expect(look.lookNow(3)).rejects.toThrow('R-18')
+    await expect(look.lookNow(4)).rejects.toThrow('本地分级')
+    const { pg: db } = getDatabase()
+    await db.exec(`UPDATE image SET rating = 'GENERAL' WHERE id = 4`)
+    const { searchCall } = await import('../../src/main/services/ai/bailianClient')
+    vi.mocked(searchCall).mockRejectedValueOnce(Object.assign(new Error('Request timed out.'), { name: 'APIConnectionTimeoutError' }))
+    await look.lookNow(4)
+    await idle()
+    let s = await look.getLookState()
+    expect(s.rows).toMatchObject([{ imageId: 4, state: 'FAILED', error: '超时' }])
+    await look.retryLook(s.rows[0].jobId)
+    await idle()
+    s = await look.getLookState()
+    expect(s.count).toBe(0)
+    expect((await sugg.listSuggestions(4)).length).toBeGreaterThan(0)
+
+    // 新来一张，取消掉之后不会被重新排进去
+    const { pg } = getDatabase()
+    await pg.exec(`UPDATE image SET rating = 'GENERAL', rating_source = 'MODEL' WHERE id = 5`)
+    vi.mocked(searchCall).mockImplementationOnce(() => new Promise(() => undefined))
+    look.configureLook({ thumbsDir: join(dir, 'thumbs'), tempDir: join(dir, 'tmp'), canRun: () => false, onState: () => undefined, onSuggested: () => undefined })
+    await look.enqueueNewImages()
+    expect((await look.getLookState()).count).toBe(1)
+    expect(await look.cancelAllLooks()).toBe(1)
+    await look.enqueueNewImages()
+    expect((await look.getLookState()).count).toBe(0)
+  })
+})

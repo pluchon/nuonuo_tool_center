@@ -1,0 +1,67 @@
+// 一键整理按钮：和“诺诺在看图”胶囊同高的玻璃胶囊，跟着“组件透明度”走，悬停稍微变实
+.organize {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin-left: 8px;
+  padding: 0 11px 0 9px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1px solid var(--a-line2);
+  background: var(--look-field-bg);
+  backdrop-filter: var(--look-blur);
+  box-shadow: 0 4px 12px -8px rgba(var(--sh), 0.55);
+  color: var(--a-ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+
+  svg {
+    flex: none;
+    color: var(--a);
+  }
+
+  &:hover {
+    background: var(--look-field-hover-bg);
+    border-color: var(--a-line);
+  }
+
+  // 进行中：文字慢慢呼吸
+  &--busy {
+    animation: organize-breathe 2.4s ease-in-out infinite;
+  }
+
+  // 方案待确认：主题色描边，右上角一个小红点
+  &--ready {
+    border-color: var(--a);
+  }
+
+  &__dot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--c-b-D86F95);
+    box-shadow: 0 0 0 2px var(--c-surface);
+  }
+}
+
+@keyframes organize-breathe {
+  50% {
+    color: var(--a);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .organize--busy {
+    animation: none;
+  }
+}

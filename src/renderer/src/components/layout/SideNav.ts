@@ -277,7 +277,8 @@ export default defineComponent({
               count: '',
               active: viewStore.page === 'assistant',
               go: () => viewStore.showAssistant()
-            }
+            },
+            viewRow('ai', 'AI 建议', c?.aiSuggest, ICON.bulb, '#5B8DEF')
           ],
           hint: ''
         }

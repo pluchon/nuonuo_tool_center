@@ -1,19 +1,33 @@
 // 本地分级的工作进程（Electron utilityProcess）：在这里加载 WD 模型推理，不卡主进程；
-// 进程优先级调低、只用 CPU 2 线程（核显笔记本曾整机卡死）
+// 进程优先级调低、只用 CPU，平时 2 线程，电脑没人用时主进程会让它用 4 线程（核显笔记本曾整机卡死，不开 DirectML）
 import { constants, setPriority } from 'node:os'
 import sharp from 'sharp'
 import { WdTagger } from '../services/rating/wdTagger'
 import type { RatingRequest, RatingResponse } from '../services/rating/ratingProtocol'
 
 let tagger: WdTagger | null = null
+let taggerThreads = 0
 let loading: Promise<WdTagger> | null = null
 
-// 懒加载模型，同时只加载一次
-function getTagger(modelDir: string): Promise<WdTagger> {
-  if (tagger) {
-    return Promise.resolve(tagger)
+// 懒加载模型，同时只加载一次；线程数变了（电脑空闲 / 有人在用）就释放旧的按新线程数重新加载
+async function getTagger(modelDir: string, threads: number): Promise<WdTagger> {
+  if (tagger && taggerThreads === threads) {
+    return tagger
   }
-  loading ??= WdTagger.load(modelDir, { executionProviders: ['cpu'], threads: 2 }).then((t) => (tagger = t))
+  if (tagger) {
+    const old = tagger
+    tagger = null
+    await old.dispose()
+  }
+  loading ??= WdTagger.load(modelDir, { executionProviders: ['cpu'], threads })
+    .then((t) => {
+      tagger = t
+      taggerThreads = threads
+      return t
+    })
+    .finally(() => {
+      loading = null
+    })
   return loading
 }
 
@@ -38,7 +52,7 @@ process.parentPort.on('message', (event) => {
   const req = event.data as RatingRequest
   void (async () => {
     try {
-      const t = await getTagger(req.modelDir)
+      const t = await getTagger(req.modelDir, req.threads)
       const p = await t.predict(req.file)
       reply({ id: req.id, ok: true, scores: p.ratingScores })
     } catch (err) {

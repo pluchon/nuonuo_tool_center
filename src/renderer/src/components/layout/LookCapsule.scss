@@ -1,0 +1,240 @@
+// 底栏“诺诺在看图”胶囊和它的卡片（照原型 aiBar）
+.look {
+  position: relative;
+  display: flex;
+  align-items: center;
+
+  &__pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 26px;
+    padding: 0 6px 0 9px;
+    box-sizing: border-box;
+    border-radius: 999px;
+    border: 1px solid var(--a-line2);
+    background: var(--look-field-bg);
+    backdrop-filter: var(--look-blur);
+    box-shadow:
+      0 4px 12px -8px rgba(var(--sh), 0.55),
+      inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    color: var(--c-i-3B3047);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      border-color 0.15s;
+
+    svg {
+      flex: none;
+    }
+
+    &:hover,
+    &--open {
+      background: var(--a-bg);
+      border-color: var(--a-line);
+    }
+  }
+
+  &__badge {
+    flex: none;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    box-sizing: border-box;
+    border-radius: 999px;
+    background: var(--a-bg);
+    color: var(--a-ink);
+    font-size: 11px;
+    font-weight: 800;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  // 卡片：斜纹外框 + 里面一层白底
+  &__card {
+    position: absolute;
+    z-index: 30;
+    left: -14px;
+    bottom: 40px;
+    width: 328px;
+    box-sizing: border-box;
+    padding: 5px;
+    border-radius: 22px;
+    background: repeating-linear-gradient(135deg, var(--c-b-F6CDD8) 0 8px, var(--a-soft) 8px 16px);
+    box-shadow: 0 24px 48px -24px rgba(var(--sh), 0.65);
+    color: var(--c-i-3B3047);
+  }
+
+  &__caret {
+    position: absolute;
+    left: 66px;
+    bottom: -10px;
+    width: 20px;
+    height: 11px;
+    background: var(--c-b-F6CDD8);
+    clip-path: polygon(0 0, 100% 0, 50% 100%);
+  }
+
+  &__inner {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 17px;
+    background: var(--c-surface);
+    border: 1px solid var(--a-line2);
+  }
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 28px;
+
+    svg {
+      flex: none;
+    }
+  }
+
+  &__title {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--c-i-2E2440);
+    white-space: nowrap;
+  }
+
+  &__cancel {
+    margin-left: auto;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 12px 0 10px;
+    box-sizing: border-box;
+    border-radius: 999px;
+    border: 1.5px solid var(--c-b-F2C6D4);
+    background: var(--c-surface);
+    color: var(--c-i-C25B85);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  &__rule {
+    display: block;
+    height: 0;
+    border-top: 1.5px dashed var(--a-line);
+  }
+
+  // 列表区高度固定：一次显示四行，多的滚动
+  &__list {
+    height: 194px;
+    overflow-y: auto;
+    margin-right: -6px;
+    padding-right: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  &__empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__row {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 44px;
+    box-sizing: border-box;
+    padding: 0 8px 0 5px;
+    border-radius: 12px;
+    background: var(--a-bg);
+    border: 1px solid var(--a-line2);
+  }
+
+  &__thumb {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    box-sizing: border-box;
+    border-radius: 9px;
+    background: var(--c-b-F4F0FA) center / cover no-repeat;
+    border: 2px solid var(--c-surface);
+    box-shadow: 0 3px 8px -4px rgba(var(--sh), 0.45);
+  }
+
+  &__name-wrap {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  &__name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--c-i-2E2440);
+  }
+
+  // 出错的轻量小标签（超时、读不到原图）
+  &__err {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    height: 17px;
+    padding: 0 6px;
+    border-radius: 5px;
+    background: var(--c-b-FCE7EE);
+    color: var(--c-i-C25B85);
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  &__run {
+    flex: none;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  &__wait {
+    flex: none;
+    font-size: 11px;
+    color: var(--c-i-9C90B3);
+  }
+
+  &__retry {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--c-i-C25B85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+
+    &:hover {
+      background: var(--c-b-FCE7EE);
+    }
+  }
+}

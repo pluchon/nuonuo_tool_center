@@ -40,6 +40,12 @@
       </div>
     </div>
 
+    <!-- “AI 建议”视图：选中的图的建议一起处理（键盘 A / X 也行） -->
+    <div v-if="aiView" class="batch-panel__acts">
+      <button class="batch-panel__act" type="button" :disabled="suggest.busy" @click="suggest.decide(gallery.selected, false)">建议全部不要</button>
+      <button class="batch-panel__act batch-panel__act--main" type="button" :disabled="suggest.busy" @click="suggest.decide(gallery.selected, true)">建议全部采用</button>
+    </div>
+
     <div class="batch-panel__r18">
       <button class="batch-panel__r18-btn batch-panel__r18-btn--on" type="button" :disabled="busy" @click="onR18(true)">全部标 R-18</button>
       <button class="batch-panel__r18-btn" type="button" :disabled="busy" @click="onR18(false)">全部取消 R-18</button>

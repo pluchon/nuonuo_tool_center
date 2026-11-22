@@ -32,7 +32,7 @@ export const tagSourceEnum = pgEnum('tag_source', ['MANUAL', 'VLM'])
 // 标签状态：AI 给出的先是建议，确认后才生效
 export const tagStatusEnum = pgEnum('tag_status', ['ACCEPTED', 'SUGGESTED', 'REJECTED'])
 // 云端分析类型
-export const aiResultKindEnum = pgEnum('ai_result_kind', ['IDENTIFY', 'DESCRIBE', 'NAME'])
+export const aiResultKindEnum = pgEnum('ai_result_kind', ['IDENTIFY', 'DESCRIBE', 'NAME', 'ORGANIZE'])
 // 文件整理批次来源
 export const fileOpOriginEnum = pgEnum('file_op_origin', ['USER', 'AI'])
 // 文件整理批次状态
@@ -94,6 +94,8 @@ export const image = pgTable(
     byteSize: bigint('byte_size', { mode: 'number' }).notNull(),
     displayName: text('display_name'),
     description: text('description'),
+    // 出处：采用了 AI 建议里的出处才写（只来自文件名线索或联网搜索返回的链接）
+    source: text('source'),
     rating: ratingEnum('rating').notNull().default('UNKNOWN'),
     ratingSource: ratingSourceEnum('rating_source'),
     ratingScores: jsonb('rating_scores'),

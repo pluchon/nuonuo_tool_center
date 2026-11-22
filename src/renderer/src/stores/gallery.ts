@@ -84,7 +84,7 @@ export const useGalleryStore = defineStore('gallery', {
     // 只按图片名搜、不放排序和 R-18 的视图：源目录、还没打标签、最近导入
     nameOnly(): boolean {
       const v = useViewStore()
-      return v.view === 'untagged' || v.view === 'recent' || (v.view === 'dir' && v.dir?.kind === 'source')
+      return v.view === 'untagged' || v.view === 'recent' || v.view === 'ai' || (v.view === 'dir' && v.dir?.kind === 'source')
     },
     multi: (s): boolean => s.selected.length >= 2,
     isSelected:

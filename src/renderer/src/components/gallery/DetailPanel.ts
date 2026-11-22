@@ -8,6 +8,8 @@ import { useViewerStore } from '@/stores/viewer'
 import { useViewStore } from '@/stores/view'
 import BatchPanel from './BatchPanel.vue'
 import TagEditor from './TagEditor.vue'
+import AiSuggestCard from './AiSuggestCard.vue'
+import AssistBox from './AssistBox.vue'
 
 // 详情面板顶部的状态提示
 export interface NoticeVM {
@@ -66,7 +68,7 @@ function cameraOf(e: ExifInfoVO): string {
 // 详情面板：单选时显示一张图的预览和信息，多选时显示已选张数（照原型右侧面板；名字、标签、R-18、复制移动在编辑阶段接入）
 export default defineComponent({
   name: 'DetailPanel',
-  components: { BatchPanel, TagEditor },
+  components: { BatchPanel, TagEditor, AiSuggestCard, AssistBox },
   setup() {
     const gallery = useGalleryStore()
     const viewer = useViewerStore()
@@ -181,7 +183,11 @@ export default defineComponent({
       }
     }
 
+    // 在“AI 建议”视图里才显示建议卡
+    const aiView = computed(() => viewStore.page === 'gallery' && viewStore.view === 'ai')
+
     return {
+      aiView,
       gallery,
       viewer,
       transfer,

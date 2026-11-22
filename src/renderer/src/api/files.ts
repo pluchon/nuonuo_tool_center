@@ -31,6 +31,11 @@ export function undoTransfer(batchId: number): Promise<TransferResultVO> {
   return unwrap(window.api.files.undoTransfer(batchId))
 }
 
+// 系统原生拖拽：把这些图的原文件拖到别的软件（hash 是跟手小图用的缩略图）
+export function startNativeDrag(fileIds: number[], hash: string): Promise<number> {
+  return unwrap(window.api.files.startDrag(fileIds, hash))
+}
+
 // 把一张图复制到剪贴板
 export function copyImageToClipboard(fileId: number): Promise<void> {
   return unwrap(window.api.files.copyImage(fileId))

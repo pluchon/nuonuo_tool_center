@@ -36,6 +36,20 @@
       "when": 1795318437976,
       "tag": "0004_mark_manual_r18",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795320017712,
+      "tag": "0005_image_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795339326915,
+      "tag": "0006_organize_kind",
+      "breakpoints": true
     }
   ]
 }

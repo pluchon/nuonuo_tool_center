@@ -1,6 +1,7 @@
 import { computed, defineComponent, onBeforeUnmount, onMounted } from 'vue'
 import { onFileOpDone, pathOfDropped } from '@/api/files'
 import { onRatingR18 } from '@/api/rating'
+import { onSuggested } from '@/api/look'
 import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue'
 import SettingsDialog from '@/components/dialogs/SettingsDialog.vue'
 import TransferDialog from '@/components/dialogs/TransferDialog.vue'
@@ -52,6 +53,14 @@ export default defineComponent({
       void gallery.afterEdit()
     })
     onBeforeUnmount(offRating)
+    // 有新的 AI 建议：侧栏计数跟着变；正在看“AI 建议”时网格也刷新
+    const offSuggested = onSuggested(() => {
+      void library.load()
+      if (viewStore.page === 'gallery' && viewStore.view === 'ai') {
+        void gallery.afterEdit()
+      }
+    })
+    onBeforeUnmount(offSuggested)
 
     // 删除类目录 / 从图库移除源目录的确认标题（照原型）
     const dangerTitle = computed(() => {

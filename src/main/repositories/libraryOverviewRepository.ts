@@ -2,6 +2,7 @@ import { and, eq, ne, sql } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { col, likeEscape } from '../db/sqlUtil'
 import { image, imageFile, imageTag, tag } from '../db/schema'
+import { hasPendingSuggestion } from './aiResultRepository'
 
 // 侧栏用的各项计数（未拆出“还没打标签”，由服务层用 total - tagged 得到）
 export interface OverviewCounts {
@@ -10,6 +11,7 @@ export interface OverviewCounts {
   recent: number
   r18: number
   tags: number
+  aiSuggest: number
 }
 
 // 还“活着”的图片：至少有一个没删除的文件位置（找不到的也算，界面上显示为灰色）
@@ -26,12 +28,13 @@ export async function countOverview(recentDays: number): Promise<OverviewCounts>
       total: sql<number>`count(*)::int`,
       tagged: sql<number>`(count(*) filter (where ${taggedImage}))::int`,
       recent: sql<number>`(count(*) filter (where ${image.createTime} >= now() - make_interval(days => ${recentDays})))::int`,
-      r18: sql<number>`(count(*) filter (where ${image.isR18}))::int`
+      r18: sql<number>`(count(*) filter (where ${image.isR18}))::int`,
+      aiSuggest: sql<number>`(count(*) filter (where ${hasPendingSuggestion}))::int`
     })
     .from(image)
     .where(and(eq(image.deleteState, 0), aliveImage))
   const tags = await db.$count(tag, eq(tag.deleteState, 0))
-  return { total: row.total, tagged: row.tagged, recent: row.recent, r18: row.r18, tags }
+  return { total: row.total, tagged: row.tagged, recent: row.recent, r18: row.r18, tags, aiSuggest: row.aiSuggest }
 }
 
 // 每个目录下的图片数（同一内容在目录里有多个文件只算一张）

@@ -6,6 +6,8 @@ export interface RatingRequest {
   id: number
   file: string
   modelDir: string
+  // 这次用几个 CPU 线程（和上次不同时工作进程重新加载模型）
+  threads: number
 }
 
 // 回复：四个分级的分数，或失败原因

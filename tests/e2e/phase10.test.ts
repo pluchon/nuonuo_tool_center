@@ -88,7 +88,10 @@ describe('第十阶段：大图查看', () => {
     await page.mouse.down()
     await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2 + 30, { steps: 4 })
     await page.mouse.up()
-    await expect(page.locator('.viewer__pic').getAttribute('style')).resolves.toContain('translate(80px, 30px)')
+    // 滚轮缩放以鼠标为中心，鼠标离舞台中心有零点几像素时会先带一点偏移，这里按近似比
+    const moved = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec((await page.locator('.viewer__pic').getAttribute('style')) ?? '')
+    expect(Number(moved?.[1])).toBeCloseTo(80, 0)
+    expect(Number(moved?.[2])).toBeCloseTo(30, 0)
     // 拖到遮罩外松手不会关掉
     await expect(page.locator('.viewer').count()).resolves.toBe(1)
 

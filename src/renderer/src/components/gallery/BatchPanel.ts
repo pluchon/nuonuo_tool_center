@@ -4,6 +4,8 @@ import { useGalleryStore } from '@/stores/gallery'
 import { useSettingsStore } from '@/stores/settings'
 import { useTagsStore } from '@/stores/tags'
 import { useTransferStore } from '@/stores/transfer'
+import { useSuggestStore } from '@/stores/suggest'
+import { useViewStore } from '@/stores/view'
 
 // 叠放的缩略图最多显示几张
 const THUMBS_SHOWN = 4
@@ -13,6 +15,9 @@ export default defineComponent({
   name: 'BatchPanel',
   setup() {
     const gallery = useGalleryStore()
+    const suggest = useSuggestStore()
+    const viewStore = useViewStore()
+    const aiView = computed(() => viewStore.page === 'gallery' && viewStore.view === 'ai')
     const tagsStore = useTagsStore()
     const settings = useSettingsStore()
     const draft = ref('')
@@ -63,6 +68,6 @@ export default defineComponent({
     }
 
     const transfer = useTransferStore()
-    return { gallery, transfer, thumbs, more, blurR18, draft, busy, colorOf, thumbUrl, onInput, onEnter, onRemove, onR18 }
+    return { gallery, suggest, aiView, transfer, thumbs, more, blurR18, draft, busy, colorOf, thumbUrl, onInput, onEnter, onRemove, onR18 }
   }
 })

@@ -58,6 +58,7 @@ export const IpcChannel = {
   folderOpen: 'folder:open',
   sourceRemove: 'source:remove',
   fileCopyImage: 'file:copyImage',
+  fileStartDrag: 'file:startDrag',
   aiStatus: 'ai:status',
   aiIdeas: 'ai:ideas',
   aiConversations: 'ai:conversations',
@@ -69,6 +70,22 @@ export const IpcChannel = {
   aiDelete: 'ai:delete',
   aiUndoDelete: 'ai:undoDelete',
   aiVote: 'ai:vote',
+  lookState: 'look:state',
+  lookRetry: 'look:retry',
+  lookNow: 'look:now',
+  lookCancelAll: 'look:cancelAll',
+  suggestionList: 'suggestion:list',
+  suggestionDecide: 'suggestion:decide',
+  suggestionAcceptAll: 'suggestion:acceptAll',
+  assistPrompt: 'assist:prompt',
+  assistImport: 'assist:import',
+  suggestionDecideMany: 'suggestion:decideMany',
+  ratingProgress: 'rating:progress',
+  organizeState: 'organize:state',
+  organizeEstimate: 'organize:estimate',
+  organizeStart: 'organize:start',
+  organizeApprove: 'organize:approve',
+  organizeCancel: 'organize:cancel',
   windowSetTheme: 'window:setTheme',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',
@@ -99,7 +116,15 @@ export const IpcEvent = {
   // 一批文件操作真正执行完（删除进回收站之后），带上失败的数量和原因
   fileOpDone: 'fileOp:done',
   // 本地分级把一些图判成了 R-18（带张数）：界面刷新计数和网格
-  ratingR18: 'rating:r18'
+  ratingR18: 'rating:r18',
+  // 看图队列变了（带完整状态）
+  lookState: 'look:state',
+  // 有新的 AI 建议：界面刷新“AI 建议”计数
+  aiSuggested: 'ai:suggested',
+  // 本地分级的进度
+  ratingProgress: 'rating:progress',
+  // 一键整理的状态变了
+  organizeState: 'organize:state'
 } as const
 
 // 实际生效的明暗（“跟随系统”已经解析过）
@@ -116,6 +141,8 @@ export interface SidebarCountsVO {
   recent: number
   r18: number
   tags: number
+  // 有待确认 AI 建议的图
+  aiSuggest: number
 }
 
 // 侧栏里的一个源目录
@@ -209,8 +236,8 @@ export interface LibraryRootVO {
   createTime: string
 }
 
-// 图库视图：全部图片（打过标签的）/ 还没打标签 / 最近导入 / R-18 图 / 某个源目录 / 某个类目录
-export type GalleryViewKey = 'all' | 'untagged' | 'recent' | 'r18' | 'source' | 'category'
+// 图库视图：全部图片（打过标签的）/ 还没打标签 / 最近导入 / R-18 图 / AI 建议 / 某个源目录 / 某个类目录
+export type GalleryViewKey = 'all' | 'untagged' | 'recent' | 'r18' | 'ai' | 'source' | 'category'
 
 // 网格查询条件
 export interface GalleryQueryDTO {
@@ -328,6 +355,8 @@ export interface GalleryItemVO {
   tagged: boolean
   importedAt: string
   takenAt: string | null
+  // 只在“AI 建议”视图里：建议放进的类目录（没有这类建议时为空）
+  aiDir?: { name: string; isNew: boolean } | null
 }
 
 // 网格数据：已经按条件过滤、按排序排好
@@ -472,6 +501,8 @@ export interface AiMessageVO {
   images: GalleryItemVO[]
   vote: 'UP' | 'DOWN' | null
   createdAt: string
+  // 你发的图（按图找相似时，长边 512 的 data URL）；没有为空
+  image: string | null
 }
 
 // 问诺诺：conversationId 为空时新开一段对话；scope 为空表示全部图库
@@ -480,13 +511,94 @@ export interface AiAskDTO {
   text: string
   scope: DirKeyDTO | null
   includeR18: boolean
+  // 上传或粘贴的图（data URL）：有它时按图找相似
+  image?: string
 }
+
+// 上传的图最大多少（base64 字符数，约 20 MB 的图）
+export const AI_IMAGE_MAX_BASE64 = 28_000_000
 
 // 问完先返回：对话（新开的也有 id 了）和刚存下的这句话，回复另外取
 export interface AiAskResultVO {
   conversation: AiConversationVO
   message: AiMessageVO
 }
+
+// 看图队列里的一张：正在看 / 等待中 / 出错（带原因）
+export interface LookRowVO {
+  jobId: number
+  imageId: number
+  name: string
+  hash: string
+  state: 'RUNNING' | 'QUEUED' | 'FAILED'
+  error: string | null
+}
+
+// 看图队列：总数（含出错的）和前面若干行
+export interface LookStateVO {
+  count: number
+  rows: LookRowVO[]
+}
+
+// 一项待确认的 AI 建议
+export interface AiSuggestionVO {
+  // 名字 name、角色 who、作品 work、出处 src、标签 tag:<名字>、放进类目录 dir
+  key: string
+  kind: 'name' | 'tag' | 'who' | 'work' | 'src' | 'dir'
+  value: string
+  // 诺诺看图给的，还是外部 AI 贴回来的
+  origin: 'NONO' | 'EXTERNAL'
+  // 放进类目录时：目录现在还不存在，采用时新建
+  isNew?: boolean
+}
+
+// 多张图的建议一起采用或不要的结果
+export interface SuggestionBatchVO {
+  // 处理完的图片数、有没处理成的图片数和第一个原因
+  done: number
+  failed: number
+  error: string | null
+}
+
+// 本地分级的进度：这一轮已判多少、一共要判多少
+export interface RatingProgressVO {
+  running: boolean
+  done: number
+  total: number
+}
+
+// 一键整理方案里的一个类目录：收哪些角色、作品、标签
+export interface OrganizeFolderVO {
+  name: string
+  isNew: boolean
+  characters: string[]
+  works: string[]
+  tags: string[]
+}
+
+// 一键整理的阶段：空闲、看图中、出方案中、方案待确认、分图中
+export type OrganizePhase = 'IDLE' | 'LOOKING' | 'PLANNING' | 'PLAN_READY' | 'ASSIGNING'
+
+// 一键整理的状态
+export interface OrganizeStateVO {
+  phase: OrganizePhase
+  plan: OrganizeFolderVO[] | null
+  // 出方案失败的原因（可以重试）
+  error: string | null
+}
+
+// 开始前的估算：要看多少张、大概多少 token 和钱（以账单为准）
+export interface OrganizeEstimateVO {
+  toLook: number
+  tokens: number
+  yuan: number
+  // 本地分级还剩多少张没判（大于 0 时不能开始，判完才知道哪些图能上云）
+  ratingLeft: number
+}
+
+// 批好的方案最多几个目录、每个目录最多几个词
+export const ORGANIZE_FOLDERS_MAX = 20
+export const ORGANIZE_TERMS_MAX = 20
 
 // 一句话最多几个字、对话名最多几个字
 export const AI_TEXT_MAX = 500

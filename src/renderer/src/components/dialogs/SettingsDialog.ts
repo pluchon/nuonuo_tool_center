@@ -339,6 +339,7 @@ export default defineComponent({
                 kbd('全选', ['Ctrl', 'A']),
                 kbd('复制图片', ['Ctrl', 'C']),
                 kbd('删除', ['Delete']),
+                kbd('AI 建议全部采用 / 不要', ['A', 'X']),
                 kbd('缩略图大小', ['Ctrl', '滚轮']),
                 kbd('大图缩放', ['Ctrl', '滚轮']),
                 kbd('大图放大 / 缩小', ['+', '−']),

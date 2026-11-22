@@ -1,5 +1,6 @@
 import OpenAI from 'openai'
 import {
+  AI_IMAGE_MAX_BASE64,
   AI_TEXT_MAX,
   AI_TITLE_MAX,
   type AiAskDTO,
@@ -32,6 +33,11 @@ import { ASSISTANT_RULES, ASSISTANT_TOOLS } from './assistantPrompt'
 import { chatCall } from './bailianClient'
 import { routeLocally, type CondLabel, type DictDir, type DictTag, type SearchSpec } from './localRouter'
 import { ensureProfile, profileOfConversation } from './profileService'
+import { recordEvent } from './eventService'
+import { relevantMemories } from './memoryRetrieval'
+import { EMBEDDING_CONFIG } from '../../config/cloudConfig'
+import { IMAGE_MIN_SIMILARITY, queryVector, rrf, TEXT_MIN_SIMILARITY, uploadVector } from './embeddingService'
+import { toDataUrl } from './imagePrep'
 import { buildMessages, type PromptMessage } from './promptPrefix'
 
 const log = getLogger('ai')
@@ -43,11 +49,12 @@ const BRIEF_MAX = 8
 // 一次回答最多调几次模型（含工具往返）
 const MAX_STEPS = 4
 
-// 存在库里的“你说的话”
+// 存在库里的“你说的话”；image 是上传或粘贴的图（长边 512 的 data URL），有它时按图找相似
 interface UserContent {
   text: string
   scope: DirKeyDTO | null
   includeR18: boolean
+  image?: string
 }
 
 // 存在库里的“诺诺的回复”；llm 是下一轮当作历史发给模型的文字（不含 R-18 图的任何信息）
@@ -56,6 +63,8 @@ interface AssistantContent {
   how: string | null
   imageIds: number[]
   llm: string
+  // 这次回答带上的记忆（赞、踩时调整它们的可信度）
+  memoryIds?: number[]
 }
 
 // 一次检索的结果：普通图（模型能看到）和 R-18 图（只在本地查，模型只知道数量）
@@ -89,10 +98,10 @@ async function toMessageVO(m: AiMessageEntity): Promise<AiMessageVO> {
   const base = { id: m.id, vote: m.vote ?? null, createdAt: m.createTime.toISOString() }
   if (m.role === 'USER') {
     const c = m.content as UserContent
-    return { ...base, role: 'user', text: c.text, how: null, images: [] }
+    return { ...base, role: 'user', text: c.text, how: null, images: [], image: c.image ?? null }
   }
   const c = m.content as AssistantContent
-  return { ...base, role: 'assistant', text: c.text, how: c.how, images: await itemsOfImages(c.imageIds ?? []) }
+  return { ...base, role: 'assistant', text: c.text, how: c.how, images: await itemsOfImages(c.imageIds ?? []), image: null }
 }
 
 // 一段对话的消息（工具往返不存，只有你说的和诺诺的回复）
@@ -127,21 +136,38 @@ function checkScope(scope: unknown): DirKeyDTO | null {
   throw new BizError('BAD_REQUEST', '范围不对')
 }
 
+// 上传的图：缩到长边 512 存进消息（界面显示和按图找相似都用它）
+async function checkImage(raw: unknown): Promise<string | undefined> {
+  if (raw === undefined || raw === null) {
+    return undefined
+  }
+  const m = typeof raw === 'string' ? /^data:image\/[a-z+]+;base64,([A-Za-z0-9+/=]+)$/i.exec(raw) : null
+  if (!m || m[1].length > AI_IMAGE_MAX_BASE64) {
+    throw new BizError('BAD_REQUEST', '图片不对或太大（最多 20 MB）')
+  }
+  try {
+    return await toDataUrl(Buffer.from(m[1], 'base64'), 512)
+  } catch {
+    throw new BizError('BAD_REQUEST', '这张图读不出来')
+  }
+}
+
 // 问诺诺：先存下这句话（没有对话就新开一段，用问题开头当名字），回复由 answer 另外生成
 export async function ask(dto: AiAskDTO): Promise<AiAskResultVO> {
   const text = typeof dto?.text === 'string' ? dto.text.trim() : ''
-  if (!text) {
+  const image = await checkImage(dto?.image)
+  if (!text && !image) {
     throw new BizError('BAD_REQUEST', '说点什么吧')
   }
   if (Array.from(text).length > AI_TEXT_MAX) {
     throw new BizError('BAD_REQUEST', `一次最多 ${AI_TEXT_MAX} 个字`)
   }
-  const content: UserContent = { text, scope: checkScope(dto.scope), includeR18: dto.includeR18 === true }
+  const content: UserContent = { text, scope: checkScope(dto.scope), includeR18: dto.includeR18 === true, ...(image ? { image } : {}) }
   let conversation: (AiConversationEntity & { lastAt: Date }) | undefined
   if (dto.conversationId === null || dto.conversationId === undefined) {
     // 新对话锁定当前的核心档案版本，这段对话里前缀不变
     const profile = await ensureProfile()
-    const created = await insertConversation(Array.from(text).slice(0, 14).join(''), profile.version)
+    const created = await insertConversation(Array.from(text || '按图找相似').slice(0, 14).join(''), profile.version)
     conversation = { ...created, lastAt: created.createTime }
   } else {
     checkId(dto.conversationId)
@@ -187,8 +213,14 @@ async function scopeLabel(scope: DirKeyDTO | null, dirs: DictDir[]): Promise<str
   return dirs.find((d) => d.kind === 'SOURCE' && d.rootId === scope.id)?.name ?? null
 }
 
-// 执行一次检索：普通图按条件查；打开 R-18 时 R-18 图用同样的条件另查一路（只在本地）
-async function runSearch(spec: SearchSpec, dirs: Array<{ rootId: number; prefix: string }> | undefined, includeR18: boolean): Promise<SearchOutcome> {
+// 执行一次检索：普通图按条件查（有语义描述时再按向量查一路，两路按排名融合）；
+// 打开 R-18 时 R-18 图用同样的条件另查一路（只在本地按关键词，R-18 图没有向量）
+async function runSearch(
+  spec: SearchSpec,
+  dirs: Array<{ rootId: number; prefix: string }> | undefined,
+  includeR18: boolean,
+  semantic: number[] | null = null
+): Promise<SearchOutcome> {
   const base = {
     tagGroups: spec.tagGroups,
     keywords: spec.keywords.map((k) => k.toLowerCase()).filter(Boolean),
@@ -198,9 +230,38 @@ async function runSearch(spec: SearchSpec, dirs: Array<{ rootId: number; prefix:
     dirs,
     limit: SHOW_MAX
   }
-  const normal = await searchImages({ ...base, r18: 'exclude' })
-  const r18 = includeR18 ? await searchImages({ ...base, r18: 'only' }) : { ids: [], total: 0 }
-  return { ids: normal.ids, total: normal.total, r18Ids: r18.ids, r18Total: r18.total }
+  // 只有语义描述、没有字面条件时不跑字面那一路（否则会把范围里的全部图都算进来）；没有语义时照常跑（如“二次元里的图”）
+  const hasLiteral = base.tagGroups.length > 0 || base.keywords.length > 0 || !!base.orientation || !!base.recentDays || !!base.untagged || !semantic
+  const normal = hasLiteral ? await searchImages({ ...base, r18: 'exclude' }) : { ids: [], total: 0 }
+  let ids = normal.ids
+  let total = normal.total
+  if (semantic) {
+    // 语义那一路不带关键词（关键词是字面匹配，语义是补它没覆盖到的）
+    const sem = await searchImages({
+      ...base,
+      keywords: [],
+      r18: 'exclude',
+      vector: { values: semantic, model: EMBEDDING_CONFIG.model, minSimilarity: TEXT_MIN_SIMILARITY }
+    })
+    ids = rrf([normal.ids, sem.ids], SHOW_MAX)
+    total = Math.max(normal.total, sem.total, new Set([...normal.ids, ...sem.ids]).size)
+  }
+  const r18 = includeR18 && hasLiteral ? await searchImages({ ...base, r18: 'only' }) : { ids: [], total: 0 }
+  return { ids, total, r18Ids: r18.ids, r18Total: r18.total }
+}
+
+// 按上传的图找相似的（只在有向量的普通图里找）
+async function searchByImage(image: string, dirs: Array<{ rootId: number; prefix: string }> | undefined): Promise<SearchOutcome> {
+  const vec = await uploadVector(image)
+  const hit = await searchImages({
+    tagGroups: [],
+    keywords: [],
+    dirs,
+    r18: 'exclude',
+    limit: SHOW_MAX,
+    vector: { values: vec, model: EMBEDDING_CONFIG.model, minSimilarity: IMAGE_MIN_SIMILARITY }
+  })
+  return { ids: hit.ids, total: hit.total, r18Ids: [], r18Total: 0 }
 }
 
 // “怎么找的”那行字：不用“·”，条件之间用逗号
@@ -291,6 +352,8 @@ interface TurnContext {
   userMessageId: number
   // 最近一次检索（结果图和“怎么找的”用它）
   last: { outcome: SearchOutcome; conds: CondLabel[] } | null
+  // 这次带上的记忆
+  memoryIds?: number[]
 }
 
 // 执行一个工具调用，返回给模型的文字（JSON）
@@ -303,11 +366,15 @@ async function runTool(name: string, rawArgs: string, ctx: TurnContext): Promise
   }
   if (name === 'search_images') {
     const { spec, conds } = specFromArgs(args, ctx.tags)
-    if (spec.tagGroups.length === 0 && spec.keywords.length === 0 && !spec.orientation && !spec.recent && !spec.untagged) {
-      return JSON.stringify({ error: '没有可用的检索条件；semantic 现在不参与检索，请给出标签或关键词' })
+    // 语义描述：有向量就按向量再找一路；查询向量失败时降级成只用关键词，不冒充语义判断
+    const semanticText = typeof args.semantic === 'string' ? args.semantic.trim().slice(0, 100) : ''
+    const semantic = semanticText ? await queryVector(semanticText) : null
+    const literal = spec.tagGroups.length > 0 || spec.keywords.length > 0 || !!spec.orientation || !!spec.recent || !!spec.untagged
+    if (!literal && !semantic) {
+      return JSON.stringify({ error: '没有可用的检索条件，请给出标签、关键词或画面描述' })
     }
-    const outcome = await runSearch(spec, ctx.dirs, ctx.includeR18)
-    ctx.last = { outcome, conds }
+    const outcome = await runSearch(spec, ctx.dirs, ctx.includeR18, semantic)
+    ctx.last = { outcome, conds: semantic ? [...conds, ['画面', semanticText]] : conds }
     const brief = outcome.ids.slice(0, BRIEF_MAX)
     const tagNames = await findTagNamesOf(brief)
     const items = await itemsOfImages(brief)
@@ -352,13 +419,14 @@ async function runTool(name: string, rawArgs: string, ctx: TurnContext): Promise
   return JSON.stringify({ error: `没有 ${name} 这个工具` })
 }
 
-// 第④层：当前时间、范围、是否包含 R-18，加上这句话
-function tailOf(text: string, scope: string | null, includeR18: boolean, now: Date): PromptMessage {
+// 第④层：当前时间、范围、是否包含 R-18、检索到的记忆，加上这句话
+function tailOf(text: string, scope: string | null, includeR18: boolean, now: Date, memories: string[] = []): PromptMessage {
   const pad = (n: number): string => String(n).padStart(2, '0')
   const time = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
+  const memo = memories.length ? `\n[软件附注] 记得的偏好：\n${memories.map((m) => `- ${m}`).join('\n')}` : ''
   return {
     role: 'user',
-    content: `[软件附注] 现在是 ${time}；在${scope ? `「${scope}」` : '全部图库'}里找；${includeR18 ? '包含' : '不包含'} R-18。\n\n${text}`
+    content: `[软件附注] 现在是 ${time}；在${scope ? `「${scope}」` : '全部图库'}里找；${includeR18 ? '包含' : '不包含'} R-18。${memo}\n\n${text}`
   }
 }
 
@@ -386,13 +454,16 @@ async function answerWithModel(
   const past: PromptMessage[] = []
   for (const m of history) {
     if (m.role === 'USER') {
-      past.push({ role: 'user', content: (m.content as UserContent).text })
+      const uc = m.content as UserContent
+      past.push({ role: 'user', content: uc.text || '（发了一张图，让诺诺按图找相似的）' })
     } else if (m.role === 'ASSISTANT') {
       past.push({ role: 'assistant', content: (m.content as AssistantContent).llm })
     }
   }
   const u = user.content as UserContent
-  const tail: PromptMessage[] = [tailOf(u.text, scopeName, u.includeR18, new Date())]
+  const memories = await relevantMemories(u.text)
+  ctx.memoryIds = memories.map((m) => m.id)
+  const tail: PromptMessage[] = [tailOf(u.text, scopeName, u.includeR18, new Date(), memories.map((m) => m.content))]
   for (let step = 0; step < MAX_STEPS; step++) {
     const messages = buildMessages({ rules: ASSISTANT_RULES, profile, history: past, tail, cache: true })
     const res = await chatCall({ kind: 'chat', model: BAILIAN_CONFIG.chatModel, messages, tools: ASSISTANT_TOOLS })
@@ -436,8 +507,24 @@ export async function answer(conversationId: number): Promise<AiMessageVO> {
     const scopeConds: CondLabel[] = scopeName ? [['范围', scopeName]] : []
 
     let content: AssistantContent
-    const routed = routeLocally(u.text, dict.tags, dict.dirs)
-    if (routed) {
+    const routed = u.image ? null : routeLocally(u.text, dict.tags, dict.dirs)
+    if (u.image) {
+      // 按图找相似：先过本地分级闸门再上云算向量，在有向量的普通图里找，不调对话模型
+      let outcome: SearchOutcome
+      try {
+        outcome = await searchByImage(u.image, dirs)
+      } catch (err) {
+        throw err instanceof BizError ? err : cloudError(err)
+      }
+      const text =
+        outcome.total > 0 ? `找到 ${outcome.total} 张和这张图比较像的。` : '没找到和这张图像的。图库里补好向量的图还不多时，可以过一会儿再试。'
+      content = {
+        text,
+        how: `按你传的图找了相似的${scopeConds.length ? `（${scopeConds.map(([k, v]) => `${k}「${v}」`).join('，')}）` : ''}，找到 ${outcome.total} 张`,
+        imageIds: outcome.ids,
+        llm: await historyText(`（按图找相似）${text}`, outcome.ids)
+      }
+    } else if (routed) {
       // 输入框选了范围就以输入框为准；没选时用问题里点到的目录（点到几个就在其中任一里找）
       const routeDirs =
         dirs ??
@@ -465,7 +552,8 @@ export async function answer(conversationId: number): Promise<AiMessageVO> {
         text: text || '诺诺没想好怎么回答，换个说法再问一次吧。',
         how: ctx.last ? howText([...scopeConds, ...ctx.last.conds], found) : null,
         imageIds,
-        llm: await historyText(text, outcome?.ids ?? [])
+        llm: await historyText(text, outcome?.ids ?? []),
+        memoryIds: ctx.memoryIds ?? []
       }
     }
     const saved = await insertMessage(conversationId, 'ASSISTANT', content)
@@ -523,9 +611,19 @@ export async function voteMessage(messageId: number, vote: 'UP' | 'DOWN' | null)
   if (vote !== 'UP' && vote !== 'DOWN' && vote !== null) {
     throw new BizError('BAD_REQUEST', '反馈不对')
   }
-  if ((await updateVote(messageId, vote)) === 0) {
+  const updated = await updateVote(messageId, vote)
+  if (!updated) {
     throw new BizError('NOT_FOUND', '这条回复已经不在了')
   }
+  // 赞和踩只当弱参考：记进事件流，做梦时调整这次用到的记忆的可信度
+  if (vote) {
+    await recordEvent('reply.vote', null, { vote, memoryIds: (updated.content as AssistantContent).memoryIds ?? [] })
+  }
+}
+
+// 诺诺是不是正在回答（做梦时看忙不忙）
+export function isAnswering(): boolean {
+  return answering.size > 0
 }
 
 // 新对话的四个示例问题：从图库里非 R-18 图的角色、作品、主题、地点和目录随机拼，每次换一批

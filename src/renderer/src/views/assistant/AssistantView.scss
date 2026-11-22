@@ -67,7 +67,8 @@
     box-sizing: border-box;
     border-radius: 50%;
     border: 1px solid var(--a-line2);
-    background: var(--c-surface);
+    background: var(--look-field-bg);
+    backdrop-filter: var(--look-blur);
     box-shadow: 0 4px 12px -8px rgba(var(--sh), 0.5);
     color: var(--a);
     display: flex;
@@ -358,7 +359,8 @@
     padding: 0 16px;
     border-radius: 999px;
     border: 1px solid var(--a-line2);
-    background: var(--c-surface);
+    background: var(--look-field-bg);
+    backdrop-filter: var(--look-blur);
     box-shadow: 0 4px 12px -8px rgba(var(--sh), 0.5);
     color: var(--a-ink);
     font: inherit;
@@ -615,12 +617,18 @@
     padding: 0 12px 0 10px;
     border-radius: 999px;
     border: 1px solid var(--c-b-F2C6D4);
-    background: var(--c-surface);
+    background: var(--look-field-bg);
+    backdrop-filter: var(--look-blur);
     color: var(--c-i-C25B85);
     font: inherit;
     font-size: 12px;
     font-weight: 700;
     cursor: pointer;
+    transition: background 0.15s;
+
+    &:hover {
+      background: var(--look-field-hover-bg);
+    }
   }
 
   // ===== 输入框 =====
@@ -638,19 +646,131 @@
     gap: 6px;
     padding: 12px 12px 10px 18px;
     border-radius: 28px;
-    background: var(--c-surface);
+    // 跟着“组件透明度”走，悬停时稍微变实（输入框一进页面就有焦点，所以不按焦点算）
+    background: var(--look-field-bg);
+    backdrop-filter: var(--look-blur);
     border: 1px solid var(--a-line2);
     box-shadow: 0 14px 34px -20px rgba(var(--sh), 0.6);
+    transition: background 0.25s;
+
+    &:hover {
+      background: var(--look-field-hover-bg);
+    }
   }
 
   &__dirs {
-    left: 4px;
+    left: 42px;
     bottom: 54px;
     width: 230px;
 
     .assistant__caret--down {
-      left: 26px;
+      left: 56px;
     }
+  }
+
+  &__plus-menu {
+    position: absolute;
+    z-index: 20;
+    left: 4px;
+    bottom: 54px;
+    width: 240px;
+    box-sizing: border-box;
+    padding: 6px;
+    border-radius: 16px;
+    background: var(--ai-menu-bg);
+    border: 1px solid var(--ai-menu-line);
+    box-shadow: var(--ai-menu-shadow);
+  }
+
+  &__kbd {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 6px;
+    border: 1px solid var(--a-line2);
+    border-bottom-width: 2px;
+    background: var(--a-bg);
+    color: var(--c-i-7F7494);
+    font: inherit;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  &__file {
+    display: none;
+  }
+
+  &__plus {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--c-i-6E6280);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.15s;
+
+    &:hover,
+    &--on {
+      background: var(--a-bg);
+    }
+  }
+
+  // 等着一起发的图
+  &__attach {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 2px;
+  }
+
+  &__attach-img {
+    position: relative;
+    display: block;
+    width: 56px;
+    height: 56px;
+    border-radius: 12px;
+    background: var(--c-b-F4F0FA) center / cover no-repeat;
+    border: 1px solid var(--a-line2);
+  }
+
+  &__attach-x {
+    position: absolute;
+    right: -6px;
+    top: -6px;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border-radius: 50%;
+    border: 2px solid var(--c-surface);
+    background: var(--c-i-3B3047);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  &__attach-name {
+    font-size: 12px;
+    color: var(--c-i-7F7494);
+  }
+
+  // 你发的图：在气泡上方
+  &__sent-img {
+    display: block;
+    max-width: 200px;
+    max-height: 150px;
+    border-radius: 14px;
+    border: 3px solid var(--c-surface);
+    box-shadow: 0 8px 18px -12px rgba(var(--sh), 0.6);
+    object-fit: cover;
   }
 
   &__dirs-list {

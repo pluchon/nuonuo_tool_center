@@ -1,0 +1,77 @@
+// 本地分级进度胶囊：和“诺诺在看图”同高的玻璃胶囊，里面一根带流光的细进度条
+.rating-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  margin-left: 8px;
+  padding: 0 10px 0 9px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1px solid var(--a-line2);
+  background: var(--look-field-bg);
+  backdrop-filter: var(--look-blur);
+  box-shadow: 0 4px 12px -8px rgba(var(--sh), 0.55);
+  color: var(--c-i-3B3047);
+  font-size: 12px;
+  font-weight: 600;
+
+  &__icon {
+    flex: none;
+    color: var(--c-i-3F8F7B);
+  }
+
+  &__bar {
+    position: relative;
+    width: 72px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--a-line2);
+    overflow: hidden;
+  }
+
+  &__fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    min-width: 6px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #5bb59a, var(--a));
+    transition: width 0.4s ease;
+    overflow: hidden;
+
+    // 一道很淡的光从左往右扫，表示还在跑
+    &::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+      translate: -100% 0;
+      animation: rating-sweep 1.8s ease-in-out infinite;
+    }
+  }
+
+  &__num {
+    font-variant-numeric: tabular-nums;
+    color: var(--a-ink);
+    font-weight: 700;
+
+    i {
+      margin: 0 2px;
+      font-style: normal;
+      font-weight: 400;
+      color: var(--c-i-8A7FA0);
+    }
+  }
+}
+
+@keyframes rating-sweep {
+  to {
+    translate: 100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rating-pill__fill::after {
+    animation: none;
+  }
+}

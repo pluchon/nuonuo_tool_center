@@ -56,6 +56,11 @@ import {
   undoDeleteConversation,
   voteMessage
 } from '../services/ai/assistantService'
+import { cancelAllLooks, getLookState, lookNow, retryLook } from '../services/ai/lookService'
+import { startNativeDrag } from '../services/fileOps/nativeDragService'
+import { acceptAllSuggestions, assistPrompt, decideMany, decideSuggestion, importAssist, listSuggestions } from '../services/ai/suggestionService'
+import { approveOrganize, cancelOrganize, estimateOrganize, getOrganizeState, startOrganize } from '../services/ai/organizeService'
+import { getRatingProgress } from '../services/rating/ratingService'
 import { handle } from './handle'
 
 // 取发起调用的窗口；窗口已关闭时报错
@@ -307,6 +312,10 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
     requireDatabase()
     await openFolder(ref)
   })
+  handle(IpcChannel.fileStartDrag, async (event, fileIds: number[], hash: string) => {
+    requireDatabase()
+    return startNativeDrag(event.sender, paths.thumbs, fileIds, hash)
+  })
   handle(IpcChannel.fileCopyImage, async (_event, fileId: number) => {
     requireDatabase()
     await copyImageToClipboard(fileId)
@@ -362,6 +371,79 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   handle(IpcChannel.aiVote, async (_event, messageId: number, vote: 'UP' | 'DOWN' | null) => {
     requireDatabase()
     await voteMessage(messageId, vote)
+  })
+  handle(IpcChannel.lookState, async () => {
+    requireDatabase()
+    return getLookState()
+  })
+  handle(IpcChannel.lookRetry, async (_event, jobId: number) => {
+    requireDatabase()
+    if (!Number.isInteger(jobId)) {
+      throw new BizError('BAD_REQUEST', '任务 id 不对')
+    }
+    await retryLook(jobId)
+  })
+  handle(IpcChannel.lookNow, async (_event, imageId: number) => {
+    requireDatabase()
+    if (!Number.isInteger(imageId)) {
+      throw new BizError('BAD_REQUEST', '图片 id 不对')
+    }
+    await lookNow(imageId)
+  })
+  handle(IpcChannel.lookCancelAll, async () => {
+    requireDatabase()
+    return cancelAllLooks()
+  })
+  handle(IpcChannel.suggestionList, async (_event, imageId: number) => {
+    requireDatabase()
+    return listSuggestions(imageId)
+  })
+  handle(IpcChannel.suggestionDecide, async (_event, imageId: number, key: string, accept: boolean) => {
+    requireDatabase()
+    if (typeof key !== 'string' || typeof accept !== 'boolean') {
+      throw new BizError('BAD_REQUEST', '参数不对')
+    }
+    return decideSuggestion(imageId, key, accept)
+  })
+  handle(IpcChannel.suggestionAcceptAll, async (_event, imageId: number) => {
+    requireDatabase()
+    return acceptAllSuggestions(imageId)
+  })
+  handle(IpcChannel.suggestionDecideMany, async (_event, imageIds: unknown, accept: unknown) => {
+    requireDatabase()
+    if (typeof accept !== 'boolean') {
+      throw new BizError('BAD_REQUEST', '参数不对')
+    }
+    return decideMany(imageIds, accept)
+  })
+  handle(IpcChannel.ratingProgress, async () => getRatingProgress())
+  handle(IpcChannel.organizeState, async () => {
+    requireDatabase()
+    return getOrganizeState()
+  })
+  handle(IpcChannel.organizeEstimate, async () => {
+    requireDatabase()
+    return estimateOrganize()
+  })
+  handle(IpcChannel.organizeStart, async () => {
+    requireDatabase()
+    return startOrganize()
+  })
+  handle(IpcChannel.organizeApprove, async (_event, plan: unknown) => {
+    requireDatabase()
+    return approveOrganize(plan)
+  })
+  handle(IpcChannel.organizeCancel, async () => {
+    requireDatabase()
+    return cancelOrganize()
+  })
+  handle(IpcChannel.assistPrompt, async (_event, imageId: number) => {
+    requireDatabase()
+    return assistPrompt(imageId)
+  })
+  handle(IpcChannel.assistImport, async (_event, imageId: number, raw: unknown) => {
+    requireDatabase()
+    return importAssist(imageId, raw)
   })
 
   handle(IpcChannel.windowSetTheme, async (event, theme: ThemeMode) => {

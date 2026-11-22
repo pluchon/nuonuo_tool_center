@@ -34,10 +34,11 @@ describe('第二阶段：按画布换主界面', () => {
       ['最近导入', '0'],
       ['标签管理', '0'],
       ['R-18 图', '0'],
-      ['诺诺助手', '']
+      ['诺诺助手', ''],
+      ['AI 建议', '0']
     ])
     expect(await page.locator('.side-nav__hint').allTextContents()).toEqual(['还没有源目录', '还没有类目录'])
-    expect((await page.locator('.status-footer').innerText()).split(/\s+/).filter(Boolean)).toEqual(['0', '张', '还没有扫描过', '重新扫描'])
+    expect((await page.locator('.status-footer').innerText()).split(/\s+/).filter(Boolean)).toEqual(['诺诺在看图', '0', '一键整理', '0', '张', '还没有扫描过', '重新扫描'])
     // 诺诺插画和品牌头像真的加载出来了
     await page.waitForFunction(() =>
       [...document.querySelectorAll<HTMLImageElement>('.nono-art, .title-bar__brand')].every((i) => i.complete && i.naturalWidth > 0)
@@ -74,7 +75,8 @@ describe('第二阶段：按画布换主界面', () => {
       '猫猫',
       '标签管理',
       'R-18 图',
-      '诺诺助手'
+      '诺诺助手',
+      'AI 建议'
     ])
 
     await importFolder(app, page, source)

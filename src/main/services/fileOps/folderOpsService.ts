@@ -130,6 +130,26 @@ export async function createFolder(parent: FolderRefDTO, rawName: unknown): Prom
   })
 }
 
+// 类目录根下现有的顶层目录名（类目录位置还不存在时为空）
+export async function categoryTopNames(): Promise<string[]> {
+  return (await childDirs(await categoryHomeOf(categoryHomeOverride))) ?? []
+}
+
+// 一键整理采用“放进类目录”时：找到类目录根下这个名字的目录（不分大小写），没有就新建；返回绝对路径
+export async function ensureCategoryTop(rawName: string): Promise<string> {
+  const name = checkName(rawName)
+  if (!name) {
+    throw new BizError('BAD_REQUEST', '目录名不能为空')
+  }
+  const home = await categoryHomeOf(categoryHomeOverride)
+  const hit = (await categoryTopNames()).find((n) => n.toLowerCase() === name.toLowerCase())
+  if (hit) {
+    return join(home, hit)
+  }
+  const rel = await createFolder({ kind: 'category', path: '' }, name)
+  return join(home, rel)
+}
+
 // 类目录改名：磁盘上改名，下面所有文件记录的路径跟着换（先写日志）。返回新的相对路径
 export async function renameCategoryFolder(ref: FolderRefDTO, rawName: unknown): Promise<string> {
   checkNotScanning()

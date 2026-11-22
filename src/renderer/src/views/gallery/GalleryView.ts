@@ -23,6 +23,9 @@ export default defineComponent({
     // 空状态的一行字：搜索没结果 / 筛选后没有 / 本来就没有
     const emptyText = computed(() => {
       const q = gallery.q.trim()
+      if (viewStore.view === 'ai' && !q) {
+        return '没有要确认的建议'
+      }
       if (q) {
         return `没有找到「${q}」`
       }

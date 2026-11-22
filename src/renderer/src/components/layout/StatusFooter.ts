@@ -2,6 +2,9 @@ import { computed, defineComponent, onBeforeUnmount, ref } from 'vue'
 import { useLibraryStore } from '@/stores/library'
 import { useScanStore } from '@/stores/scan'
 import { useToastStore } from '@/stores/toast'
+import LookCapsule from './LookCapsule.vue'
+import OrganizeButton from './OrganizeButton.vue'
+import RatingProgress from './RatingProgress.vue'
 
 // 相对时间每 30 秒刷新一次
 const TICK_MS = 30_000
@@ -22,9 +25,10 @@ export function scanAgo(iso: string, now: number): string {
   return `${Math.floor(hours / 24)} 天前扫描完成`
 }
 
-// 底栏：图片总数、扫描状态、重新扫描（照原型 footer）
+// 底栏：左边“诺诺在看图”，右边图片总数、扫描状态、重新扫描（照原型 footer）
 export default defineComponent({
   name: 'StatusFooter',
+  components: { LookCapsule, OrganizeButton, RatingProgress },
   setup() {
     const library = useLibraryStore()
     const scan = useScanStore()

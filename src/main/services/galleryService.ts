@@ -30,11 +30,13 @@ import {
 import { findActiveRootById, findActiveRootsByKind } from '../repositories/libraryRootRepository'
 import { THUMB_FAILED, THUMB_READY } from '../repositories/imageRepository'
 import { findTagsOfImage } from '../repositories/tagRepository'
+import { findPendingSummary } from '../repositories/aiResultRepository'
+import { categoryTopNames } from './fileOps/folderOpsService'
 
 // “最近导入”的天数（和侧栏计数一致）
 export const RECENT_DAYS = 30
 
-const VIEWS = ['all', 'untagged', 'recent', 'r18', 'source', 'category'] as const
+const VIEWS = ['all', 'untagged', 'recent', 'r18', 'ai', 'source', 'category'] as const
 // 搜索词最长多少字
 const MAX_QUERY = 100
 
@@ -261,7 +263,29 @@ export async function listGallery(query: GalleryQueryDTO): Promise<GalleryListVO
   const items = [...byImage.values()]
     .map((list) => toItem(pickRepresentative(list, offline), offline))
     .filter((item) => matchMore(item, more))
+  if (query.view === 'ai') {
+    return { items: await withAiOrder(items) }
+  }
   return { items: sortItems(items, query.sort) }
+}
+
+// “AI 建议”视图：按建议生成的先后排（后来的接在最后），带上建议放进的类目录（目录还不存在的标成新建）
+async function withAiOrder(items: GalleryItemVO[]): Promise<GalleryItemVO[]> {
+  const summary = await findPendingSummary()
+  const existing = new Set((await categoryTopNames()).map((n) => n.toLowerCase()))
+  for (const item of items) {
+    const dir = summary.get(item.imageId)?.dir
+    item.aiDir = dir ? { name: dir, isNew: !existing.has(dir.toLowerCase()) } : null
+  }
+  const first = (id: number): number => summary.get(id)?.firstId ?? Number.MAX_SAFE_INTEGER
+  // 同一个目标目录的排在一起（界面按目录分组），组按组里最早的建议排
+  const groupOf = (i: GalleryItemVO): string => i.aiDir?.name.toLowerCase() ?? ''
+  const groupFirst = new Map<string, number>()
+  for (const i of items) {
+    groupFirst.set(groupOf(i), Math.min(groupFirst.get(groupOf(i)) ?? Number.MAX_SAFE_INTEGER, first(i.imageId)))
+  }
+  const rank = (i: GalleryItemVO): number => groupFirst.get(groupOf(i)) ?? Number.MAX_SAFE_INTEGER
+  return items.sort((a, b) => rank(a) - rank(b) || first(a.imageId) - first(b.imageId) || a.imageId - b.imageId)
 }
 
 // 按给定顺序把图片 id 换成网格项（诺诺回复里的结果图）；已经删掉、没有位置的图跳过

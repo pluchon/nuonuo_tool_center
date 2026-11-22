@@ -187,11 +187,14 @@ function lookVars(accent: string, isDark: boolean, look: GlassLook, backdrop: Ba
   const glassOf = (a: number): string => `rgba(${glassRgb}, ${a.toFixed(2)})`
   const clr = look.panelClarity / 100
   const paneA = Math.max(0.06, 1 - clr * 1.15)
+  const fieldA = Math.max(0.3, 1 - clr * 0.85)
   const blur = look.glass ? `blur(${look.glassBlur}px) saturate(1.5)` : 'none'
   return {
     '--look-pane-bg': glassOf(paneA),
     '--look-card-bg': glassOf(paneA),
-    '--look-field-bg': `rgba(var(--w), ${Math.max(0.3, 1 - clr * 0.85).toFixed(2)})`,
+    '--look-field-bg': `rgba(var(--w), ${fieldA.toFixed(2)})`,
+    // 悬停、输入时稍微变实一点
+    '--look-field-hover-bg': `rgba(var(--w), ${Math.min(1, fieldA + 0.32).toFixed(2)})`,
     '--look-foot-bg': glassOf(paneA * 0.7),
     '--look-blur': blur,
     '--look-edge': hasBg ? 'rgba(var(--w), 0.8)' : tint(accent, 0.16),

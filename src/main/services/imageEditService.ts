@@ -9,6 +9,7 @@ import {
 } from '@shared/api'
 import { BizError } from '../common/bizError'
 import { getDatabase } from '../db/client'
+import { recordEvent, recordEvents } from './ai/eventService'
 import { updateDisplayName, updateR18 } from '../repositories/imageRepository'
 import {
   acceptImageTags,
@@ -65,8 +66,9 @@ export async function getTagCatalog(): Promise<TagCatalogVO> {
   }
 }
 
-// 改名字：去掉首尾空格；清空表示用回文件名；超过 15 个字拒绝（界面上计数变红、不让保存，这里是兜底）
-export async function renameImage(imageId: number, raw: unknown): Promise<string | null> {
+// 改名字：去掉首尾空格；清空表示用回文件名；超过 15 个字拒绝（界面上计数变红、不让保存，这里是兜底）。
+// 你手动改的记进事件流（采用 AI 建议时由建议那边记，这里不重复记）
+export async function renameImage(imageId: number, raw: unknown, opts: { record?: boolean } = {}): Promise<string | null> {
   const [id] = await checkImageIds([imageId])
   if (raw !== null && typeof raw !== 'string') {
     throw new BizError('BAD_REQUEST', '名字不对')
@@ -77,6 +79,9 @@ export async function renameImage(imageId: number, raw: unknown): Promise<string
   }
   const value = name === '' ? null : name
   await updateDisplayName(id, value)
+  if (opts.record !== false && value) {
+    await recordEvent('rename', id, { to: value })
+  }
   return value
 }
 
@@ -91,7 +96,17 @@ export async function setR18(imageIds: unknown, value: unknown): Promise<number>
 }
 
 // 给图加标签：名字或别名命中已有标签就用它（分类不变），否则在指定分类下新建；已有的不重复加，已满 5 个的跳过
-export async function addTag(dto: AddTagDTO): Promise<AddTagResultVO> {
+export async function addTag(dto: AddTagDTO, opts: { record?: boolean } = {}): Promise<AddTagResultVO> {
+  const result = await addTagInTx(dto)
+  // 事件在事务外记（PGlite 只有一条连接，事务里再查会卡住）；采用 AI 建议时由建议那边记
+  if (opts.record !== false && result.added > 0) {
+    await recordEvents('tag.add', (dto.imageIds as number[]).slice(0, 50), { tag: result.tag.name })
+  }
+  return result
+}
+
+// 加标签的数据库部分（一个事务）
+async function addTagInTx(dto: AddTagDTO): Promise<AddTagResultVO> {
   if (!dto || typeof dto.name !== 'string') {
     throw new BizError('BAD_REQUEST', '标签名不对')
   }
@@ -160,7 +175,11 @@ export async function removeTag(imageIds: unknown, tagId: unknown): Promise<numb
     throw new BizError('BAD_REQUEST', '标签 id 不对')
   }
   const ids = await checkImageIds(imageIds)
-  return removeImageTags(ids, tagId as number)
+  const removed = await removeImageTags(ids, tagId as number)
+  if (removed > 0) {
+    await recordEvents('tag.remove', ids.slice(0, 50), { tagId })
+  }
+  return removed
 }
 
 // 多选时的共同标签：每张图上都有的标签，按第一张图上的顺序

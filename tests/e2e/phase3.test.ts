@@ -64,8 +64,11 @@ describe('第三阶段：导入和扫描', () => {
     await page.waitForSelector('.status-banner', { state: 'detached' })
     await expect(countOf(page, 'pics')).resolves.toBe(String(IMAGE_COUNT + 1))
     await expect(countOf(page, '还没打标签')).resolves.toBe(String(IMAGE_COUNT + 2))
-    const footer = (await page.locator('.status-footer').innerText()).split(/\s+/).filter(Boolean)
-    expect(footer).toEqual([(IMAGE_COUNT + 2).toLocaleString('zh-CN'), '张', '刚刚扫描完成', '重新扫描'])
+    // 扫完紧接着在本地分级：“本地分级中 N/M”这颗胶囊不比
+    const words = (await page.locator('.status-footer').innerText()).split(/\s+/).filter(Boolean)
+    const at = words.indexOf('本地分级中')
+    const footer = at >= 0 ? [...words.slice(0, at), ...words.slice(at + 2)] : words
+    expect(footer).toEqual(['诺诺在看图', '0', '一键整理', (IMAGE_COUNT + 2).toLocaleString('zh-CN'), '张', '刚刚扫描完成', '重新扫描'])
     await shot(page, 'scanned-light')
 
     // 重新扫描：文件都没变，很快结束，计数不变
