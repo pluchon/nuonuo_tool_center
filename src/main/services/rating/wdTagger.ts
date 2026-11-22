@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import * as ort from 'onnxruntime-node'
 import sharp from 'sharp'
+import { pickModelFile } from './modelFile'
 
 // WD tagger v3 的输入边长与标签分类编号
 const INPUT_SIZE = 448
@@ -74,11 +75,11 @@ export class WdTagger {
     private readonly tags: TagRow[]
   ) {}
 
-  // 从模型目录加载（需包含 model.onnx 与 selected_tags.csv）；默认只用 CPU 且限 2 线程，避免核显机器整机卡死
+  // 从模型目录加载（需包含 model.onnx 与 selected_tags.csv，有 int8 版优先用）；默认只用 CPU 且限 2 线程，避免核显机器整机卡死
   static async load(modelDir: string, options: WdLoadOptions = {}): Promise<WdTagger> {
     const { executionProviders = ['cpu'], threads = 2 } = options
     const csv = await readFile(join(modelDir, 'selected_tags.csv'), 'utf8')
-    const session = await ort.InferenceSession.create(join(modelDir, 'model.onnx'), {
+    const session = await ort.InferenceSession.create(join(modelDir, pickModelFile(modelDir)), {
       executionProviders: executionProviders as ort.InferenceSession.ExecutionProviderConfig[],
       graphOptimizationLevel: 'all',
       intraOpNumThreads: threads,

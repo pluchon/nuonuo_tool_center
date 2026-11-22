@@ -19,6 +19,7 @@ describe('分级线程', () => {
   })
 })
 const { isModelReady, ensureModel, modelDirOf } = await import('../../src/main/services/rating/modelStore')
+const { pickModelFile } = await import('../../src/main/services/rating/modelFile')
 
 describe('分级口径', () => {
   it('取最高分作为分级；questionable + explicit ≥ 0.5 才算明显 R-18', () => {
@@ -65,6 +66,17 @@ describe('模型文件', () => {
     expect(await ensureModel(dir)).toBe(true)
     expect(fetchSpy).not.toHaveBeenCalled()
     fetchSpy.mockRestore()
+  })
+
+  it('有完整的 int8 版就用它，没有或太小用原版', async () => {
+    const m = modelDirOf(dir)
+    expect(pickModelFile(m)).toBe('model.onnx')
+    writeFileSync(join(m, 'model.int8.onnx'), 'tiny')
+    expect(pickModelFile(m)).toBe('model.onnx')
+    const fd = await import('node:fs/promises').then((f) => f.open(join(m, 'model.int8.onnx'), 'w'))
+    await fd.write(Buffer.alloc(1), 0, 1, 170_000_000)
+    await fd.close()
+    expect(pickModelFile(m)).toBe('model.int8.onnx')
   })
 })
 

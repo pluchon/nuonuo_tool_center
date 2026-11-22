@@ -6,6 +6,7 @@ import { getLogger } from '../../common/logger'
 import type { RatingProgressVO } from '@shared/api'
 import { countRatingCandidates, findRatingCandidates, saveModelRating } from '../../repositories/imageRepository'
 import type { RatingRequest, RatingResponse } from './ratingProtocol'
+import { pickModelFile } from './modelFile'
 import { ensureModel, modelDirOf } from './modelStore'
 import type { WdRating } from './wdTagger'
 
@@ -189,6 +190,7 @@ async function runOnce(): Promise<void> {
     return
   }
   const modelDir = modelDirOf(cfg.modelsRoot)
+  log.info(`本地分级用 ${pickModelFile(modelDir)}`)
   let rated = 0
   let r18 = 0
   for (;;) {
