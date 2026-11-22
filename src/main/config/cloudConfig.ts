@@ -10,7 +10,18 @@ export const OSS_CONFIG = {
 export const BAILIAN_CONFIG = {
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   visionSearchModel: 'qwen3.8-flash',
-  requestTimeoutMs: 300_000
+  // 对话、看图（多模态，base64 传图已实测可用）、做梦共用 flash，前缀才能共用缓存
+  chatModel: 'qwen3.8-flash',
+  requestTimeoutMs: 300_000,
+  // 对话单次超时；看图和以图搜图用 requestTimeoutMs
+  chatTimeoutMs: 60_000
+} as const
+
+// 缓存命中率的检查：按文本 token 算（图片 token 每张都是新的，不计入），最近这么多次调用里低于目标时写警告
+export const CACHE_HIT_CHECK = {
+  target: 0.95,
+  window: 20,
+  minCalls: 10
 } as const
 
 // 云端凭证

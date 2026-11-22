@@ -1,5 +1,5 @@
-import OpenAI from 'openai'
-import { BAILIAN_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
+import { BAILIAN_CONFIG } from '../../config/cloudConfig'
+import { getBailianClient } from '../ai/bailianClient'
 
 // 以图搜图识别结果（模型按约定输出的 JSON）；出处不让模型写，只采用工具返回的 searchHits
 export interface ImageIdentifyResult {
@@ -31,27 +31,6 @@ const IDENTIFY_PROMPT = `你是二次元图片鉴定助手。用以图搜图工�
  "suggestedName":"适合当文件名的简短中文名，不含扩展名",
  "tagsZh":["5到10个中文标签"]}
 认不出的角色不要编造，characters 留空。不要输出任何链接。`
-
-let client: OpenAI | null = null
-
-// 懒加载百炼兼容客户端
-function getClient(): OpenAI {
-  if (client) {
-    return client
-  }
-  const { dashscopeApiKey } = readCloudCredentials()
-  if (!dashscopeApiKey) {
-    throw new Error('缺少环境变量 DASHSCOPE_API_KEY')
-  }
-  // 以图搜图服务端耗时可达 2 分钟以上；关闭自动重试，避免一次超时被重试成多次计费
-  client = new OpenAI({
-    apiKey: dashscopeApiKey,
-    baseURL: BAILIAN_CONFIG.baseURL,
-    timeout: BAILIAN_CONFIG.requestTimeoutMs,
-    maxRetries: 0
-  })
-  return client
-}
 
 // 从模型文本里取出 JSON 对象；解析失败返回 null，由调用方决定如何处理
 function extractJson(text: string): ImageIdentifyResult | null {
@@ -106,7 +85,8 @@ export async function identifyImage(imageUrl: string, model: string = BAILIAN_CO
     ],
     tools: [{ type: 'image_search' }]
   }
-  const res = (await getClient().responses.create(request as never)) as unknown as {
+  // 以图搜图服务端耗时可达 2 分钟以上，用客户端默认的长超时
+  const res = (await getBailianClient().responses.create(request as never)) as unknown as {
     output: unknown[]
     output_text?: string
     usage?: unknown
