@@ -16,10 +16,12 @@ import { isValidDirName } from '../../common/pathUtil'
 import { findActiveSettings, upsertSettings } from '../../repositories/appSettingRepository'
 import {
   countLookCandidates,
+  countLookProgress,
   findLookCandidates,
   findOpenLookJobs,
   findOrganizeTerms,
   cancelBacklogJobs,
+  cancelFailedLookJobs,
   insertLookJobs,
   insertOrganizeResults,
   type OrganizeTerms
@@ -35,6 +37,8 @@ const log = getLogger('organize')
 
 // 状态在设置表里的键（settingsService 跳过 ai. 开头的键）
 const STATE_KEY = 'ai.organize'
+// 这次整理从什么时候开始排看图（算看图进度用）
+const LOOK_FROM_KEY = 'ai.organizeLookFrom'
 // 新建目录最多几个；交给模型的词每类最多几个
 const NEW_FOLDERS_MAX = 12
 const STAT_LIMITS = { characters: 40, works: 30, tags: 60 } as const
@@ -52,6 +56,7 @@ export interface OrganizeConfig {
 let config: OrganizeConfig | null = null
 let state: OrganizeStateVO = { phase: 'IDLE', plan: null, error: null }
 let planning = false
+let lookFrom: Date | null = null
 
 // 配置（启动时调一次）
 export function configureOrganize(next: OrganizeConfig): void {
@@ -72,8 +77,13 @@ async function setState(next: OrganizeStateVO): Promise<void> {
 
 // 启动：读回上次的状态；看图中的检查一下看完没有，出方案出到一半的重新出
 export async function initOrganize(): Promise<void> {
-  const row = (await findActiveSettings()).find((s) => s.key === STATE_KEY)
+  const rows = await findActiveSettings()
+  const row = rows.find((s) => s.key === STATE_KEY)
   const saved = row?.value as OrganizeStateVO | undefined
+  const from = rows.find((s) => s.key === LOOK_FROM_KEY)?.value
+  if (typeof from === 'string' && !Number.isNaN(new Date(from).getTime())) {
+    lookFrom = new Date(from)
+  }
   if (saved && typeof saved === 'object' && typeof saved.phase === 'string') {
     state = { phase: saved.phase, plan: saved.plan ?? null, error: saved.error ?? null }
   }
@@ -90,7 +100,7 @@ export async function initOrganize(): Promise<void> {
 
 // 开始前的估算：要看多少张、大概多少 token 和钱；ratingLeft 是本地分级还剩几张（大于 0 时界面不让开始）
 export async function estimateOrganize(): Promise<OrganizeEstimateVO> {
-  const toLook = await countLookCandidates(new Date(0))
+  const toLook = await countLookCandidates(new Date(0), true)
   const ratingLeft = await countRatingCandidates()
   const realtime = Math.min(toLook, ORGANIZE_COST.realtimeMax)
   const yuan = realtime * ORGANIZE_COST.realtimeYuanPerImage + (toLook - realtime + ratingLeft) * ORGANIZE_COST.batchYuanPerImage
@@ -115,7 +125,11 @@ export async function startOrganize(): Promise<OrganizeStateVO> {
   if (isRatingBusy() || ratingLeft > 0) {
     throw new BizError('CONFLICT', ratingLeft > 0 ? `本地分级还剩 ${ratingLeft.toLocaleString('zh-CN')} 张，判完才能整理` : '本地分级还在进行，判完才能整理')
   }
-  const ids = await findLookCandidates(new Date(0), 1_000_000)
+  lookFrom = new Date()
+  await upsertSettings([{ key: LOOK_FROM_KEY, value: lookFrom.toISOString() }])
+  // 取消过、出错过的图这次重新看
+  await cancelFailedLookJobs()
+  const ids = await findLookCandidates(new Date(0), 1_000_000, true)
   if (ids.length > 0) {
     await insertLookJobs(ids)
     log.info(`一键整理：排进 ${ids.length} 张看图`)
@@ -135,11 +149,31 @@ export async function checkLooking(): Promise<void> {
   if (state.phase !== 'LOOKING') {
     return
   }
+  await refreshLooked()
   const open = await findOpenLookJobs()
   if (open.some((j) => j.status === 'QUEUED' || j.status === 'RUNNING')) {
     return
   }
   void makePlan()
+}
+
+// 看图进度变了就推给界面（只推不存，重开时从队列重新算）
+async function refreshLooked(): Promise<void> {
+  if (!lookFrom) {
+    // 老版本开始的整理没记开始时间：用还没看完的里最早排进来的那张
+    const first = (await findOpenLookJobs()).filter((j) => j.status !== 'FAILED').sort((a, b) => a.createTime.getTime() - b.createTime.getTime())[0]
+    if (!first) {
+      return
+    }
+    lookFrom = first.createTime
+    await upsertSettings([{ key: LOOK_FROM_KEY, value: lookFrom.toISOString() }])
+  }
+  const looked = await countLookProgress(lookFrom)
+  if (state.phase !== 'LOOKING' || (state.looked?.done === looked.done && state.looked?.total === looked.total)) {
+    return
+  }
+  state = { ...state, looked }
+  config?.onState(state)
 }
 
 // 取消：回到空闲（已经交出去的看完为止，还没交的补图取消，已经生成的建议留着）

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { OrganizeEstimateVO, OrganizeFolderVO, OrganizePhase, RatingProgressVO } from '@shared/api'
+import type { OrganizeEstimateVO, OrganizeFolderVO, OrganizeLookedVO, OrganizePhase, OrganizeStateVO, RatingProgressVO } from '@shared/api'
 import { approveOrganize, cancelOrganize, fetchOrganizeEstimate, fetchOrganizeState, onOrganizeState, startOrganize } from '@/api/organize'
 import { fetchRatingProgress, onRatingProgress } from '@/api/rating'
 import { useGalleryStore } from './gallery'
@@ -18,6 +18,8 @@ export const useOrganizeStore = defineStore('organize', {
     phase: 'IDLE' as OrganizePhase,
     plan: null as OrganizeFolderVO[] | null,
     error: null as string | null,
+    // 看图阶段看完了几张
+    looked: null as OrganizeLookedVO | null,
     // 弹窗：开始前确认（带估算）、方案（可编辑的草稿）、停止确认
     dialog: null as 'confirm' | 'plan' | 'stop' | null,
     estimate: null as OrganizeEstimateVO | null,
@@ -30,24 +32,26 @@ export const useOrganizeStore = defineStore('organize', {
     async init(): Promise<void> {
       unsubscribe.forEach((fn) => fn())
       unsubscribe = [
-        onOrganizeState((s) => this.apply(s.phase, s.plan, s.error)),
+        onOrganizeState((s) => this.apply(s)),
         onRatingProgress((p) => {
           this.rating = p
         })
       ]
       try {
         const s = await fetchOrganizeState()
-        this.apply(s.phase, s.plan, s.error)
+        this.apply(s)
         this.rating = await fetchRatingProgress()
       } catch {
         // 读不到就先当空闲，主进程推过来再更新
       }
     },
-    apply(phase: OrganizePhase, plan: OrganizeFolderVO[] | null, error: string | null): void {
+    apply(s: OrganizeStateVO): void {
+      const { phase, plan, error } = s
       const wasReady = this.phase === 'PLAN_READY'
       this.phase = phase
       this.plan = plan
       this.error = error
+      this.looked = s.looked ?? null
       // 方案刚出来：弹出来给你批
       if (phase === 'PLAN_READY' && !wasReady) {
         this.openPlan()
@@ -96,7 +100,7 @@ export const useOrganizeStore = defineStore('organize', {
       this.busy = true
       try {
         const s = await startOrganize()
-        this.apply(s.phase, s.plan, s.error)
+        this.apply(s)
         if (this.dialog === 'confirm') {
           this.dialog = null
         }
@@ -133,7 +137,7 @@ export const useOrganizeStore = defineStore('organize', {
       this.busy = true
       try {
         const s = await cancelOrganize()
-        this.apply(s.phase, s.plan, s.error)
+        this.apply(s)
         this.dialog = null
       } catch (err) {
         useToastStore().show(errText(err), 'error')

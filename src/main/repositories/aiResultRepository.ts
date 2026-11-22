@@ -52,17 +52,19 @@ export async function updateSource(imageId: number, source: string | null): Prom
 // ===== 看图队列（ai_job 里 kind = LOOK 的行） =====
 
 // 能自动排进看图队列的图：since 之后导入、没删、不是 R-18、上云闸门放行（本地模型判过且不是明显 R-18，或你手动关过 R-18）、
-// 还没打标签、从没排过队（排过又取消的不再自动排）
-export async function findLookCandidates(since: Date, limit: number): Promise<number[]> {
+// 还没打标签、从没排过队（排过又取消的不再自动排）。
+// again：一键整理重新开始时用，取消过、出错过的也算（只跳过排着、在看、看完的）
+export async function findLookCandidates(since: Date, limit: number, again = false): Promise<number[]> {
   const { db } = getDatabase()
-  const rows = await db.select({ id: image.id }).from(image).where(lookCandidateWhere(since)).orderBy(asc(image.id)).limit(limit)
+  const rows = await db.select({ id: image.id }).from(image).where(lookCandidateWhere(since, again)).orderBy(asc(image.id)).limit(limit)
   return rows.map((r) => r.id)
 }
 
 // 能排进看图队列的条件（见上）
-function lookCandidateWhere(since: Date): SQL | undefined {
+function lookCandidateWhere(since: Date, again: boolean): SQL | undefined {
   const accepted = sql`exists (select 1 from ${imageTag} where ${col(imageTag.imageId)} = ${col(image.id)} and ${col(imageTag.deleteState)} = 0 and ${col(imageTag.status)} = 'ACCEPTED')`
-  const queued = sql`exists (select 1 from ${aiJob} where ${col(aiJob.imageId)} = ${col(image.id)} and ${col(aiJob.kind)} = 'LOOK')`
+  const live = again ? sql` and ${col(aiJob.status)} in ('QUEUED', 'RUNNING', 'DONE')` : sql``
+  const queued = sql`exists (select 1 from ${aiJob} where ${col(aiJob.imageId)} = ${col(image.id)} and ${col(aiJob.kind)} = 'LOOK'${live})`
   return and(
     eq(image.deleteState, 0),
     eq(image.isR18, false),
@@ -74,10 +76,21 @@ function lookCandidateWhere(since: Date): SQL | undefined {
 }
 
 // 能排进看图队列的图有多少张（一键整理开始前的估算）
-export async function countLookCandidates(since: Date): Promise<number> {
+export async function countLookCandidates(since: Date, again = false): Promise<number> {
   const { db } = getDatabase()
-  const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(image).where(lookCandidateWhere(since))
+  const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(image).where(lookCandidateWhere(since, again))
   return Number(row?.n ?? 0)
+}
+
+// 出错的看图标成取消（一键整理重新开始时会重新排它们，免得队列里还挂着旧的出错行）
+export async function cancelFailedLookJobs(): Promise<number> {
+  const { db } = getDatabase()
+  const rows = await db
+    .update(aiJob)
+    .set({ status: 'CANCELLED', remoteId: null, finishedAt: new Date() })
+    .where(and(eq(aiJob.kind, 'LOOK'), eq(aiJob.status, 'FAILED')))
+    .returning({ id: aiJob.id })
+  return rows.length
 }
 
 // 看图队列卡片里每行要的：名字、缩略图哈希（一次查完，不逐张查）
@@ -194,6 +207,18 @@ export async function insertLookJobs(imageIds: number[], priority = 0): Promise<
   }
   const { db } = getDatabase()
   await db.insert(aiJob).values(imageIds.map((imageId) => ({ kind: 'LOOK' as const, imageId, priority })))
+}
+
+// 一键整理的看图进度：从开始那一刻起排进来的、加上开始时还没看完的，一共几张、做完了几张（出错、取消的也算做完）
+export async function countLookProgress(from: Date): Promise<{ done: number; total: number }> {
+  const { db } = getDatabase()
+  const open = inArray(aiJob.status, ['QUEUED', 'RUNNING'])
+  const [row] = await db
+    .select({ total: sql<number>`count(*)::int`, open: sql<number>`count(*) filter (where ${open})::int` })
+    .from(aiJob)
+    .where(and(eq(aiJob.kind, 'LOOK'), eq(aiJob.deleteState, 0), or(gte(aiJob.createTime, from), open)))
+  const total = Number(row?.total ?? 0)
+  return { done: total - Number(row?.open ?? 0), total }
 }
 
 // 队列里还在的（排队、进行中、失败的），优先级高的、先排的在前

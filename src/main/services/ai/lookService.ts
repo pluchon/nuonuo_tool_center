@@ -74,6 +74,11 @@ let stopping = false
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 // 正在实时看的任务
 const runningIds = new Set<number>()
+// 正在打包交批量的任务（实时那边不碰）
+const packingIds = new Set<number>()
+// 交批量同一时间只跑一路；跑着时又被叫到，跑完再来一轮（免得两路把同一批图各交一次）
+let submitting = false
+let submitAgain = false
 
 // 配置看图服务（启动时调一次）
 export function configureLook(next: LookConfig): void {
@@ -231,28 +236,50 @@ async function lookOne(job: AiJobEntity): Promise<void> {
   }
 }
 
-// 开始干活：先把超出 50 张的部分打成批量，再用两个并发逐张实时看
+// 开始干活：两个并发逐张实时看（马上就有结果），同时把超出 50 张的部分打成批量
 export function scheduleLook(): void {
   if (!config || stopping || !cloudReady()) {
     return
   }
+  void fillRealtime().catch((err: unknown) => log.error('看图队列出错', err))
+  if (submitting) {
+    submitAgain = true
+    return
+  }
+  submitting = true
   void (async () => {
-    const queued = (await findOpenLookJobs()).filter((j) => j.status === 'QUEUED' && !j.remoteId && !runningIds.has(j.id))
-    const normal = queued.filter((j) => j.priority >= 0)
-    if (normal.length > BATCH_OVER) {
-      await submitBatches(normal.slice(BATCH_OVER).filter((j) => j.priority === 0))
+    do {
+      submitAgain = false
+      await submitQueued()
+    } while (submitAgain && !stopping)
+  })()
+    .catch((err: unknown) => log.error('看图队列出错', err))
+    .finally(() => {
+      submitting = false
+    })
+}
+
+// 实时看的空位填满
+async function fillRealtime(): Promise<void> {
+  while (active < CONCURRENCY) {
+    if (!(await pumpOne())) {
+      break
     }
-    // 补图：攒够一批（100 张）再交，分级判完了就把剩下的不满一批也交了
-    const backlog = queued.filter((j) => j.priority < 0)
-    if (backlog.length >= BATCH_SIZE || (backlog.length > 0 && !config?.moreLater?.())) {
-      await submitBatches(backlog.slice(0, Math.floor(backlog.length / BATCH_SIZE) * BATCH_SIZE || backlog.length))
-    }
-    while (active < CONCURRENCY) {
-      if (!(await pumpOne())) {
-        break
-      }
-    }
-  })().catch((err: unknown) => log.error('看图队列出错', err))
+  }
+}
+
+// 排着的超出 50 张的部分、攒够的补图，打成批量交上去
+async function submitQueued(): Promise<void> {
+  const queued = (await findOpenLookJobs()).filter((j) => j.status === 'QUEUED' && !j.remoteId && !runningIds.has(j.id) && !packingIds.has(j.id))
+  const normal = queued.filter((j) => j.priority >= 0)
+  if (normal.length > BATCH_OVER) {
+    await submitBatches(normal.slice(BATCH_OVER).filter((j) => j.priority === 0))
+  }
+  // 补图：攒够一批（100 张）再交，分级判完了就把剩下的不满一批也交了
+  const backlog = queued.filter((j) => j.priority < 0)
+  if (backlog.length >= BATCH_SIZE || (backlog.length > 0 && !config?.moreLater?.())) {
+    await submitBatches(backlog.slice(0, Math.floor(backlog.length / BATCH_SIZE) * BATCH_SIZE || backlog.length))
+  }
 }
 
 // 取下一张实时看；没有可做的返回 false
@@ -260,9 +287,11 @@ async function pumpOne(): Promise<boolean> {
   if (stopping || !config!.canRun()) {
     return false
   }
-  // 补图（优先级为负）只走批量，不在这里实时看
-  const next = (await findOpenLookJobs()).find((j) => j.status === 'QUEUED' && !j.remoteId && !runningIds.has(j.id) && j.priority >= 0)
-  if (!next) {
+  // 补图（优先级为负）只走批量，不在这里实时看；正在打包交批量的也不碰
+  const pick = (j: AiJobEntity): boolean => j.status === 'QUEUED' && !j.remoteId && !runningIds.has(j.id) && !packingIds.has(j.id) && j.priority >= 0
+  const next = (await findOpenLookJobs()).find(pick)
+  // 查库期间别的地方可能已经拿走了它或占满了空位
+  if (!next || !pick(next) || active >= CONCURRENCY) {
     return false
   }
   active++
@@ -345,12 +374,30 @@ async function batchLine(job: AiJobEntity): Promise<string | null> {
 
 // 把一批任务提交成批量推理（每批最多 100 张，带图的请求单独成批）
 async function submitBatches(jobs: AiJobEntity[]): Promise<void> {
+  jobs.forEach((j) => packingIds.add(j.id))
+  try {
+    await submitChunks(jobs)
+  } finally {
+    jobs.forEach((j) => packingIds.delete(j.id))
+  }
+  if (stopping) {
+    return
+  }
+  await pushState()
+  schedulePoll(BATCH_POLL_MS)
+}
+
+// 按每批 100 张逐批打包上传；退出时立刻停下（没交的下次启动再交）
+async function submitChunks(jobs: AiJobEntity[]): Promise<void> {
   const cfg = config!
   for (let i = 0; i < jobs.length && !stopping; i += BATCH_SIZE) {
     const chunk = jobs.slice(i, i + BATCH_SIZE)
     const lines: string[] = []
     const ids: number[] = []
     for (const j of chunk) {
+      if (stopping) {
+        return
+      }
       const line = await batchLine(j)
       if (line) {
         lines.push(line)
@@ -377,8 +424,6 @@ async function submitBatches(jobs: AiJobEntity[]): Promise<void> {
       await rm(file, { force: true })
     }
   }
-  await pushState()
-  schedulePoll(BATCH_POLL_MS)
 }
 
 // 过一会儿查一次批量任务

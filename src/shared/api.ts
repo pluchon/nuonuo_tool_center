@@ -585,6 +585,14 @@ export interface OrganizeStateVO {
   plan: OrganizeFolderVO[] | null
   // 出方案失败的原因（可以重试）
   error: string | null
+  // 看图阶段的进度（只在看图中有）
+  looked?: OrganizeLookedVO | null
+}
+
+// 一键整理看图进度：这次要看的图看完了几张
+export interface OrganizeLookedVO {
+  done: number
+  total: number
 }
 
 // 开始前的估算：要看多少张、大概多少 token 和钱（以账单为准）

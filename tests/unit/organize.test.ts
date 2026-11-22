@@ -132,6 +132,8 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     planReply = '```json\n{"folders":[{"name":"原神","works":["原神"],"characters":["甘雨"]},{"name":"风景","tags":["风景"]}]}\n```'
     const s = await org.startOrganize()
     expect(s.phase).toBe('LOOKING')
+    // 按钮上的进度：这次排进 1 张、还没看完（之前看完的图 2 不算）
+    expect(s.looked).toEqual({ done: 0, total: 1 })
     // 图 4 排进了看图队列：标成看完，再检查一次就出方案
     const { pg } = getDatabase()
     await pg.exec(`UPDATE ai_job SET status = 'DONE' WHERE kind = 'LOOK'`)
@@ -202,7 +204,7 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
       INSERT INTO image_ai_result (image_id, kind, model, result, field_status)
         SELECT id, 'IDENTIFY', 'm', '{"name":"","character":"","work":"原神","tags":[],"source":"","description":""}', '{"work":"PENDING"}' FROM image WHERE content_hash = 'h8';
       INSERT INTO ai_job (kind, image_id, status) SELECT 'LOOK', id, 'DONE' FROM image WHERE content_hash = 'h8';
-      INSERT INTO ai_job (kind, image_id, status) VALUES ('LOOK', ${id7}, 'CANCELLED');
+      INSERT INTO ai_job (kind, image_id, status) VALUES ('LOOK', ${id7}, 'DONE');
     `)
     planReply = '```json\n{"folders":[{"name":"原神图","works":["原神"]}]}\n```'
     await org.startOrganize()
@@ -229,5 +231,33 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     await org.checkLooking()
     expect(org.getOrganizeState().phase).toBe('IDLE')
     expect((await sugg.listSuggestions(id7)).map((s) => [s.kind, s.value])).toContainEqual(['dir', '原神图'])
+  })
+
+  it('停下后重新开始：取消过、出错过的图重新算待看、重新排队；自动看图不会把取消的再排回来', async () => {
+    const { pg } = getDatabase()
+    await pg.exec(`
+      INSERT INTO image (content_hash, format, byte_size, thumb_ready, rating, rating_source) VALUES ('h9', 'JPG', 1, 1, 'GENERAL', 'MODEL'), ('h10', 'JPG', 1, 1, 'GENERAL', 'MODEL');
+      INSERT INTO image_file (image_id, root_id, rel_path, mtime) SELECT id, 1, content_hash || '.jpg', now() FROM image WHERE content_hash IN ('h9', 'h10');
+      INSERT INTO ai_job (kind, image_id, status) SELECT 'LOOK', id, 'CANCELLED' FROM image WHERE content_hash = 'h9';
+      INSERT INTO ai_job (kind, image_id, status, remote_id) SELECT 'LOOK', id, 'FAILED', 'batch-x' FROM image WHERE content_hash = 'h10';
+    `)
+    const ids = (await pg.query<{ id: number }>(`SELECT id FROM image WHERE content_hash IN ('h9', 'h10') ORDER BY id`)).rows.map((r) => Number(r.id))
+    const { findLookCandidates } = await import('../../src/main/repositories/aiResultRepository')
+    expect(await findLookCandidates(new Date(0), 100)).toEqual([])
+    expect((await org.estimateOrganize()).toLook).toBe(2)
+    const s = await org.startOrganize()
+    expect(s.phase).toBe('LOOKING')
+    const jobs = await pg.query<{ image_id: number; status: string }>(
+      `SELECT image_id, status::text AS status FROM ai_job WHERE kind = 'LOOK' AND image_id = ANY($1) ORDER BY id`,
+      [ids]
+    )
+    expect(jobs.rows.map((r) => [Number(r.image_id), r.status])).toEqual([
+      [ids[0], 'CANCELLED'],
+      [ids[1], 'CANCELLED'],
+      [ids[0], 'QUEUED'],
+      [ids[1], 'QUEUED']
+    ])
+    expect(s.looked).toEqual({ done: 0, total: 2 })
+    await org.cancelOrganize()
   })
 })

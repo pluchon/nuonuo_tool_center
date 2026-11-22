@@ -107,11 +107,11 @@ export function validateSettingsPatch(patch: unknown): Partial<AppSettings> {
 }
 
 // 把库里的设置行合并到默认值上；库里存了不认识或不合法的值时忽略并记一条警告。
-// ai. 开头的是诺诺自己的内部状态（如从什么时候起自动看图），不是界面上的设置，直接跳过
+// ai. 开头的是诺诺自己的内部状态（如从什么时候起自动看图），progress. 开头的是扫描、分级的断点，都不是界面上的设置，直接跳过
 export function mergeStoredSettings(rows: Array<{ key: string; value: unknown }>): AppSettings {
   const merged: Record<string, unknown> = { ...DEFAULT_SETTINGS, scanFormats: [...DEFAULT_SETTINGS.scanFormats] }
   for (const row of rows) {
-    if (row.key.startsWith('ai.')) {
+    if (row.key.startsWith('ai.') || row.key.startsWith('progress.')) {
       continue
     }
     const validator = VALIDATORS[row.key as SettingKey]

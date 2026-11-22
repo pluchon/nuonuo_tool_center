@@ -21,7 +21,14 @@ export default defineComponent({
     onMounted(() => {
       void org.init()
     })
-    const label = computed(() => LABELS[org.phase])
+    // 看图中带上进度：整理中·看图 120/1,850
+    const label = computed(() => {
+      const l = org.looked
+      if (org.phase === 'LOOKING' && l && l.total > 0) {
+        return `${LABELS.LOOKING} ${l.done.toLocaleString('zh-CN')}/${l.total.toLocaleString('zh-CN')}`
+      }
+      return LABELS[org.phase]
+    })
     const busy = computed(() => org.phase === 'LOOKING' || org.phase === 'PLANNING' || org.phase === 'ASSIGNING' || org.phase === 'FOLLOWING')
     // 还没开始整理、本地分级还在跑：先等它判完
     const waiting = computed(() => org.phase === 'IDLE' && org.rating.running)
