@@ -28,6 +28,25 @@ body {
   }
 }
 
+// 细滚动条（原型 nn-thin）：主题色细条，轨道透明
+.nn-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--a-line) transparent;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--a-line);
+    border-radius: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
 // 状态横幅底色：扫描中（绿）、目录找不到（橙），深色模式换成半透明的同色
 :root {
   --banner-scan-bg: rgba(234, 246, 241, 0.78);
@@ -48,6 +67,23 @@ body {
 :root.dark {
   --r18-row-bg: rgba(194, 51, 90, 0.16);
   --r18-row-line: rgba(194, 51, 90, 0.35);
+}
+
+// 诺诺助手的弹出菜单：深色下比输入框亮一层、描边更清楚、阴影更深；叠在菜单上的右键菜单再亮一层
+:root {
+  --ai-menu-bg: var(--c-surface);
+  --ai-ctx-bg: var(--c-surface);
+  --ai-menu-line: var(--a-line2);
+  --ai-menu-shadow: 0 22px 44px -22px rgba(var(--sh), 0.6);
+  --ai-del-ink: var(--c-i-C25B85);
+}
+
+:root.dark {
+  --ai-menu-bg: #342d42;
+  --ai-ctx-bg: #3e3650;
+  --ai-menu-line: rgba(255, 255, 255, 0.12);
+  --ai-menu-shadow: 0 22px 44px -18px rgba(0, 0, 0, 0.75);
+  --ai-del-ink: #f29bba;
 }
 
 // 关着的开关：白底灰圆点（深色下是浅一层的底和描边）；开着时各自用强调色

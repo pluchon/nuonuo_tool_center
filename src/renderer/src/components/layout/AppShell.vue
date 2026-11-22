@@ -5,6 +5,7 @@
       <!-- 图库和标签管理之间切换：先淡出再淡入 -->
       <Transition name="nn-fade" mode="out-in">
         <TagsView v-if="viewStore.page === 'tags'" />
+        <AssistantView v-else-if="viewStore.page === 'assistant'" />
         <GalleryView v-else />
       </Transition>
     </div>

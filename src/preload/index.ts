@@ -28,7 +28,12 @@ import {
   type DirCountVO,
   type ThemeMode,
   type DataInfoVO,
-  type CacheCleanVO
+  type CacheCleanVO,
+  type AiAskDTO,
+  type AiAskResultVO,
+  type AiConversationVO,
+  type AiMessageVO,
+  type AiStatusVO
 } from '@shared/api'
 
 // 暴露给渲染进程的接口：只开放具体方法，不暴露 ipcRenderer 本身
@@ -123,6 +128,19 @@ const api = {
       ipcRenderer.on(IpcEvent.scanState, wrapped)
       return () => ipcRenderer.removeListener(IpcEvent.scanState, wrapped)
     }
+  },
+  ai: {
+    status: (): Promise<ApiResponse<AiStatusVO>> => ipcRenderer.invoke(IpcChannel.aiStatus),
+    ideas: (): Promise<ApiResponse<string[]>> => ipcRenderer.invoke(IpcChannel.aiIdeas),
+    conversations: (): Promise<ApiResponse<AiConversationVO[]>> => ipcRenderer.invoke(IpcChannel.aiConversations),
+    messages: (conversationId: number): Promise<ApiResponse<AiMessageVO[]>> => ipcRenderer.invoke(IpcChannel.aiMessages, conversationId),
+    ask: (dto: AiAskDTO): Promise<ApiResponse<AiAskResultVO>> => ipcRenderer.invoke(IpcChannel.aiAsk, dto),
+    answer: (conversationId: number): Promise<ApiResponse<AiMessageVO>> => ipcRenderer.invoke(IpcChannel.aiAnswer, conversationId),
+    rename: (id: number, title: string): Promise<ApiResponse<AiConversationVO>> => ipcRenderer.invoke(IpcChannel.aiRename, id, title),
+    pin: (id: number, pinned: boolean): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.aiPin, id, pinned),
+    remove: (id: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.aiDelete, id),
+    undoRemove: (id: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.aiUndoDelete, id),
+    vote: (messageId: number, vote: 'UP' | 'DOWN' | null): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.aiVote, messageId, vote)
   },
   window: {
     setTheme: (theme: ThemeMode): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.windowSetTheme, theme),

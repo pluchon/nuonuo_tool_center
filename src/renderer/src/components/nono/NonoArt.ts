@@ -12,12 +12,12 @@ const ART: Record<NonoPose, { src: string; alt: string }> = {
   error: { src: errorArt, alt: '诺诺抱着打不开的相册' }
 }
 
-// 状态页的诺诺插画（透明底，不跟深色模式变色）：large 用在第一次打开（240px），normal 用在其它状态（200px）
+// 状态页的诺诺插画（透明底，不跟深色模式变色）：large 用在第一次打开（240px），normal 用在其它状态（200px），small 用在诺诺助手的新对话（150px）
 export default defineComponent({
   name: 'NonoArt',
   props: {
     pose: { type: String as PropType<NonoPose>, required: true },
-    size: { type: String as PropType<'normal' | 'large'>, default: 'normal' }
+    size: { type: String as PropType<'small' | 'normal' | 'large'>, default: 'normal' }
   },
   setup(props) {
     const src = computed(() => ART[props.pose].src)

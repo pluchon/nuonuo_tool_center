@@ -43,6 +43,8 @@ const PRESETS = {
   'state-noresult': [{}, 'noresult'],
   'state-opfail': [{}, 'opfail'],
   'state-dberror': [{}, 'dberror'],
+  'state-first-dark': [{ set: { theme: 'dark' } }, 'first'],
+  'state-dberror-dark': [{ set: { theme: 'dark' } }, 'dberror'],
   'ai-chat': [{}, 'aiThinking'],
   'ai-chat-dark': [{ set: { theme: 'dark' } }, 'aiThinking'],
   'ai-new': [{}, 'aiNew'],

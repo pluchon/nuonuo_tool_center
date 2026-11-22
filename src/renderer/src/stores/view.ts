@@ -4,8 +4,8 @@ import type { FolderRefDTO } from '@shared/api'
 // 图库视图：全部图片 / 还没打标签 / 最近导入 / R-18 图 / 某个目录
 export type GalleryView = 'all' | 'untagged' | 'recent' | 'r18' | 'dir'
 
-// 主区页面：图库，或标签管理
-export type MainPage = 'gallery' | 'tags'
+// 主区页面：图库、标签管理，或诺诺助手
+export type MainPage = 'gallery' | 'tags' | 'assistant'
 
 // 正在看的目录：源目录按 id（sub 是子文件夹，空表示整个源目录），类目录按相对图库文件夹的路径（可以带子目录）
 export type DirRef = { kind: 'source'; id: number; sub?: string } | { kind: 'category'; name: string }
@@ -67,6 +67,10 @@ export const useViewStore = defineStore('view', {
     // 切到标签管理
     showTags(): void {
       this.page = 'tags'
+    },
+    // 切到诺诺助手
+    showAssistant(): void {
+      this.page = 'assistant'
     },
     // 在“全部图片”里只看打了这个标签的图
     showTagImages(tagId: number): void {

@@ -264,6 +264,24 @@ export async function listGallery(query: GalleryQueryDTO): Promise<GalleryListVO
   return { items: sortItems(items, query.sort) }
 }
 
+// 按给定顺序把图片 id 换成网格项（诺诺回复里的结果图）；已经删掉、没有位置的图跳过
+export async function itemsOfImages(imageIds: number[]): Promise<GalleryItemVO[]> {
+  const rows = await findRowsOfImages(imageIds)
+  const offline = await offlineRoots(rows)
+  const byImage = new Map<number, GalleryRow[]>()
+  for (const row of rows) {
+    byImage.set(row.imageId, [...(byImage.get(row.imageId) ?? []), row])
+  }
+  const out: GalleryItemVO[] = []
+  for (const id of imageIds) {
+    const list = byImage.get(id)
+    if (list) {
+      out.push(toItem(pickRepresentative(list, offline), offline))
+    }
+  }
+  return out
+}
+
 // 删除、移动、复制作用到哪些文件：在源目录、类目录里只动这个目录（按“仅当前目录”开关）里的位置，
 // 其他视图动这张图的全部位置。返回的行里标好目录是否找不到
 export async function filesForAction(query: GalleryQueryDTO, imageIds: number[]): Promise<Array<GalleryRow & { offline: boolean }>> {

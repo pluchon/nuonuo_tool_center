@@ -1,6 +1,5 @@
 import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { openFileWithDefault, originalUrl, thumbUrl } from '@/api/gallery'
-import { useGalleryStore } from '@/stores/gallery'
 import { useToastStore } from '@/stores/toast'
 import { useViewerStore } from '@/stores/viewer'
 import { actualZoom, canShowOriginal, clampZoom, fitScale, WHEEL_STEP, ZOOM_STEP } from '@/utils/viewerMath'
@@ -14,7 +13,6 @@ const TITLE_MAX = 15
 export default defineComponent({
   name: 'ImageViewer',
   setup() {
-    const gallery = useGalleryStore()
     const viewer = useViewerStore()
 
     const stageRef = ref<HTMLElement | null>(null)
@@ -38,13 +36,13 @@ export default defineComponent({
     const dragging = ref(false)
     let drag: { x: number; y: number; px: number; py: number } | null = null
 
-    const item = computed(() => gallery.primaryItem ?? null)
-    const multi = computed(() => gallery.items.length > 1)
+    const item = computed(() => viewer.currentItem)
+    const multi = computed(() => viewer.items.length > 1)
     const title = computed(() => Array.from(item.value?.name ?? '').slice(0, TITLE_MAX).join(''))
     // 标题旁的“第几张 / 共几张”
     const position = computed(() => {
-      const i = gallery.items.findIndex((x) => x.imageId === gallery.primary)
-      return i < 0 || gallery.items.length < 2 ? '' : `${i + 1} / ${gallery.items.length}`
+      const i = viewer.items.findIndex((x) => x.imageId === viewer.currentId)
+      return i < 0 || viewer.items.length < 2 ? '' : `${i + 1} / ${viewer.items.length}`
     })
 
     // 显示什么：原图 / 缩略图（格式浏览器显示不了，或原图读不到）/ 都没有
@@ -136,8 +134,8 @@ export default defineComponent({
     // 预读前后两张的原图，换图时基本不用等（只留最近的两张引用）
     let preloads: HTMLImageElement[] = []
     const preloadNeighbors = (): void => {
-      const list = gallery.items
-      const i = list.findIndex((x) => x.imageId === gallery.primary)
+      const list = viewer.items
+      const i = list.findIndex((x) => x.imageId === viewer.currentId)
       if (i < 0 || list.length < 2) {
         return
       }

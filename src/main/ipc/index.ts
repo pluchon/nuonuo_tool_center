@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import {
   IpcChannel,
   type AddTagDTO,
+  type AiAskDTO,
   type CreateTagDTO,
   type FolderRefDTO,
   type GalleryQueryDTO,
@@ -42,6 +43,19 @@ import { backupFileName, cleanThumbCache, exportBackup, folderBytes, importCusto
 import { applySystemSettings } from '../window/systemSettings'
 import { syncWatching } from '../services/scan/watchService'
 import { applyWindowTheme, toggleMaximize } from '../window/windowControl'
+import {
+  answer,
+  ask,
+  deleteConversation,
+  getAiStatus,
+  listConversations,
+  listMessages,
+  pinConversation,
+  renameConversation,
+  suggestIdeas,
+  undoDeleteConversation,
+  voteMessage
+} from '../services/ai/assistantService'
 import { handle } from './handle'
 
 // 取发起调用的窗口；窗口已关闭时报错
@@ -307,6 +321,48 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
     await openFileWithDefault(fileId)
   })
   handle(IpcChannel.scanGetState, async () => getScanState())
+
+  handle(IpcChannel.aiStatus, async () => getAiStatus())
+  handle(IpcChannel.aiIdeas, async () => {
+    requireDatabase()
+    return suggestIdeas()
+  })
+  handle(IpcChannel.aiConversations, async () => {
+    requireDatabase()
+    return listConversations()
+  })
+  handle(IpcChannel.aiMessages, async (_event, conversationId: number) => {
+    requireDatabase()
+    return listMessages(conversationId)
+  })
+  handle(IpcChannel.aiAsk, async (_event, dto: AiAskDTO) => {
+    requireDatabase()
+    return ask(dto)
+  })
+  handle(IpcChannel.aiAnswer, async (_event, conversationId: number) => {
+    requireDatabase()
+    return answer(conversationId)
+  })
+  handle(IpcChannel.aiRename, async (_event, id: number, title: string) => {
+    requireDatabase()
+    return renameConversation(id, title)
+  })
+  handle(IpcChannel.aiPin, async (_event, id: number, pinned: boolean) => {
+    requireDatabase()
+    await pinConversation(id, pinned)
+  })
+  handle(IpcChannel.aiDelete, async (_event, id: number) => {
+    requireDatabase()
+    await deleteConversation(id)
+  })
+  handle(IpcChannel.aiUndoDelete, async (_event, id: number) => {
+    requireDatabase()
+    await undoDeleteConversation(id)
+  })
+  handle(IpcChannel.aiVote, async (_event, messageId: number, vote: 'UP' | 'DOWN' | null) => {
+    requireDatabase()
+    await voteMessage(messageId, vote)
+  })
 
   handle(IpcChannel.windowSetTheme, async (event, theme: ThemeMode) => {
     if (theme !== 'light' && theme !== 'dark') {

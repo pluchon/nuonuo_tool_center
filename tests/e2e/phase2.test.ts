@@ -33,7 +33,8 @@ describe('第二阶段：按画布换主界面', () => {
       ['还没打标签', '0'],
       ['最近导入', '0'],
       ['标签管理', '0'],
-      ['R-18 图', '0']
+      ['R-18 图', '0'],
+      ['诺诺助手', '']
     ])
     expect(await page.locator('.side-nav__hint').allTextContents()).toEqual(['还没有源目录', '还没有类目录'])
     expect((await page.locator('.status-footer').innerText()).split(/\s+/).filter(Boolean)).toEqual(['0', '张', '还没有扫描过', '重新扫描'])
@@ -72,7 +73,8 @@ describe('第二阶段：按画布换主界面', () => {
       '壁纸精选',
       '猫猫',
       '标签管理',
-      'R-18 图'
+      'R-18 图',
+      '诺诺助手'
     ])
 
     await importFolder(app, page, source)

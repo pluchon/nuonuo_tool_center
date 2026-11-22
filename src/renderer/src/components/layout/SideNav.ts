@@ -265,6 +265,21 @@ export default defineComponent({
             viewRow('r18', 'R-18 图', c?.r18, ICON.lock, 'var(--c-b-C2335A)')
           ],
           hint: ''
+        },
+        {
+          title: 'AI',
+          dot: '#5B8DEF',
+          add: null,
+          rows: [
+            {
+              ...viewRow('all', '诺诺助手', 0, ICON.spark, '#5B8DEF'),
+              key: 'assistant',
+              count: '',
+              active: viewStore.page === 'assistant',
+              go: () => viewStore.showAssistant()
+            }
+          ],
+          hint: ''
         }
       ]
     })

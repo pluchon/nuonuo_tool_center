@@ -58,6 +58,17 @@ export const IpcChannel = {
   folderOpen: 'folder:open',
   sourceRemove: 'source:remove',
   fileCopyImage: 'file:copyImage',
+  aiStatus: 'ai:status',
+  aiIdeas: 'ai:ideas',
+  aiConversations: 'ai:conversations',
+  aiMessages: 'ai:messages',
+  aiAsk: 'ai:ask',
+  aiAnswer: 'ai:answer',
+  aiRename: 'ai:rename',
+  aiPin: 'ai:pin',
+  aiDelete: 'ai:delete',
+  aiUndoDelete: 'ai:undoDelete',
+  aiVote: 'ai:vote',
   windowSetTheme: 'window:setTheme',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',
@@ -431,5 +442,50 @@ export interface ExifInfoVO {
   exposureTime?: number
   iso?: number
 }
+
+// 诺诺助手：能不能用（没配 DASHSCOPE_API_KEY 时整页显示“诺诺还没连上云端”）
+export interface AiStatusVO {
+  ready: boolean
+}
+
+// 对话记录里的一段对话
+export interface AiConversationVO {
+  id: number
+  title: string
+  pinned: boolean
+  // 最后一次说话的时间（ISO）
+  updatedAt: string
+}
+
+// 对话里的一条消息：你说的话，或诺诺的回复
+export interface AiMessageVO {
+  id: number
+  role: 'user' | 'assistant'
+  text: string
+  // 回复上方的一行灰字：这次怎么找的（如“搜索了图库：标签「猫」，找到 3 张”）；没有检索时为空
+  how: string | null
+  // 结果图（按回复时的顺序；已经删掉的图不再出现）
+  images: GalleryItemVO[]
+  vote: 'UP' | 'DOWN' | null
+  createdAt: string
+}
+
+// 问诺诺：conversationId 为空时新开一段对话；scope 为空表示全部图库
+export interface AiAskDTO {
+  conversationId: number | null
+  text: string
+  scope: DirKeyDTO | null
+  includeR18: boolean
+}
+
+// 问完先返回：对话（新开的也有 id 了）和刚存下的这句话，回复另外取
+export interface AiAskResultVO {
+  conversation: AiConversationVO
+  message: AiMessageVO
+}
+
+// 一句话最多几个字、对话名最多几个字
+export const AI_TEXT_MAX = 500
+export const AI_TITLE_MAX = 30
 
 export type { AppSettings }
