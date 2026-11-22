@@ -27,13 +27,13 @@
     color: var(--a);
   }
 
-  &:hover:not(:disabled) {
+  &:hover:not(&--waiting) {
     background: var(--look-field-hover-bg);
     border-color: var(--a-line);
   }
 
-  // 本地分级还在跑：变灰，点不了
-  &:disabled {
+  // 本地分级还在跑：变灰（点了只弹提示条，不用悬停说明）
+  &--waiting {
     opacity: 0.5;
     cursor: not-allowed;
   }

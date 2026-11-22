@@ -66,6 +66,11 @@ export const useOrganizeStore = defineStore('organize', {
         this.dialog = 'stop'
         return
       }
+      // 本地分级还在跑：只提示，不弹确认框
+      if (this.rating.running) {
+        useToastStore().show('本地分级判完才能整理')
+        return
+      }
       try {
         const est = await fetchOrganizeEstimate()
         // 本地分级还没判完（比如扫描时暂停着）：先不弹确认框

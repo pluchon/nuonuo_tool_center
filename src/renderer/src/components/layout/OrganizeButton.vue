@@ -1,11 +1,10 @@
 <template>
-  <!-- 底栏“一键整理”：空闲时点了先估算再确认（本地分级在跑时变灰、点不了）；方案好了点开方案；进行中点了问要不要停 -->
+  <!-- 底栏“一键整理”：空闲时点了先估算再确认（本地分级在跑时变灰，点了只弹提示条）；方案好了点开方案；进行中点了问要不要停 -->
   <button
     class="organize"
-    :class="{ 'organize--busy': busy, 'organize--ready': org.phase === 'PLAN_READY' }"
+    :class="{ 'organize--busy': busy, 'organize--ready': org.phase === 'PLAN_READY', 'organize--waiting': waiting }"
     type="button"
-    :disabled="waiting"
-    :title="waiting ? '本地分级判完才能整理' : undefined"
+    :aria-disabled="waiting ? 'true' : undefined"
     @click="org.click()"
   >
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

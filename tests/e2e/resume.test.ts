@@ -22,7 +22,7 @@ async function pillNumbers(page: Page): Promise<[number, number]> {
 }
 
 describe('退出再进来，进度接着上次', () => {
-  it('本地分级判到一半退出：再打开从“已判/总数”接着走，不从 0 开始，判过的不重判', async () => {
+  it('分级中一键整理只弹提示；本地分级判到一半退出：再打开从“已判/总数”接着走，不从 0 开始，判过的不重判', async () => {
     const dirs = freshCase('resume')
     const src = join(dirs.root, 'pics')
     mkdirSync(src, { recursive: true })
@@ -36,6 +36,12 @@ describe('退出再进来，进度接着上次', () => {
     let run = await launchApp(dirs)
     await importFolder(run.app, run.page, src)
     await run.page.waitForSelector('.rating-pill', { timeout: 120_000 })
+    // 分级中：一键整理是灰的，点了只弹提示条，不开确认框
+    await run.page.waitForSelector('.organize--waiting')
+    // 按钮带 aria-disabled，Playwright 默认不点，真实用户点得到
+    await run.page.click('.organize', { force: true })
+    await run.page.waitForSelector('.app-toast:has-text("本地分级判完才能整理")')
+    expect(await run.page.locator('.org-dlg').count()).toBe(0)
     await run.page.waitForFunction(() => Number(document.querySelector('.rating-pill__num')?.textContent?.split('/')[0] ?? 0) >= 22, null, { timeout: 120_000 })
     const [before, total] = await pillNumbers(run.page)
     expect(total).toBe(N)

@@ -39,10 +39,20 @@ describe('一键整理', () => {
     // 分级在跑时底栏有“本地分级中…”和进度条，判完收起
     await page.waitForSelector('.rating-pill', { timeout: 60_000 })
     await shot(page, 'organize-light-rating')
-    // 分级没判完：一键整理变灰、点不了
-    await expect(page.locator('.organize').isDisabled()).resolves.toBe(true)
+    // 分级没判完：一键整理变灰，点了只弹提示条，不开确认框
+    await page.waitForSelector('.organize--waiting')
+    // 分级只要一两秒：确认还是灰的和点击放在同一刻，免得点下去时刚好判完
+    const clickedWhileWaiting = await page.evaluate(() => {
+      const b = document.querySelector<HTMLButtonElement>('.organize--waiting')
+      b?.click()
+      return b !== null
+    })
+    if (clickedWhileWaiting) {
+      await page.waitForSelector('.app-toast:has-text("本地分级判完才能整理")')
+      await expect(page.locator('.org-dlg').count()).resolves.toBe(0)
+    }
     await page.waitForSelector('.rating-pill', { state: 'detached', timeout: 120_000 })
-    await expect(page.locator('.organize').isDisabled()).resolves.toBe(false)
+    await expect(page.locator('.organize--waiting').count()).resolves.toBe(0)
     const progress = await page.evaluate(() => (window as unknown as { __rating: Array<{ running: boolean; done: number; total: number }> }).__rating)
     expect(progress.some((p) => p.running && p.total === 3)).toBe(true)
     expect(progress[progress.length - 1]).toMatchObject({ running: false, done: 3 })
