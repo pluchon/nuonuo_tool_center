@@ -20,8 +20,8 @@ const PER_IMAGE_TIMEOUT_MS = 120_000
 const IDLE_EXIT_MS = 2 * 60_000
 // 明显 R-18 的口径：questionable + explicit ≥ 0.5（用户确认过的阈值）
 export const R18_THRESHOLD = 0.5
-// 推理线程：平时 2 个；电脑 1 分钟没人操作且插着电时 4 个（实测一张从约 0.97 秒降到 0.66 秒，再多几乎不快了）
-export const THREADS_ACTIVE = 2
+// 推理线程：你在用这个软件时 3 个；插着电且软件不在前台或电脑 1 分钟没人操作时 4 个（int8 实测 2/3/4 线程一张约 0.54/0.44/0.39 秒，再多几乎不快了）
+export const THREADS_ACTIVE = 3
 export const THREADS_IDLE = 4
 // 换到更多线程前至少等多久（换线程要重新加载模型约 3 秒，免得来回切）；换回少线程是立即的
 const RAISE_AFTER_MS = 60_000
@@ -41,7 +41,7 @@ export interface RatingConfig {
   onDone: () => void
   // 进度变了：推给界面（底栏“本地分级中…”）
   onProgress?: (p: RatingProgressVO) => void
-  // 电脑现在是不是没人在用（系统空闲 1 分钟以上且插着电）；不给时一直按有人在用
+  // 能不能多用线程（插着电，且软件不在前台或系统空闲 1 分钟以上）；不给时一直按有人在用
   machineIdle?: () => boolean
   // 每判完一小批（约 20 张）：新判完的图可以接着排看图、补进一键整理，不用等整轮判完
   onBatch?: () => void
@@ -64,7 +64,7 @@ export async function prioritizeRating(imageId: number): Promise<void> {
 let threads = THREADS_ACTIVE
 let switchedAt = 0
 
-// 这一张用几个线程：有人在用就立刻回到 2 个；没人用了要稳定一会儿才加到 4 个
+// 这一张用几个线程：你在用就立刻回到 3 个；不用了要稳定一会儿才加到 4 个
 export function pickThreads(idle: boolean, current: number, sinceSwitchMs: number): number {
   if (!idle) {
     return THREADS_ACTIVE

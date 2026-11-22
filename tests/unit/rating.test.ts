@@ -11,7 +11,8 @@ vi.mock('electron', () => ({ utilityProcess: {}, clipboard: {}, ClipboardItem: c
 const { isObviousR18, pickThreads, ratingOf, thresholdFromEnv, THREADS_ACTIVE, THREADS_IDLE } = await import('../../src/main/services/rating/ratingService')
 
 describe('分级线程', () => {
-  it('有人在用立刻回到 2 线程；没人用了稳定 1 分钟才加到 4 线程，之后保持', () => {
+  it('在用软件时立刻回到 3 线程；不用了稳定 1 分钟才加到 4 线程，之后保持', () => {
+    expect([THREADS_ACTIVE, THREADS_IDLE]).toEqual([3, 4])
     expect(pickThreads(false, THREADS_IDLE, 0)).toBe(THREADS_ACTIVE)
     expect(pickThreads(true, THREADS_ACTIVE, 10_000)).toBe(THREADS_ACTIVE)
     expect(pickThreads(true, THREADS_ACTIVE, 61_000)).toBe(THREADS_IDLE)

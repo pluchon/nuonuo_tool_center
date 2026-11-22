@@ -187,8 +187,9 @@ async function bootstrap(): Promise<void> {
     threshold: thresholdFromEnv(process.env.LTM_R18_THRESHOLD),
     onR18: (count) => broadcast(IpcEvent.ratingR18, count),
     onProgress: (p) => broadcast(IpcEvent.ratingProgress, p),
-    // 整台电脑 1 分钟没有键盘鼠标操作、插着电：分级可以多用两个线程
-    machineIdle: () => powerMonitor.getSystemIdleTime() >= 60 && !powerMonitor.isOnBatteryPower(),
+    // 插着电，并且你没在用这个软件（窗口不在前台）或整台电脑 1 分钟没人操作：分级可以多用一个线程
+    machineIdle: () =>
+      !powerMonitor.isOnBatteryPower() && (BrowserWindow.getAllWindows().every((w) => !w.isFocused()) || powerMonitor.getSystemIdleTime() >= 60),
     // 每判完一小批：新图过了上云闸门就排进看图队列；一键整理方案已批时，判完的老图按半价陆续补进来
     onBatch: () => {
       void enqueueNewImages().catch((err: unknown) => log.error('排看图队列失败', err))

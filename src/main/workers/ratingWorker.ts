@@ -1,5 +1,5 @@
 // 本地分级的工作进程（Electron utilityProcess）：在这里加载 WD 模型推理，不卡主进程；
-// 进程优先级调低、只用 CPU，平时 2 线程，电脑没人用时主进程会让它用 4 线程（核显笔记本曾整机卡死，不开 DirectML）
+// 进程优先级调低、只用 CPU，你在用软件时 3 线程，软件不在前台或电脑没人用时主进程会让它用 4 线程（核显笔记本曾整机卡死，不开 DirectML）
 import { constants, setPriority } from 'node:os'
 import sharp from 'sharp'
 import { WdTagger } from '../services/rating/wdTagger'
