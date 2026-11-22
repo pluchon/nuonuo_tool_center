@@ -42,6 +42,21 @@ export interface RatingConfig {
   onProgress?: (p: RatingProgressVO) => void
   // 电脑现在是不是没人在用（系统空闲 1 分钟以上且插着电）；不给时一直按有人在用
   machineIdle?: () => boolean
+  // 每判完一小批（约 20 张）：新判完的图可以接着排看图、补进一键整理，不用等整轮判完
+  onBatch?: () => void
+}
+
+// 你正在看的图：插到最前面先判（最多记这么多张）
+const URGENT_MAX = 50
+let urgent: number[] = []
+
+// 让这张图先判（详情面板打开一张还没分级的图时）；没在跑就开始一轮
+export async function prioritizeRating(imageId: number): Promise<void> {
+  if (!Number.isInteger(imageId) || urgent.includes(imageId) || (await findRatingCandidates(1, [imageId])).length === 0) {
+    return
+  }
+  urgent = [imageId, ...urgent].slice(0, URGENT_MAX)
+  scheduleRating()
 }
 
 // 当前用的线程数和上次切换的时间
@@ -180,7 +195,11 @@ async function runOnce(): Promise<void> {
     if (stopping || !cfg.canRun()) {
       break
     }
-    const batch = await findRatingCandidates(BATCH)
+    // 先判你正在看的，再按最新导入的往前判
+    const wanted = urgent
+    urgent = []
+    const first = await findRatingCandidates(BATCH, wanted)
+    const batch = first.length > 0 ? first : await findRatingCandidates(BATCH)
     if (batch.length === 0) {
       break
     }
@@ -204,6 +223,7 @@ async function runOnce(): Promise<void> {
       rated++
       setProgress({ running: true, done: rated, total: Math.max(progress.total, rated) })
     }
+    cfg.onBatch?.()
   }
   setProgress({ running: false, done: rated, total: rated })
   if (rated > 0) {

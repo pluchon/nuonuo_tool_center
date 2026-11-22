@@ -19,14 +19,16 @@ import {
   findLookCandidates,
   findOpenLookJobs,
   findOrganizeTerms,
+  cancelBacklogJobs,
   insertLookJobs,
   insertOrganizeResults,
   type OrganizeTerms
 } from '../../repositories/aiResultRepository'
 import { countRatingCandidates } from '../../repositories/imageRepository'
 import { categoryTopNames } from '../fileOps/folderOpsService'
+import { isRatingBusy } from '../rating/ratingService'
 import { chatCall } from './bailianClient'
-import { scheduleLook } from './lookService'
+import { PRIORITY_BACKLOG, scheduleLook } from './lookService'
 import { habitLines } from './suggestionService'
 
 const log = getLogger('organize')
@@ -81,15 +83,19 @@ export async function initOrganize(): Promise<void> {
     void makePlan()
   } else if (state.phase === 'LOOKING') {
     await checkLooking()
+  } else if (state.phase === 'FOLLOWING') {
+    await onRatingBatch()
   }
 }
 
 // 开始前的估算：要看多少张、大概多少 token 和钱
+// 还没判完的按最多都要看、都走批量来算
 export async function estimateOrganize(): Promise<OrganizeEstimateVO> {
   const toLook = await countLookCandidates(new Date(0))
+  const ratingLeft = await countRatingCandidates()
   const realtime = Math.min(toLook, ORGANIZE_COST.realtimeMax)
-  const yuan = realtime * ORGANIZE_COST.realtimeYuanPerImage + (toLook - realtime) * ORGANIZE_COST.batchYuanPerImage
-  return { toLook, tokens: toLook * ORGANIZE_COST.tokensPerImage, yuan: Math.round(yuan * 100) / 100, ratingLeft: await countRatingCandidates() }
+  const yuan = realtime * ORGANIZE_COST.realtimeYuanPerImage + (toLook - realtime + ratingLeft) * ORGANIZE_COST.batchYuanPerImage
+  return { toLook, tokens: (toLook + ratingLeft) * ORGANIZE_COST.tokensPerImage, yuan: Math.round(yuan * 100) / 100, ratingLeft }
 }
 
 // 开始：还没看过的图都排进看图队列（包括看图上线前的老图），看完自动出方案；没有要看的直接出方案。
@@ -105,11 +111,7 @@ export async function startOrganize(): Promise<OrganizeStateVO> {
   if (state.phase !== 'IDLE') {
     throw new BizError('CONFLICT', '一键整理已经在进行了')
   }
-  // 本地分级没做完时不整理：还不知道哪些图能上云，方案也会漏掉没判完的图
-  const left = await countRatingCandidates()
-  if (left > 0) {
-    throw new BizError('CONFLICT', `本地分级还剩 ${left} 张，判完再整理`)
-  }
+  // 本地分级没做完也能开始：先用已经判完的出方案，批了之后剩下的判完再陆续补进来
   const ids = await findLookCandidates(new Date(0), 1_000_000)
   if (ids.length > 0) {
     await insertLookJobs(ids)
@@ -123,6 +125,10 @@ export async function startOrganize(): Promise<OrganizeStateVO> {
 
 // 看图队列变了时调用：整理在等看图、队列里已经没有排队和进行中的（出错的不等），就出方案
 export async function checkLooking(): Promise<void> {
+  if (state.phase === 'FOLLOWING') {
+    await maybeFinish()
+    return
+  }
   if (state.phase !== 'LOOKING') {
     return
   }
@@ -133,10 +139,71 @@ export async function checkLooking(): Promise<void> {
   void makePlan()
 }
 
-// 取消：回到空闲（已经排进看图队列的照常看完，已经生成的建议留着）
+// 取消：回到空闲（已经交出去的看完为止，还没交的补图取消，已经生成的建议留着）
 export async function cancelOrganize(): Promise<OrganizeStateVO> {
+  if (state.phase === 'FOLLOWING') {
+    await cancelBacklogJobs()
+  }
   await setState({ phase: 'IDLE', plan: null, error: null })
   return state
+}
+
+// ===== 方案已批后陆续补图 =====
+
+// 分级每判完一小批：判完、过了闸门、还没看过的老图按半价排进看图（只走批量）
+export async function onRatingBatch(): Promise<void> {
+  if (state.phase !== 'FOLLOWING') {
+    return
+  }
+  const ids = await findLookCandidates(new Date(0), 1_000_000)
+  if (ids.length > 0) {
+    await insertLookJobs(ids, PRIORITY_BACKLOG)
+    log.info(`一键整理补图：排进 ${ids.length} 张（批量）`)
+  }
+  scheduleLook()
+  await maybeFinish()
+}
+
+let assignTimer: ReturnType<typeof setTimeout> | null = null
+
+// 有新的看图结果：攒几秒再按方案分一次（批量结果一次回来很多条）
+export function onLookResult(): void {
+  if (state.phase !== 'FOLLOWING' || assignTimer) {
+    return
+  }
+  assignTimer = setTimeout(() => {
+    assignTimer = null
+    void assignWithPlan()
+      .then(maybeFinish)
+      .catch((err: unknown) => log.error('一键整理补图分图失败', err))
+  }, 5_000)
+}
+
+// 按批过的方案把新看完的图分进类目录（只分还没有这类建议、还不在类目录里的）
+async function assignWithPlan(): Promise<number> {
+  if (state.phase !== 'FOLLOWING' || !state.plan) {
+    return 0
+  }
+  const rows = assignFolders(await findOrganizeTerms(), state.plan)
+  await insertOrganizeResults(rows, BAILIAN_CONFIG.chatModel)
+  if (rows.length > 0) {
+    log.info(`一键整理补图：又分了 ${rows.length} 张`)
+    config?.onSuggested()
+  }
+  return rows.length
+}
+
+// 分级全判完、看图队列里也没有排着和进行中的了：最后分一次，收尾
+async function maybeFinish(): Promise<void> {
+  if (state.phase !== 'FOLLOWING' || isRatingBusy() || (await countRatingCandidates()) > 0) {
+    return
+  }
+  if ((await findOpenLookJobs()).some((j) => j.status === 'QUEUED' || j.status === 'RUNNING')) {
+    return
+  }
+  await assignWithPlan()
+  await setState({ phase: 'IDLE', plan: null, error: null })
+  log.info('一键整理补图做完了')
 }
 
 // 统计每类词在待整理的图里出现几次，取最多的若干个
@@ -323,15 +390,20 @@ export async function approveOrganize(rawPlan: unknown): Promise<number> {
   }
   const plan = checkPlan(rawPlan, await categoryTopNames())
   await setState({ phase: 'ASSIGNING', plan, error: null })
+  let rows: Array<{ imageId: number; dir: string }> = []
   try {
-    const rows = assignFolders(await findOrganizeTerms(), plan)
+    rows = assignFolders(await findOrganizeTerms(), plan)
     await insertOrganizeResults(rows, BAILIAN_CONFIG.chatModel)
     log.info(`一键整理：生成 ${rows.length} 条放进类目录的建议`)
     if (rows.length > 0) {
       config?.onSuggested()
     }
-    return rows.length
-  } finally {
+  } catch (err) {
     await setState({ phase: 'IDLE', plan: null, error: null })
+    throw err
   }
+  // 记住批过的方案：本地分级后判完的、还在看的图，之后陆续按它分；都做完了自己收尾
+  await setState({ phase: 'FOLLOWING', plan, error: null })
+  await onRatingBatch()
+  return rows.length
 }

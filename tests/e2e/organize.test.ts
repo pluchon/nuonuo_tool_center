@@ -39,13 +39,14 @@ describe('一键整理', () => {
     // 分级在跑时底栏有“本地分级中…”和进度条，判完收起
     await page.waitForSelector('.rating-pill', { timeout: 60_000 })
     await shot(page, 'organize-light-rating')
-    // 分级没做完时一键整理不能开始：按钮灰着并说明还剩几张；右上角 × 关掉
+    // 分级没做完也能开始：只提示还剩几张会陆续补进来，按钮能点；右上角 × 关掉
     await page.click('.organize')
     await page.waitForSelector('.org-dlg__go')
-    if (await page.locator('.org-dlg__warn').count()) {
-      await expect(page.locator('.org-dlg__go').isDisabled()).resolves.toBe(true)
+    if (await page.locator('.org-dlg__note').count()) {
+      await expect(page.locator('.org-dlg__go').isDisabled()).resolves.toBe(false)
+      await expect(page.locator('.org-dlg__stat span').first().textContent()).resolves.toBe('张待看（最多）')
       await page.waitForTimeout(300)
-      await shot(page, 'organize-light-blocked')
+      await shot(page, 'organize-light-rating-left')
     }
     await page.click('.org-dlg__x')
     await page.waitForSelector('.org-dlg', { state: 'detached' })

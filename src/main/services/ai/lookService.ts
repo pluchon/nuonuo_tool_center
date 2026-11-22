@@ -60,7 +60,12 @@ export interface LookConfig {
   onState: (state: LookStateVO) => void
   // 有新建议了：界面刷新“AI 建议”计数
   onSuggested: () => void
+  // 后面还会不会有图排进来（本地分级还在跑）：会的话不满一批的补图先攒着
+  moreLater?: () => boolean
 }
+
+// 一键整理陆续补进来的老图：优先级为负，只走批量推理（半价、不联网），不占实时看图
+export const PRIORITY_BACKLOG = -1
 
 let config: LookConfig | null = null
 let since: Date | null = null
@@ -233,8 +238,14 @@ export function scheduleLook(): void {
   }
   void (async () => {
     const queued = (await findOpenLookJobs()).filter((j) => j.status === 'QUEUED' && !j.remoteId && !runningIds.has(j.id))
-    if (queued.length > BATCH_OVER) {
-      await submitBatches(queued.slice(BATCH_OVER).filter((j) => j.priority === 0))
+    const normal = queued.filter((j) => j.priority >= 0)
+    if (normal.length > BATCH_OVER) {
+      await submitBatches(normal.slice(BATCH_OVER).filter((j) => j.priority === 0))
+    }
+    // 补图：攒够一批（100 张）再交，分级判完了就把剩下的不满一批也交了
+    const backlog = queued.filter((j) => j.priority < 0)
+    if (backlog.length >= BATCH_SIZE || (backlog.length > 0 && !config?.moreLater?.())) {
+      await submitBatches(backlog.slice(0, Math.floor(backlog.length / BATCH_SIZE) * BATCH_SIZE || backlog.length))
     }
     while (active < CONCURRENCY) {
       if (!(await pumpOne())) {
@@ -249,7 +260,8 @@ async function pumpOne(): Promise<boolean> {
   if (stopping || !config!.canRun()) {
     return false
   }
-  const next = (await findOpenLookJobs()).find((j) => j.status === 'QUEUED' && !j.remoteId && !runningIds.has(j.id))
+  // 补图（优先级为负）只走批量，不在这里实时看
+  const next = (await findOpenLookJobs()).find((j) => j.status === 'QUEUED' && !j.remoteId && !runningIds.has(j.id) && j.priority >= 0)
   if (!next) {
     return false
   }

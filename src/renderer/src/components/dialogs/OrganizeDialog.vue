@@ -28,10 +28,10 @@
 
         <!-- 开始前：三格数字、三行说明、一个按钮 -->
         <template v-if="org.dialog === 'confirm' && est">
-          <!-- 分级没做完时还数不准要看多少张，先不显示数字 -->
-          <div v-if="est.ratingLeft === 0" class="org-dlg__stats">
+          <!-- 分级没做完时：张数和花费按剩下的最多都要看来算 -->
+          <div class="org-dlg__stats">
             <div class="org-dlg__stat">
-              <b>{{ est.toLook.toLocaleString('zh-CN') }}</b><span>张待看</span>
+              <b>{{ (est.toLook + est.ratingLeft).toLocaleString('zh-CN') }}</b><span>{{ est.ratingLeft > 0 ? '张待看（最多）' : '张待看' }}</span>
             </div>
             <div class="org-dlg__stat">
               <b>{{ tokenText }}</b><span>token</span>
@@ -45,9 +45,9 @@
               <span class="org-dlg__dot"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="l.icon" /></svg></span>{{ l.text }}
             </li>
           </ul>
-          <p v-if="est.ratingLeft > 0" class="org-dlg__warn">本地分级还剩 {{ est.ratingLeft.toLocaleString('zh-CN') }} 张，判完才能整理</p>
-          <button class="org-dlg__go" type="button" :disabled="org.busy || est.ratingLeft > 0" @click="org.start()">
-            <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path :d="starPath" fill="currentColor" /></svg>{{ est.ratingLeft > 0 ? '等本地分级做完' : '开始整理' }}
+          <p v-if="est.ratingLeft > 0" class="org-dlg__note">本地分级还剩 {{ est.ratingLeft.toLocaleString('zh-CN') }} 张，判完的半价陆续补进来</p>
+          <button class="org-dlg__go" type="button" :disabled="org.busy" @click="org.start()">
+            <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path :d="starPath" fill="currentColor" /></svg>开始整理
           </button>
           <p class="org-dlg__foot">花费是粗估，以账单为准</p>
         </template>

@@ -15,7 +15,7 @@ import { originalPathOf } from './services/galleryService'
 import { configureScan, getScanState, onScanState, requeueScan, startScan, stopScanAndWait } from './services/scan/scanService'
 import { configureRating, isRatingBusy, scheduleRating, stopRating, thresholdFromEnv } from './services/rating/ratingService'
 import { configureLook, enqueueNewImages, initLook, isLookBusy, stopLook } from './services/ai/lookService'
-import { checkLooking, configureOrganize, initOrganize } from './services/ai/organizeService'
+import { checkLooking, configureOrganize, initOrganize, onLookResult, onRatingBatch } from './services/ai/organizeService'
 import { startDreaming, stopDreaming } from './services/ai/dreamService'
 import { isAnswering } from './services/ai/assistantService'
 import { configureEmbedding, isEmbedBusy, scheduleEmbedding, stopEmbedding } from './services/ai/embeddingService'
@@ -189,9 +189,15 @@ async function bootstrap(): Promise<void> {
     onProgress: (p) => broadcast(IpcEvent.ratingProgress, p),
     // 整台电脑 1 分钟没有键盘鼠标操作、插着电：分级可以多用两个线程
     machineIdle: () => powerMonitor.getSystemIdleTime() >= 60 && !powerMonitor.isOnBatteryPower(),
-    // 判完的新图过了上云闸门：排进看图队列，补语义向量
+    // 每判完一小批：新图过了上云闸门就排进看图队列；一键整理方案已批时，判完的老图按半价陆续补进来
+    onBatch: () => {
+      void enqueueNewImages().catch((err: unknown) => log.error('排看图队列失败', err))
+      void onRatingBatch().catch((err: unknown) => log.error('一键整理补图失败', err))
+    },
+    // 一轮判完：补语义向量，一键整理看看能不能收尾
     onDone: () => {
       void enqueueNewImages().catch((err: unknown) => log.error('排看图队列失败', err))
+      void onRatingBatch().catch((err: unknown) => log.error('一键整理补图失败', err))
       scheduleEmbedding()
     }
   })
@@ -201,12 +207,18 @@ async function bootstrap(): Promise<void> {
     thumbsDir: paths.thumbs,
     tempDir: join(paths.root, 'tmp'),
     canRun: () => getScanState().progress === null,
+    // 本地分级还在跑：后面还会有图补进批量，先不急着提交不满一批的
+    moreLater: () => isRatingBusy(),
     onState: (state) => {
       broadcast(IpcEvent.lookState, state)
       // 一键整理在等看图：看完了就出方案
       void checkLooking().catch((err: unknown) => log.error('一键整理检查看图进度失败', err))
     },
-    onSuggested: () => broadcast(IpcEvent.aiSuggested, null)
+    onSuggested: () => {
+      broadcast(IpcEvent.aiSuggested, null)
+      // 方案已批、在陆续补图：新看完的图按方案分进类目录
+      onLookResult()
+    }
   })
   configureOrganize({
     onState: (state) => broadcast(IpcEvent.organizeState, state),

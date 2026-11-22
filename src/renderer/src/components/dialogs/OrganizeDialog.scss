@@ -187,12 +187,14 @@
     justify-content: center;
   }
 
-  &__warn {
+  // 分级还没做完：一句提示，不挡着开始
+  &__note {
     margin: 0;
     padding: 8px 12px;
     border-radius: 12px;
-    background: var(--c-b-FCE7EE);
-    color: var(--c-i-C25B85);
+    background: var(--a06);
+    border: 1px dashed var(--a-line);
+    color: var(--a-ink);
     font-size: 12px;
     font-weight: 700;
   }

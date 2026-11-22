@@ -576,8 +576,8 @@ export interface OrganizeFolderVO {
   tags: string[]
 }
 
-// 一键整理的阶段：空闲、看图中、出方案中、方案待确认、分图中
-export type OrganizePhase = 'IDLE' | 'LOOKING' | 'PLANNING' | 'PLAN_READY' | 'ASSIGNING'
+// 一键整理的阶段：空闲、看图中、出方案中、方案待确认、分图中、方案已批后陆续补图（本地分级后判完的老图按半价看完再按方案分）
+export type OrganizePhase = 'IDLE' | 'LOOKING' | 'PLANNING' | 'PLAN_READY' | 'ASSIGNING' | 'FOLLOWING'
 
 // 一键整理的状态
 export interface OrganizeStateVO {
@@ -592,7 +592,7 @@ export interface OrganizeEstimateVO {
   toLook: number
   tokens: number
   yuan: number
-  // 本地分级还剩多少张没判（大于 0 时不能开始，判完才知道哪些图能上云）
+  // 本地分级还剩多少张没判：不挡着开始，判完的按半价陆续补进来（费用已按最多都要看算进去）
   ratingLeft: number
 }
 

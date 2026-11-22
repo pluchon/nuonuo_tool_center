@@ -215,6 +215,17 @@ export async function cancelOpenLookJobs(): Promise<number> {
   return rows.length
 }
 
+// 取消还没交出去的补图（一键整理停下时）
+export async function cancelBacklogJobs(): Promise<number> {
+  const { db } = getDatabase()
+  const rows = await db
+    .update(aiJob)
+    .set({ status: 'CANCELLED', finishedAt: new Date() })
+    .where(and(eq(aiJob.kind, 'LOOK'), eq(aiJob.status, 'QUEUED'), isNull(aiJob.remoteId), sql`${aiJob.priority} < 0`))
+    .returning({ id: aiJob.id })
+  return rows.length
+}
+
 // 应用上次退出时还在进行中的（不是批量提交的）放回排队
 export async function requeueRunningLookJobs(): Promise<void> {
   const { db } = getDatabase()

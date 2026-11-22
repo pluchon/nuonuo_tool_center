@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { image } from '../db/schema'
 
@@ -57,13 +57,21 @@ export async function updateR18(ids: number[], isR18: boolean): Promise<void> {
 }
 
 // 还没分级过的图（手动开关过的、缩略图没生成好的不算），先导入的先判
-export async function findRatingCandidates(limit: number): Promise<Array<{ id: number; contentHash: string }>> {
+// 还没分级的图：指定了 id 的（你正在看的）只在这些里找；否则最新导入的在前（老图在后台慢慢判）
+export async function findRatingCandidates(limit: number, onlyIds?: number[]): Promise<Array<{ id: number; contentHash: string }>> {
   const { db } = getDatabase()
+  const conds = [eq(image.deleteState, 0), isNull(image.ratingSource), eq(image.thumbReady, THUMB_READY)]
+  if (onlyIds) {
+    if (onlyIds.length === 0) {
+      return []
+    }
+    conds.push(inArray(image.id, onlyIds))
+  }
   return db
     .select({ id: image.id, contentHash: image.contentHash })
     .from(image)
-    .where(and(eq(image.deleteState, 0), isNull(image.ratingSource), eq(image.thumbReady, THUMB_READY)))
-    .orderBy(asc(image.id))
+    .where(and(...conds))
+    .orderBy(desc(image.id))
     .limit(limit)
 }
 

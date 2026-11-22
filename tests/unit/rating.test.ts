@@ -87,10 +87,12 @@ describe('分级写库', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  it('候选只要还没分级、缩略图好了的；手动开关过的不再进候选', async () => {
-    expect((await findRatingCandidates(10)).map((r) => r.contentHash)).toEqual(['h1', 'h2', 'h4'])
+  it('候选只要还没分级、缩略图好了的，最新导入的在前；指定的图只在里面找；手动开关过的不再进候选', async () => {
+    expect((await findRatingCandidates(10)).map((r) => r.contentHash)).toEqual(['h4', 'h2', 'h1'])
+    expect((await findRatingCandidates(10, [2, 3])).map((r) => r.contentHash)).toEqual(['h2'])
+    expect(await findRatingCandidates(10, [])).toEqual([])
     await updateR18([4], false)
-    expect((await findRatingCandidates(10)).map((r) => r.contentHash)).toEqual(['h1', 'h2'])
+    expect((await findRatingCandidates(10)).map((r) => r.contentHash)).toEqual(['h2', 'h1'])
   })
 
   it('模型判的 R-18 打上并标“诺诺判的”；手动关掉后不再是模型判的；手动过的模型写不进去', async () => {

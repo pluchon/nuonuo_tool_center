@@ -78,7 +78,8 @@ describe('第九阶段：目录管理', () => {
     await typeName(page, '猫猫')
     await waitCount(page, '猫猫', '0')
     expect(existsSync(join(dirs.library, '猫猫'))).toBe(true)
-    await expect(navRow(page, '猫猫').locator('.side-nav__item--on').count()).resolves.toBe(1)
+    // 建好后进入新目录（后台在分级时主进程稍忙，等它选中）
+    await navRow(page, '猫猫').locator('.side-nav__item--on').waitFor({ timeout: 10_000 })
 
     // 右键类目录：新建子目录（空着用默认名）
     await navRow(page, '猫猫').click({ button: 'right' })

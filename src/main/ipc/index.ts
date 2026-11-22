@@ -60,7 +60,7 @@ import { cancelAllLooks, getLookState, lookNow, retryLook } from '../services/ai
 import { startNativeDrag } from '../services/fileOps/nativeDragService'
 import { acceptAllSuggestions, assistPrompt, decideMany, decideSuggestion, importAssist, listSuggestions } from '../services/ai/suggestionService'
 import { approveOrganize, cancelOrganize, estimateOrganize, getOrganizeState, startOrganize } from '../services/ai/organizeService'
-import { getRatingProgress } from '../services/rating/ratingService'
+import { getRatingProgress, prioritizeRating } from '../services/rating/ratingService'
 import { handle } from './handle'
 
 // 取发起调用的窗口；窗口已关闭时报错
@@ -206,6 +206,8 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   })
   handle(IpcChannel.galleryDetail, async (_event, imageId: number) => {
     requireDatabase()
+    // 你正在看的这张还没分级：插到最前面先判
+    void prioritizeRating(imageId).catch(() => undefined)
     return getImageDetail(imageId)
   })
   handle(IpcChannel.fileShowInFolder, async (_event, fileId: number) => {

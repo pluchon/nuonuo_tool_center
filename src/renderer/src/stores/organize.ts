@@ -118,7 +118,8 @@ export const useOrganizeStore = defineStore('organize', {
       try {
         const n = await approveOrganize(plan)
         this.dialog = null
-        useToastStore().show(n > 0 ? `整理好了 ${n} 张，在“AI 建议”里慢慢审` : '没有能分进这些目录的图')
+        const more = this.rating.running ? '；剩下的判完会陆续补进来' : ''
+        useToastStore().show(n > 0 ? `整理好了 ${n} 张，在“AI 建议”里慢慢审${more}` : `这次没有能分进这些目录的图${more}`)
         await useGalleryStore().afterEdit()
       } catch (err) {
         useToastStore().show(errText(err), 'error')

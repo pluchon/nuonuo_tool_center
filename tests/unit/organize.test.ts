@@ -116,12 +116,14 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     delete process.env.DASHSCOPE_API_KEY
   })
 
-  it('估算只算还没看过、没打标签、过了闸门的图；本地分级没做完时不能开始', async () => {
-    expect(await org.estimateOrganize()).toMatchObject({ toLook: 1, ratingLeft: 0 })
+  it('估算只算还没看过、没打标签、过了闸门的图；还没分级的按最多都要看算进花费', async () => {
+    const before = await org.estimateOrganize()
+    expect(before).toMatchObject({ toLook: 1, ratingLeft: 0 })
     const { pg } = getDatabase()
     await pg.exec(`INSERT INTO image (content_hash, format, byte_size, thumb_ready) VALUES ('h6', 'JPG', 1, 1)`)
-    expect(await org.estimateOrganize()).toMatchObject({ ratingLeft: 1 })
-    await expect(org.startOrganize()).rejects.toThrow('本地分级还剩 1 张')
+    const after = await org.estimateOrganize()
+    expect(after).toMatchObject({ toLook: 1, ratingLeft: 1 })
+    expect(after.tokens).toBeGreaterThan(before.tokens)
     await pg.exec(`UPDATE image SET rating = 'EXPLICIT', rating_source = 'MODEL', is_r18 = true WHERE content_hash = 'h6'`)
   })
 
@@ -169,5 +171,41 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     const tags = await pg.query<{ name: string }>(`SELECT t.name FROM image_tag it JOIN tag t ON t.id = it.tag_id WHERE it.image_id = 2 AND it.delete_state = 0`)
     expect(tags.rows.map((r) => r.name)).toEqual(['原神'])
     await expect(sugg.decideMany([], true)).rejects.toThrow('一次最多')
+  })
+
+  it('分级没做完也能开始：批了方案后进入补图，后判完的图排进批量看图、看完按方案分，都做完自己收尾', async () => {
+    const { pg } = getDatabase()
+    // 8 已经看过（待确认里有“原神”），7 还没分级
+    await pg.exec(`
+      INSERT INTO image (content_hash, format, byte_size, thumb_ready) VALUES ('h7', 'JPG', 1, 1);
+      INSERT INTO image (content_hash, format, byte_size, thumb_ready, rating, rating_source) VALUES ('h8', 'JPG', 1, 1, 'GENERAL', 'MODEL');
+      INSERT INTO image_file (image_id, root_id, rel_path, mtime) SELECT id, 1, content_hash || '.jpg', now() FROM image WHERE content_hash IN ('h7', 'h8');
+      INSERT INTO image_ai_result (image_id, kind, model, result, field_status)
+        SELECT id, 'IDENTIFY', 'm', '{"name":"","character":"","work":"原神","tags":[],"source":"","description":""}', '{"work":"PENDING"}' FROM image WHERE content_hash = 'h8';
+      INSERT INTO ai_job (kind, image_id, status) SELECT 'LOOK', id, 'DONE' FROM image WHERE content_hash = 'h8';
+    `)
+    const id7 = Number((await pg.query<{ id: number }>(`SELECT id FROM image WHERE content_hash = 'h7'`)).rows[0].id)
+    planReply = '```json\n{"folders":[{"name":"原神图","works":["原神"]}]}\n```'
+    await org.startOrganize()
+    await vi.waitFor(() => expect(org.getOrganizeState().phase).toBe('PLAN_READY'))
+    expect(await org.approveOrganize(org.getOrganizeState().plan!)).toBe(1)
+    expect(org.getOrganizeState().phase).toBe('FOLLOWING')
+
+    // 7 判完：排进看图，只走批量（优先级为负）
+    await pg.query(`UPDATE image SET rating = 'GENERAL', rating_source = 'MODEL' WHERE id = $1`, [id7])
+    await org.onRatingBatch()
+    const job = await pg.query<{ priority: number }>(`SELECT priority FROM ai_job WHERE kind = 'LOOK' AND image_id = $1`, [id7])
+    expect(job.rows.map((r) => r.priority)).toEqual([-1])
+    expect(org.getOrganizeState().phase).toBe('FOLLOWING')
+
+    // 7 看完（有“原神”）：按批过的方案分进“原神图”，分级和看图都做完了，回到空闲
+    await pg.query(`UPDATE ai_job SET status = 'DONE' WHERE image_id = $1`, [id7])
+    await pg.query(
+      `INSERT INTO image_ai_result (image_id, kind, model, result, field_status) VALUES ($1, 'IDENTIFY', 'm', '{"name":"","character":"","work":"原神","tags":[],"source":"","description":""}', '{"work":"PENDING"}')`,
+      [id7]
+    )
+    await org.checkLooking()
+    expect(org.getOrganizeState().phase).toBe('IDLE')
+    expect((await sugg.listSuggestions(id7)).map((s) => [s.kind, s.value])).toContainEqual(['dir', '原神图'])
   })
 })
