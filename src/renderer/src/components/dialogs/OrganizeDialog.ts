@@ -19,11 +19,18 @@ const LINES = [
   { icon: 'M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4', text: 'R-18 图不看、不分' }
 ]
 
-// 每种弹窗的标题、说明、右上角 × 的含义
+// 一排数字前的小图标：图片、芯片、硬币
+const STAT_ICON = {
+  look: 'M4 5h16v14H4zM4 15l4-4 4 4 3-3 5 5M15 9h.01',
+  token: 'M7 7h10v10H7zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4',
+  money: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9 8l3 4 3-4M8.5 13h7M12 12v5'
+}
+
+// 每种弹窗的标题、右上角 × 的含义（不放说明文字）
 const HEADS = {
-  confirm: { title: '一键整理', sub: '让诺诺把图库理得井井有条', close: '暂时不整理' },
-  plan: { title: '类目录方案', sub: '改名或去掉不合适的，批了才分图', close: '稍后再看' },
-  stop: { title: '停止一键整理？', sub: '已经交出去的照常看完，没交的补图取消，建议都留着', close: '继续整理' }
+  confirm: { title: '一键整理', close: '暂时不整理' },
+  plan: { title: '类目录方案', close: '稍后再看' },
+  stop: { title: '停止一键整理？', close: '继续整理' }
 } as const
 
 // 一键整理的弹窗（设计 6.10）：开始前确认、批方案、进行中要不要停；右上角 × 是“先不”，打开时聚焦在它上面，Esc 也是
@@ -62,6 +69,18 @@ export default defineComponent({
       return t >= 10_000 ? `${(t / 10_000).toFixed(t >= 1_000_000 ? 0 : 1)} 万` : t.toLocaleString('zh-CN')
     })
     const head = computed(() => HEADS[org.dialog ?? 'confirm'])
+    // 开始前的一排数字：待看张数、token、花费（分级判完才会弹这个框，ratingLeft 此时是 0）
+    const stats = computed(() => {
+      const e = est.value
+      if (!e) {
+        return []
+      }
+      return [
+        { key: 'look', label: '待看', value: (e.toLook + e.ratingLeft).toLocaleString('zh-CN'), icon: STAT_ICON.look },
+        { key: 'token', label: 'token', value: tokenText.value, icon: STAT_ICON.token },
+        { key: 'money', label: '花费', value: `¥${e.yuan.toFixed(2)}`, icon: STAT_ICON.money }
+      ]
+    })
 
     return {
       org,
@@ -69,6 +88,7 @@ export default defineComponent({
       est,
       tokenText,
       head,
+      stats,
       isNew,
       kinds: KINDS,
       lines: LINES,

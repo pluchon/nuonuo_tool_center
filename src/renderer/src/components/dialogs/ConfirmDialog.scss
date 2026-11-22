@@ -1,4 +1,4 @@
-// 确认框：380px 白卡片，粉色描边，垃圾桶图标 + 标题，下面两个等宽按钮
+// 确认框：380px 白卡片，粉色描边，垃圾桶图标（不加底块）+ 标题，下面两个等宽按钮
 .confirm-dlg {
   position: fixed;
   inset: 0;
@@ -26,7 +26,6 @@
       border-color: var(--a-line);
 
       .confirm-dlg__icon {
-        background: var(--a-soft);
         color: var(--a);
       }
 
@@ -42,16 +41,11 @@
     gap: 10px;
   }
 
+  // 图标直接放，不加底块
   &__icon {
-    width: 34px;
-    height: 34px;
     flex: none;
-    border-radius: 10px;
-    background: var(--c-b-FCE7EE);
     color: var(--c-i-A23D62);
     display: flex;
-    align-items: center;
-    justify-content: center;
   }
 
   &__title {

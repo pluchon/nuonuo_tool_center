@@ -68,6 +68,9 @@ describe('第三阶段：导入和扫描', () => {
     const words = (await page.locator('.status-footer').innerText()).split(/\s+/).filter(Boolean)
     const at = words.indexOf('本地分级中')
     const footer = at >= 0 ? [...words.slice(0, at), ...words.slice(at + 2)] : words
+    // 看图队列的张数看分级快慢（判完的新图会排进去），只要求是个数字
+    expect(footer[1]).toMatch(/^\d+$/)
+    footer[1] = '0'
     expect(footer).toEqual(['诺诺在看图', '0', '一键整理', (IMAGE_COUNT + 2).toLocaleString('zh-CN'), '张', '刚刚扫描完成', '重新扫描'])
     await shot(page, 'scanned-light')
 

@@ -11,7 +11,7 @@
       >
         <div class="confirm-dlg__head">
           <span class="confirm-dlg__icon">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="icon" /></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="icon" /></svg>
           </span>
           <h2 class="confirm-dlg__title">{{ title }}</h2>
         </div>

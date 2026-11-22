@@ -30,6 +30,7 @@ import {
   type LibraryRootEntity
 } from '../../repositories/libraryRootRepository'
 import { ensureCategoryRoot } from '../categoryHome'
+import { loadCheckpoint, saveCheckpoint, SCAN_CHECKPOINT } from '../progressCheckpoint'
 import { getSettings } from '../settingsService'
 import { shouldProcess } from './formats'
 import { analyzeImage, hashBuffer, hashFile, READ_ONCE_LIMIT } from './imageProbe'
@@ -57,6 +58,12 @@ interface ScanJob {
   auto: boolean
 }
 
+// 退出时还在扫的任务记下的断点：下次启动接着扫，进度从这里往下走
+interface ScanCheckpoint extends ScanJob {
+  done: number
+  total: number
+}
+
 // 一个目录这次要处理的内容
 interface RootPlan {
   root: LibraryRootEntity
@@ -74,6 +81,11 @@ let last: ScanResultVO | null = null
 let stopRequested = false
 let running: Promise<void> | null = null
 let lastPush = 0
+// 这一轮实际处理了几个文件，和上次退出时已经扫到的数（显示的进度取两者大的，不倒退）
+let processed = 0
+let floor = 0
+// 正在退出：被打断的扫描留着断点，不清
+let quitting = false
 
 // 启动时调用一次：缩略图目录、类目录位置
 export function configureScan(next: ScanConfig): void {
@@ -143,10 +155,25 @@ export function stopScan(): ScanStateVO {
   return getScanState()
 }
 
-// 等扫描结束（退出应用前用）：先要求停止，再等手上的文件写完
+// 等扫描结束（退出应用前用）：先要求停止，再等手上的文件写完；还没扫完的记下断点，下次启动接着扫
 export async function stopScanAndWait(): Promise<void> {
+  quitting = true
+  const snap: ScanCheckpoint | null = current && progress ? { rootId: current.rootId, auto: current.auto, done: progress.done, total: progress.total } : null
   stopScan()
   await running
+  if (snap) {
+    await saveCheckpoint(SCAN_CHECKPOINT, snap)
+  }
+}
+
+// 启动时：上次退出时没扫完的接着扫（不管“启动时自动扫描”开没开）；返回有没有接着扫
+export async function resumeScan(): Promise<boolean> {
+  const cp = await loadCheckpoint<ScanCheckpoint>(SCAN_CHECKPOINT)
+  if (!cp) {
+    return false
+  }
+  startScan(cp.rootId ?? null, cp.auto !== false)
+  return true
 }
 
 // 等排队的扫描全部做完（不打断）
@@ -170,6 +197,10 @@ async function drain(): Promise<void> {
     } finally {
       current = null
       progress = null
+      // 扫完、你手动停了或出错：断点清掉；退出时打断的由 stopScanAndWait 记
+      if (!quitting) {
+        await saveCheckpoint(SCAN_CHECKPOINT, null).catch((err: unknown) => log.warn('清扫描断点失败', err))
+      }
       push(true)
     }
   }
@@ -196,6 +227,10 @@ async function runJob(job: ScanJob): Promise<Omit<ScanResultVO, 'auto'>> {
   const settings = await getSettings()
   const roots = await rootsOf(job)
   const single = job.rootId !== null ? roots[0] : null
+  // 上次退出时同一个任务扫到哪了（之前扫过的文件这次会很快跳过，进度直接从那里显示）
+  const cp = await loadCheckpoint<ScanCheckpoint>(SCAN_CHECKPOINT)
+  processed = 0
+  floor = cp && (cp.rootId ?? null) === job.rootId ? Number(cp.done) || 0 : 0
   progress = { rootName: single?.name ?? null, rootIds: roots.map((r) => r.id), done: 0, total: 0, found: 0 }
   push(true)
 
@@ -220,6 +255,9 @@ async function runJob(job: ScanJob): Promise<Omit<ScanResultVO, 'auto'>> {
     }
   }
 
+  // 数完文件、开始处理前就显示上次扫到的位置
+  progress.done = Math.min(progress.total, floor)
+  push(true)
   let failed = 0
   const outcomes: RootOutcome[] = []
   for (const plan of plans) {
@@ -293,7 +331,8 @@ async function scanRoot(plan: RootPlan): Promise<RootOutcome> {
         present.add(pathKey(file.relPath))
         log.warn(`处理文件失败：${join(root.path, file.relPath)}`, err)
       }
-      progress!.done += 1
+      processed += 1
+      progress!.done = Math.min(progress!.total, Math.max(floor, processed))
       push(false)
     }
   }

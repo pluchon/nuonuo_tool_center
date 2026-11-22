@@ -88,8 +88,7 @@ export async function initOrganize(): Promise<void> {
   }
 }
 
-// 开始前的估算：要看多少张、大概多少 token 和钱
-// 还没判完的按最多都要看、都走批量来算
+// 开始前的估算：要看多少张、大概多少 token 和钱；ratingLeft 是本地分级还剩几张（大于 0 时界面不让开始）
 export async function estimateOrganize(): Promise<OrganizeEstimateVO> {
   const toLook = await countLookCandidates(new Date(0))
   const ratingLeft = await countRatingCandidates()
@@ -111,7 +110,11 @@ export async function startOrganize(): Promise<OrganizeStateVO> {
   if (state.phase !== 'IDLE') {
     throw new BizError('CONFLICT', '一键整理已经在进行了')
   }
-  // 本地分级没做完也能开始：先用已经判完的出方案，批了之后剩下的判完再陆续补进来
+  // 本地分级判完才能开始（没判完的图不知道能不能上云，整理一半再补容易出岔子）
+  const ratingLeft = await countRatingCandidates()
+  if (isRatingBusy() || ratingLeft > 0) {
+    throw new BizError('CONFLICT', ratingLeft > 0 ? `本地分级还剩 ${ratingLeft.toLocaleString('zh-CN')} 张，判完才能整理` : '本地分级还在进行，判完才能整理')
+  }
   const ids = await findLookCandidates(new Date(0), 1_000_000)
   if (ids.length > 0) {
     await insertLookJobs(ids)
@@ -184,13 +187,12 @@ async function assignWithPlan(): Promise<number> {
   if (state.phase !== 'FOLLOWING' || !state.plan) {
     return 0
   }
-  const rows = assignFolders(await findOrganizeTerms(), state.plan)
-  await insertOrganizeResults(rows, BAILIAN_CONFIG.chatModel)
-  if (rows.length > 0) {
-    log.info(`一键整理补图：又分了 ${rows.length} 张`)
+  const n = await insertOrganizeResults(assignFolders(await findOrganizeTerms(), state.plan), BAILIAN_CONFIG.chatModel)
+  if (n > 0) {
+    log.info(`一键整理补图：又分了 ${n} 张`)
     config?.onSuggested()
   }
-  return rows.length
+  return n
 }
 
 // 分级全判完、看图队列里也没有排着和进行中的了：最后分一次，收尾
@@ -390,12 +392,11 @@ export async function approveOrganize(rawPlan: unknown): Promise<number> {
   }
   const plan = checkPlan(rawPlan, await categoryTopNames())
   await setState({ phase: 'ASSIGNING', plan, error: null })
-  let rows: Array<{ imageId: number; dir: string }> = []
+  let n = 0
   try {
-    rows = assignFolders(await findOrganizeTerms(), plan)
-    await insertOrganizeResults(rows, BAILIAN_CONFIG.chatModel)
-    log.info(`一键整理：生成 ${rows.length} 条放进类目录的建议`)
-    if (rows.length > 0) {
+    n = await insertOrganizeResults(assignFolders(await findOrganizeTerms(), plan), BAILIAN_CONFIG.chatModel)
+    log.info(`一键整理：生成 ${n} 条放进类目录的建议`)
+    if (n > 0) {
       config?.onSuggested()
     }
   } catch (err) {
@@ -405,5 +406,5 @@ export async function approveOrganize(rawPlan: unknown): Promise<number> {
   // 记住批过的方案：本地分级后判完的、还在看的图，之后陆续按它分；都做完了自己收尾
   await setState({ phase: 'FOLLOWING', plan, error: null })
   await onRatingBatch()
-  return rows.length
+  return n
 }

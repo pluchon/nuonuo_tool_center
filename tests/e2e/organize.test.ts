@@ -18,7 +18,7 @@ async function makeImage(file: string, text: string, bg: string): Promise<void> 
 }
 
 describe('一键整理', () => {
-  it('本地分级进度条；看完图出方案（真实调用）、批方案、按目录分组审、一组全部采用后复制进类目录', async () => {
+  it('本地分级进度条、分级中一键整理点不了；看完图出方案（真实调用）、批方案、按目录分组审、一组全部采用后复制进类目录', async () => {
     const dirs = freshCase('organize')
     const source = join(dirs.root, 'pics')
     mkdirSync(source, { recursive: true })
@@ -39,18 +39,10 @@ describe('一键整理', () => {
     // 分级在跑时底栏有“本地分级中…”和进度条，判完收起
     await page.waitForSelector('.rating-pill', { timeout: 60_000 })
     await shot(page, 'organize-light-rating')
-    // 分级没做完也能开始：只提示还剩几张会陆续补进来，按钮能点；右上角 × 关掉
-    await page.click('.organize')
-    await page.waitForSelector('.org-dlg__go')
-    if (await page.locator('.org-dlg__note').count()) {
-      await expect(page.locator('.org-dlg__go').isDisabled()).resolves.toBe(false)
-      await expect(page.locator('.org-dlg__stat span').first().textContent()).resolves.toBe('张待看（最多）')
-      await page.waitForTimeout(300)
-      await shot(page, 'organize-light-rating-left')
-    }
-    await page.click('.org-dlg__x')
-    await page.waitForSelector('.org-dlg', { state: 'detached' })
+    // 分级没判完：一键整理变灰、点不了
+    await expect(page.locator('.organize').isDisabled()).resolves.toBe(true)
     await page.waitForSelector('.rating-pill', { state: 'detached', timeout: 120_000 })
+    await expect(page.locator('.organize').isDisabled()).resolves.toBe(false)
     const progress = await page.evaluate(() => (window as unknown as { __rating: Array<{ running: boolean; done: number; total: number }> }).__rating)
     expect(progress.some((p) => p.running && p.total === 3)).toBe(true)
     expect(progress[progress.length - 1]).toMatchObject({ running: false, done: 3 })
@@ -67,7 +59,10 @@ describe('一键整理', () => {
 
     // 一键整理：图都看过了，确认后直接出方案（真实调用）
     await page.click('.organize')
-    await page.waitForSelector('.org-dlg__stat:has-text("张待看")')
+    await page.waitForSelector('.org-dlg__stat:has-text("待看")')
+    // 一排“待看 / token / 花费”各一行；没有副标题、提示和脚注
+    await expect(page.locator('.org-dlg__stat span').allTextContents()).resolves.toEqual(['待看', 'token', '花费'])
+    await expect(page.locator('.org-dlg__sub, .org-dlg__note, .org-dlg__foot').count()).resolves.toBe(0)
     await expect(page.locator('.org-dlg__stat b').first().textContent()).resolves.toBe('0')
     await page.waitForTimeout(300)
     await shot(page, 'organize-light-confirm')
@@ -77,6 +72,8 @@ describe('一键整理', () => {
     const failed = await page.locator('.org-dlg__error-text').textContent().catch(() => null)
     expect(failed).toBeNull()
     expect(await page.locator('.org-dlg__folder').count()).toBeGreaterThan(0)
+    // 方案弹窗只有标题，不放说明
+    await expect(page.locator('.org-dlg__sub').count()).resolves.toBe(0)
     await shot(page, 'organize-light-plan')
     // 换成深色：页面重新加载，方案待确认会再弹出来
     await setAppearance(page, 'dark')

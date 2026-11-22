@@ -25,6 +25,7 @@ const { configureFolderOps } = await import('../../src/main/services/fileOps/fol
 const { configureTransfer } = await import('../../src/main/services/fileOps/transferService')
 const { configureFileOps } = await import('../../src/main/services/fileOps/fileOpsService')
 const { updateSettings } = await import('../../src/main/services/settingsService')
+const { insertOrganizeResults } = await import('../../src/main/repositories/aiResultRepository')
 
 describe('方案整理和本地分图（纯函数）', () => {
   it('名字不合法、词不在给的范围里、重复的词和没词的目录都去掉；沿用现有目录不分大小写', () => {
@@ -116,7 +117,7 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     delete process.env.DASHSCOPE_API_KEY
   })
 
-  it('估算只算还没看过、没打标签、过了闸门的图；还没分级的按最多都要看算进花费', async () => {
+  it('估算只算还没看过、没打标签、过了闸门的图；还报本地分级还剩几张', async () => {
     const before = await org.estimateOrganize()
     expect(before).toMatchObject({ toLook: 1, ratingLeft: 0 })
     const { pg } = getDatabase()
@@ -173,21 +174,42 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     await expect(sugg.decideMany([], true)).rejects.toThrow('一次最多')
   })
 
-  it('分级没做完也能开始：批了方案后进入补图，后判完的图排进批量看图、看完按方案分，都做完自己收尾', async () => {
+  it('同一张图建议过同一个目录（还没处理、采用过、说过不要）就不再建议；换个目录还能建议', async () => {
     const { pg } = getDatabase()
-    // 8 已经看过（待确认里有“原神”），7 还没分级
+    expect(await insertOrganizeResults([{ imageId: 4, dir: '猫猫' }], 'm')).toBe(1)
+    expect(await insertOrganizeResults([{ imageId: 4, dir: '猫猫' }], 'm')).toBe(0)
+    await pg.exec(`UPDATE image_ai_result SET field_status = '{"dir":"REJECTED"}' WHERE image_id = 4 AND kind = 'ORGANIZE'`)
+    expect(await insertOrganizeResults([{ imageId: 4, dir: '猫猫' }], 'm')).toBe(0)
+    expect(await insertOrganizeResults([{ imageId: 4, dir: '猫咪' }], 'm')).toBe(1)
+    await pg.exec(`DELETE FROM image_ai_result WHERE image_id = 4 AND kind = 'ORGANIZE'`)
+  })
+
+  it('本地分级没判完不能开始；开始后新导入的图进入补图：判完排进批量看图、看完按方案分，都做完自己收尾', async () => {
+    const { pg } = getDatabase()
+    // 7 还没分级：不能开始
     await pg.exec(`
       INSERT INTO image (content_hash, format, byte_size, thumb_ready) VALUES ('h7', 'JPG', 1, 1);
+      INSERT INTO image_file (image_id, root_id, rel_path, mtime) SELECT id, 1, content_hash || '.jpg', now() FROM image WHERE content_hash = 'h7';
+    `)
+    const id7 = Number((await pg.query<{ id: number }>(`SELECT id FROM image WHERE content_hash = 'h7'`)).rows[0].id)
+    await expect(org.startOrganize()).rejects.toThrow('本地分级还剩 1 张，判完才能整理')
+    expect(org.getOrganizeState().phase).toBe('IDLE')
+    // 先当它判完了，开始整理；8 已经看过（待确认里有“原神”）
+    await pg.query(`UPDATE image SET rating = 'GENERAL', rating_source = 'MODEL' WHERE id = $1`, [id7])
+    await pg.exec(`
       INSERT INTO image (content_hash, format, byte_size, thumb_ready, rating, rating_source) VALUES ('h8', 'JPG', 1, 1, 'GENERAL', 'MODEL');
-      INSERT INTO image_file (image_id, root_id, rel_path, mtime) SELECT id, 1, content_hash || '.jpg', now() FROM image WHERE content_hash IN ('h7', 'h8');
+      INSERT INTO image_file (image_id, root_id, rel_path, mtime) SELECT id, 1, content_hash || '.jpg', now() FROM image WHERE content_hash = 'h8';
       INSERT INTO image_ai_result (image_id, kind, model, result, field_status)
         SELECT id, 'IDENTIFY', 'm', '{"name":"","character":"","work":"原神","tags":[],"source":"","description":""}', '{"work":"PENDING"}' FROM image WHERE content_hash = 'h8';
       INSERT INTO ai_job (kind, image_id, status) SELECT 'LOOK', id, 'DONE' FROM image WHERE content_hash = 'h8';
+      INSERT INTO ai_job (kind, image_id, status) VALUES ('LOOK', ${id7}, 'CANCELLED');
     `)
-    const id7 = Number((await pg.query<{ id: number }>(`SELECT id FROM image WHERE content_hash = 'h7'`)).rows[0].id)
     planReply = '```json\n{"folders":[{"name":"原神图","works":["原神"]}]}\n```'
     await org.startOrganize()
     await vi.waitFor(() => expect(org.getOrganizeState().phase).toBe('PLAN_READY'))
+    // 出方案时又导入了 7（换成一张新的还没分级的图）
+    await pg.exec(`DELETE FROM ai_job WHERE image_id = ${id7}`)
+    await pg.query(`UPDATE image SET rating = 'UNKNOWN', rating_source = NULL WHERE id = $1`, [id7])
     expect(await org.approveOrganize(org.getOrganizeState().plan!)).toBe(1)
     expect(org.getOrganizeState().phase).toBe('FOLLOWING')
 

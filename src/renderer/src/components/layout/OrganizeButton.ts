@@ -23,6 +23,8 @@ export default defineComponent({
     })
     const label = computed(() => LABELS[org.phase])
     const busy = computed(() => org.phase === 'LOOKING' || org.phase === 'PLANNING' || org.phase === 'ASSIGNING' || org.phase === 'FOLLOWING')
-    return { org, label, busy }
+    // 还没开始整理、本地分级还在跑：先等它判完
+    const waiting = computed(() => org.phase === 'IDLE' && org.rating.running)
+    return { org, label, busy, waiting }
   }
 })

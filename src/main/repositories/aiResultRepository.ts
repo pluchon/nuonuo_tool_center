@@ -145,15 +145,22 @@ export async function findOrganizeTerms(): Promise<OrganizeTerms[]> {
   return [...byImage.values()]
 }
 
-// 存一批“放进类目录”的建议
-export async function insertOrganizeResults(rows: Array<{ imageId: number; dir: string }>, model: string): Promise<void> {
+// 存一批“放进类目录”的建议；同一张图建议过同一个目录的（还没处理、采用过、你说过不要的）不再重复建议；返回实际存了几条
+export async function insertOrganizeResults(rows: Array<{ imageId: number; dir: string }>, model: string): Promise<number> {
   if (rows.length === 0) {
-    return
+    return 0
   }
-  const { db } = getDatabase()
-  for (let i = 0; i < rows.length; i += 500) {
+  const { db, pg } = getDatabase()
+  const seen = await pg.query<{ image_id: number; dir: string }>(
+    `SELECT image_id, lower(result->>'dir') AS dir FROM image_ai_result
+      WHERE delete_state = 0 AND kind = 'ORGANIZE' AND image_id = ANY($1::bigint[])`,
+    [[...new Set(rows.map((r) => r.imageId))]]
+  )
+  const done = new Set(seen.rows.map((r) => `${Number(r.image_id)}\n${r.dir}`))
+  const fresh = rows.filter((r) => !done.has(`${r.imageId}\n${r.dir.toLowerCase()}`))
+  for (let i = 0; i < fresh.length; i += 500) {
     await db.insert(imageAiResult).values(
-      rows.slice(i, i + 500).map((r) => ({
+      fresh.slice(i, i + 500).map((r) => ({
         imageId: r.imageId,
         kind: 'ORGANIZE' as const,
         origin: 'NONO' as const,
@@ -163,6 +170,7 @@ export async function insertOrganizeResults(rows: Array<{ imageId: number; dir: 
       }))
     )
   }
+  return fresh.length
 }
 
 // “AI 建议”视图里每张图的排序依据（最早一条待确认建议的 id，后来的排在后面）和建议放进的类目录

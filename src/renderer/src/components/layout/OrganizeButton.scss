@@ -27,9 +27,15 @@
     color: var(--a);
   }
 
-  &:hover {
+  &:hover:not(:disabled) {
     background: var(--look-field-hover-bg);
     border-color: var(--a-line);
+  }
+
+  // 本地分级还在跑：变灰，点不了
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   // 进行中：文字慢慢呼吸

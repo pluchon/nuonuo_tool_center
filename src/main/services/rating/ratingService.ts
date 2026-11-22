@@ -6,6 +6,7 @@ import { getLogger } from '../../common/logger'
 import type { RatingProgressVO } from '@shared/api'
 import { countRatingCandidates, findRatingCandidates, saveModelRating } from '../../repositories/imageRepository'
 import type { RatingRequest, RatingResponse } from './ratingProtocol'
+import { loadCheckpoint, RATING_CHECKPOINT, saveCheckpoint } from '../progressCheckpoint'
 import { pickModelFile } from './modelFile'
 import { ensureModel, modelDirOf } from './modelStore'
 import type { WdRating } from './wdTagger'
@@ -191,8 +192,11 @@ async function runOnce(): Promise<void> {
   }
   const modelDir = modelDirOf(cfg.modelsRoot)
   log.info(`本地分级用 ${pickModelFile(modelDir)}`)
+  // 上次退出（或被扫描打断）时这一轮已经判了几张：接着算，进度从“200/3000”继续而不是“0/2800”
+  const base = (await loadCheckpoint<{ done: number }>(RATING_CHECKPOINT))?.done ?? 0
   let rated = 0
   let r18 = 0
+  let finished = false
   for (;;) {
     if (stopping || !cfg.canRun()) {
       break
@@ -203,10 +207,11 @@ async function runOnce(): Promise<void> {
     const first = await findRatingCandidates(BATCH, wanted)
     const batch = first.length > 0 ? first : await findRatingCandidates(BATCH)
     if (batch.length === 0) {
+      finished = true
       break
     }
     // 中途又导入了新图时分母跟着变大
-    setProgress({ running: true, done: rated, total: rated + (await countRatingCandidates()) })
+    setProgress({ running: true, done: base + rated, total: base + rated + (await countRatingCandidates()) })
     for (const img of batch) {
       if (stopping || !cfg.canRun()) {
         break
@@ -223,11 +228,15 @@ async function runOnce(): Promise<void> {
         await saveModelRating(img.id, 'UNKNOWN', { error: res.error }, false)
       }
       rated++
-      setProgress({ running: true, done: rated, total: Math.max(progress.total, rated) })
+      setProgress({ running: true, done: base + rated, total: Math.max(progress.total, base + rated) })
     }
+    // 每判完一小批记一次断点（突然断电也最多丢一小批的进度）
+    await saveCheckpoint(RATING_CHECKPOINT, { done: base + rated })
     cfg.onBatch?.()
   }
-  setProgress({ running: false, done: rated, total: rated })
+  // 全判完了清掉断点；被退出或扫描打断的留着，下一轮接着数
+  await saveCheckpoint(RATING_CHECKPOINT, finished ? null : { done: base + rated })
+  setProgress({ running: false, done: base + rated, total: base + rated })
   if (rated > 0) {
     log.info(`本地分级：判了 ${rated} 张，其中 ${r18} 张判为 R-18`)
   }

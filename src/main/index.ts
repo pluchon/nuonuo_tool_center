@@ -12,7 +12,7 @@ import { configureFileOps, flushPendingDeletes, recoverFileOps } from './service
 import { configureTransfer } from './services/fileOps/transferService'
 import { configureFolderOps } from './services/fileOps/folderOpsService'
 import { originalPathOf } from './services/galleryService'
-import { configureScan, getScanState, onScanState, requeueScan, startScan, stopScanAndWait } from './services/scan/scanService'
+import { configureScan, getScanState, onScanState, requeueScan, resumeScan, startScan, stopScanAndWait } from './services/scan/scanService'
 import { configureRating, isRatingBusy, scheduleRating, stopRating, thresholdFromEnv } from './services/rating/ratingService'
 import { configureLook, enqueueNewImages, initLook, isLookBusy, stopLook } from './services/ai/lookService'
 import { checkLooking, configureOrganize, initOrganize, onLookResult, onRatingBatch } from './services/ai/organizeService'
@@ -257,6 +257,8 @@ async function bootstrap(): Promise<void> {
   createMainWindow(await initialTheme(state === 'READY'))
   if (state === 'READY') {
     await autoScanOnStart()
+    // 上次退出时没扫完的接着扫，进度接着上次的数
+    await resumeScan().catch((err: unknown) => log.warn('接着上次的扫描失败', err))
     await syncWatching()
     // 上次没判完的接着判（自动扫描在跑时先让路，扫完会再叫一次）
     scheduleRating()

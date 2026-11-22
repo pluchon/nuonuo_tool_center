@@ -32,16 +32,7 @@ export const useOrganizeStore = defineStore('organize', {
       unsubscribe = [
         onOrganizeState((s) => this.apply(s.phase, s.plan, s.error)),
         onRatingProgress((p) => {
-          const finished = this.rating.running && !p.running
           this.rating = p
-          // 开始前的确认框开着时分级做完了：重新估算，按钮就能点了
-          if (finished && this.dialog === 'confirm') {
-            void fetchOrganizeEstimate()
-              .then((e) => {
-                this.estimate = e
-              })
-              .catch(() => undefined)
-          }
         })
       ]
       try {
@@ -76,7 +67,13 @@ export const useOrganizeStore = defineStore('organize', {
         return
       }
       try {
-        this.estimate = await fetchOrganizeEstimate()
+        const est = await fetchOrganizeEstimate()
+        // 本地分级还没判完（比如扫描时暂停着）：先不弹确认框
+        if (est.ratingLeft > 0) {
+          useToastStore().show(`本地分级还剩 ${est.ratingLeft.toLocaleString('zh-CN')} 张，判完才能整理`)
+          return
+        }
+        this.estimate = est
         this.dialog = 'confirm'
       } catch (err) {
         useToastStore().show(errText(err), 'error')
@@ -118,8 +115,7 @@ export const useOrganizeStore = defineStore('organize', {
       try {
         const n = await approveOrganize(plan)
         this.dialog = null
-        const more = this.rating.running ? '；剩下的判完会陆续补进来' : ''
-        useToastStore().show(n > 0 ? `整理好了 ${n} 张，在“AI 建议”里慢慢审${more}` : `这次没有能分进这些目录的图${more}`)
+        useToastStore().show(n > 0 ? `整理好了 ${n} 张，在“AI 建议”里慢慢审` : '这次没有能分进这些目录的图')
         await useGalleryStore().afterEdit()
       } catch (err) {
         useToastStore().show(errText(err), 'error')
