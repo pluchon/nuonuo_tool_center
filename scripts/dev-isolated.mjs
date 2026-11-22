@@ -5,7 +5,9 @@ const env = {
   ...process.env,
   // 反斜杠要写成两个：单个的 \l、\d 会被 JS 当转义吞掉，路径变成 D:ltm-devdata（落到 D 盘当前目录下）
   LTM_DATA_DIR: process.env.LTM_DATA_DIR || 'D:\\ltm-dev\\data',
-  LTM_CATEGORY_HOME: process.env.LTM_CATEGORY_HOME || 'D:\\ltm-dev\\library'
+  LTM_CATEGORY_HOME: process.env.LTM_CATEGORY_HOME || 'D:\\ltm-dev\\library',
+  // 本地分级模型和端到端测试共用一份
+  LTM_MODEL_DIR: process.env.LTM_MODEL_DIR || 'D:\\ltm-dev\\models'
 }
 
 console.log(`[dev] 数据目录 ${env.LTM_DATA_DIR}，类目录 ${env.LTM_CATEGORY_HOME}`)

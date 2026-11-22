@@ -20,7 +20,7 @@ import { formatOfFile } from './scan/formats'
 import {
   findFileLocation,
   findGalleryRows,
-  findImageExif,
+  findImageExtras,
   findImageRows,
   findRowsOfImages,
   countUntaggedByDir,
@@ -319,6 +319,7 @@ export async function getImageDetail(imageId: number): Promise<ImageDetailVO> {
   }
   const offline = await offlineRoots(rows)
   const rep = pickRepresentative(rows, offline)
+  const extras = await findImageExtras(imageId)
   return {
     imageId,
     name: nameOf(rep),
@@ -329,9 +330,10 @@ export async function getImageDetail(imageId: number): Promise<ImageDetailVO> {
     hash: rep.contentHash,
     thumb: thumbOf(rep.thumbReady),
     isR18: rep.isR18,
+    r18ByModel: rep.isR18 && extras.ratingSource === 'MODEL',
     importedAt: rep.createTime.toISOString(),
     takenAt: rep.takenAt ? rep.takenAt.toISOString() : null,
-    exif: ((await findImageExif(imageId)) as ExifInfo | null) ?? null,
+    exif: (extras.exif as ExifInfo | null) ?? null,
     displayName: rep.displayName,
     tags: await findTagsOfImage(imageId),
     locations: rows.map((r) => ({

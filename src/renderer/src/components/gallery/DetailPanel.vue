@@ -97,6 +97,10 @@
         <span class="detail-panel__r18-label">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="3" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
           R-18
+          <!-- 本地模型判的（你还没手动开关过）：判错了关掉开关就行 -->
+          <span v-if="detail.r18ByModel" class="detail-panel__by-model">
+            <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5c.7 5 4.5 8.8 9.5 9.5-5 .7-8.8 4.5-9.5 9.5-.7-5-4.5-8.8-9.5-9.5 5-.7 8.8-4.5 9.5-9.5z" fill="currentColor" /></svg>诺诺判的
+          </span>
         </span>
         <button class="detail-panel__switch" type="button" role="switch" :aria-checked="detail.isR18" aria-label="标为 R-18" @click="gallery.setR18(!detail.isR18)">
           <span class="detail-panel__knob" />

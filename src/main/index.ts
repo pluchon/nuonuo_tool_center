@@ -12,7 +12,8 @@ import { configureFileOps, flushPendingDeletes, recoverFileOps } from './service
 import { configureTransfer } from './services/fileOps/transferService'
 import { configureFolderOps } from './services/fileOps/folderOpsService'
 import { originalPathOf } from './services/galleryService'
-import { configureScan, onScanState, requeueScan, startScan, stopScanAndWait } from './services/scan/scanService'
+import { configureScan, getScanState, onScanState, requeueScan, startScan, stopScanAndWait } from './services/scan/scanService'
+import { configureRating, scheduleRating, stopRating, thresholdFromEnv } from './services/rating/ratingService'
 import { configureWatch, stopWatching, syncWatching } from './services/scan/watchService'
 import { getSettings } from './services/settingsService'
 import { windowBackground } from './window/windowControl'
@@ -163,12 +164,28 @@ async function bootstrap(): Promise<void> {
   const state = await bootDatabase(dbLocation)
   handleLtmProtocol(paths.thumbs, paths.backgrounds, originalPathOf)
   configureScan({ thumbsDir: paths.thumbs, categoryHomeOverride: paths.categoryHomeOverride })
-  // 扫描做完（目录可能有增删、移动硬盘接回来了）后重新对一遍监听的目录
+  // 本地分级：扫描进行中让路；判出 R-18 时通知界面刷新
+  configureRating({
+    modelsRoot: paths.models,
+    thumbsDir: paths.thumbs,
+    workerPath: join(currentDir, 'ratingWorker.js'),
+    canRun: () => getScanState().progress === null,
+    threshold: thresholdFromEnv(process.env.LTM_R18_THRESHOLD),
+    onR18: (count) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(IpcEvent.ratingR18, count)
+        }
+      }
+    }
+  })
+  // 扫描做完（目录可能有增删、移动硬盘接回来了）后重新对一遍监听的目录，再给新图分级
   let scanning = false
   onScanState((state) => {
     broadcastScanState(state)
     if (scanning && !state.progress) {
       void syncWatching()
+      scheduleRating()
     }
     scanning = state.progress !== null
   })
@@ -195,6 +212,8 @@ async function bootstrap(): Promise<void> {
   if (state === 'READY') {
     await autoScanOnStart()
     await syncWatching()
+    // 上次没判完的接着判（自动扫描在跑时先让路，扫完会再叫一次）
+    scheduleRating()
   }
 }
 
@@ -235,6 +254,8 @@ app.on('will-quit', (event) => {
     .catch((err: unknown) => log.error('退出前执行删除失败', err))
     .then(() => stopScanAndWait())
     .catch((err: unknown) => log.error('停止扫描失败', err))
+    .then(() => stopRating())
+    .catch((err: unknown) => log.error('停止本地分级失败', err))
     .then(() => shutdownDatabase(paths.lockFile))
     .catch((err: unknown) => log.error('关闭数据库失败', err))
     .finally(() => app.exit(0))

@@ -7,6 +7,7 @@
 - 开发：`npm run dev`；类型检查：`npm run typecheck`；构建：`npm run build`；单元测试：`npm test`；端到端测试：先 `npm run build` 再 `npm run test:e2e`（截图和差异图在 `test-output/phase1/`）。改了 `src/main/db/schema.ts` 后执行 `npm run db:generate` 生成新迁移（只往前加，不改历史迁移；要手写数据转换时用 `--custom`，再把快照换成完整结构，`npm run db:generate` 报 “No schema changes” 才算对上）。
 - 数据目录由环境变量决定：`LTM_DATA_DIR`（数据库、缩略图、模型、日志、锁文件）和 `LTM_CATEGORY_HOME`（类目录）。
   - `npm run dev` 默认用 `D:\ltm-dev\data` 和 `D:\ltm-dev\library`；端到端测试用 `D:\ltm-dev\e2e\<场景>`。
+  - 本地分级模型目录由 `LTM_MODEL_DIR` 指定，开发和端到端测试共用 `D:\ltm-dev\models`（约 470 MB，从真实目录只读复制来的）；不设时用数据目录下的 `models`，缺了应用会自动下载。
   - 不设 `LTM_DATA_DIR` 时（桌面快捷方式）固定为真实目录 `%APPDATA%\LocalToolManage`，不随 productName 变。开发和测试不要碰真实目录。
 - 图库数据是否被占用看应用自己的锁文件 `ltm.lock`（记真实 PID 和进程名），不看 PGlite 的 `postmaster.pid`（永远是假 PID -42，崩溃会残留）。PGlite 只有一条连接：应用运行时不要用脚本去开同一个 pgdata。
 - 日志在数据目录的 `logs\main.log`（5 MB 滚动，留 3 份）；开发模式记 info，快捷方式运行只记 warn 以上，`LTM_LOG_LEVEL` 可覆盖。

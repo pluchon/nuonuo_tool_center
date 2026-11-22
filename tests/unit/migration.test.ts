@@ -130,6 +130,22 @@ describe('迁移 0001：按画布定稿调整结构', () => {
     await pg.close()
   })
 
+  it('迁移 0004：本地分级上线前的 R-18 标记记成手动的，其他图不动', async () => {
+    const pg = await migratedDb(migrationsUpTo(4))
+    await pg.exec(`
+      INSERT INTO image (content_hash, format, byte_size, is_r18) VALUES ('a', 'JPG', 1, true), ('b', 'JPG', 1, false);
+      INSERT INTO image (content_hash, format, byte_size, is_r18, rating_source) VALUES ('c', 'JPG', 1, true, 'MODEL');
+    `)
+    await migrate(drizzle({ client: pg }), { migrationsFolder: join(ROOT, 'drizzle') })
+    const rows = (await pg.query<{ content_hash: string; rating_source: string | null }>(`SELECT content_hash, rating_source FROM image ORDER BY content_hash`)).rows
+    expect(rows).toEqual([
+      { content_hash: 'a', rating_source: 'MANUAL' },
+      { content_hash: 'b', rating_source: null },
+      { content_hash: 'c', rating_source: 'MODEL' }
+    ])
+    await pg.close()
+  })
+
   it('标签名、别名、分类名按不区分大小写唯一；类目录只能有一条', async () => {
     const pg = await migratedDb(join(ROOT, 'drizzle'))
     await pg.exec(`INSERT INTO tag (name, category_id) VALUES ('Miku', 1)`)

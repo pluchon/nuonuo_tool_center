@@ -44,7 +44,8 @@ export function buildDataPaths(root: string, env: NodeJS.ProcessEnv): DataPaths 
     root,
     pgdata: join(root, 'pgdata'),
     thumbs: join(root, 'thumbs'),
-    models: join(root, 'models'),
+    // 开发和端到端测试用 LTM_MODEL_DIR 共用一份模型（约 470 MB），不在每个测试目录里各下一份
+    models: env.LTM_MODEL_DIR?.trim() ? resolve(env.LTM_MODEL_DIR.trim()) : join(root, 'models'),
     logs: join(root, 'logs'),
     backgrounds: join(root, 'backgrounds'),
     lockFile: join(root, 'ltm.lock'),

@@ -7,6 +7,15 @@ export default defineConfig({
   main: {
     resolve: {
       alias: { '@shared': resolve('src/shared') }
+    },
+    // 本地分级跑在单独的 utilityProcess 里，要单独打一个入口
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          ratingWorker: resolve('src/main/workers/ratingWorker.ts')
+        }
+      }
     }
   },
   preload: {

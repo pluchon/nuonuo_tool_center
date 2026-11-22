@@ -6,6 +6,8 @@ import { _electron, type ElectronApplication, type Page } from 'playwright'
 
 // 端到端测试的数据全部放在这里，绝不碰真实数据目录
 export const E2E_ROOT = 'D:\\ltm-dev\\e2e'
+// 开发和测试共用的模型目录
+export const MODEL_DIR = 'D:\\ltm-dev\\models'
 export const PROJECT_ROOT = resolve('.')
 export const SHOT_DIR = resolve('test-output/phase1')
 
@@ -50,7 +52,14 @@ export async function launchApp(dirs: CaseDirs): Promise<{ app: ElectronApplicat
     }
   }
   // 删除的文件挪进场景目录下的 trash，不进系统回收站
-  Object.assign(env, { LTM_DATA_DIR: dirs.data, LTM_CATEGORY_HOME: dirs.library, LTM_LOG_LEVEL: 'info', LTM_FAKE_TRASH_DIR: join(dirs.root, 'trash') })
+  // 本地分级模型用开发目录里共用的那份，不在每个场景里各下载一次
+  Object.assign(env, {
+    LTM_DATA_DIR: dirs.data,
+    LTM_CATEGORY_HOME: dirs.library,
+    LTM_LOG_LEVEL: 'info',
+    LTM_FAKE_TRASH_DIR: join(dirs.root, 'trash'),
+    LTM_MODEL_DIR: env.LTM_MODEL_DIR ?? MODEL_DIR
+  })
   const app = await _electron.launch({ executablePath: electronPath as unknown as string, args: [PROJECT_ROOT], env })
   openApps.add(app)
   app.once('close', () => openApps.delete(app))

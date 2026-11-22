@@ -97,7 +97,9 @@ export const IpcEvent = {
   // 扫描状态变化：开始、进度、结束都推同一个结构
   scanState: 'scan:state',
   // 一批文件操作真正执行完（删除进回收站之后），带上失败的数量和原因
-  fileOpDone: 'fileOp:done'
+  fileOpDone: 'fileOp:done',
+  // 本地分级把一些图判成了 R-18（带张数）：界面刷新计数和网格
+  ratingR18: 'rating:r18'
 } as const
 
 // 实际生效的明暗（“跟随系统”已经解析过）
@@ -352,6 +354,8 @@ export interface ImageDetailVO {
   hash: string
   thumb: ThumbState
   isR18: boolean
+  // R-18 是本地模型判的（你还没手动开关过）：详情的 R-18 一行标“诺诺判的”
+  r18ByModel: boolean
   importedAt: string
   takenAt: string | null
   exif: ExifInfoVO | null

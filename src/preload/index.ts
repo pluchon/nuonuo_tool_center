@@ -129,6 +129,14 @@ const api = {
       return () => ipcRenderer.removeListener(IpcEvent.scanState, wrapped)
     }
   },
+  rating: {
+    // 订阅“本地分级判出了 R-18”，返回取消订阅的函数
+    onR18: (listener: (count: number) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, count: number): void => listener(count)
+      ipcRenderer.on(IpcEvent.ratingR18, handler)
+      return () => ipcRenderer.removeListener(IpcEvent.ratingR18, handler)
+    }
+  },
   ai: {
     status: (): Promise<ApiResponse<AiStatusVO>> => ipcRenderer.invoke(IpcChannel.aiStatus),
     ideas: (): Promise<ApiResponse<string[]>> => ipcRenderer.invoke(IpcChannel.aiIdeas),

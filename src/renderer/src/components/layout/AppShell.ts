@@ -1,5 +1,6 @@
 import { computed, defineComponent, onBeforeUnmount, onMounted } from 'vue'
 import { onFileOpDone, pathOfDropped } from '@/api/files'
+import { onRatingR18 } from '@/api/rating'
 import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue'
 import SettingsDialog from '@/components/dialogs/SettingsDialog.vue'
 import TransferDialog from '@/components/dialogs/TransferDialog.vue'
@@ -45,6 +46,12 @@ export default defineComponent({
       }
     })
     onBeforeUnmount(offDone)
+    // 本地分级判出了 R-18：侧栏计数、网格模糊和详情都要跟着变
+    const offRating = onRatingR18(() => {
+      void library.load()
+      void gallery.afterEdit()
+    })
+    onBeforeUnmount(offRating)
 
     // 删除类目录 / 从图库移除源目录的确认标题（照原型）
     const dangerTitle = computed(() => {

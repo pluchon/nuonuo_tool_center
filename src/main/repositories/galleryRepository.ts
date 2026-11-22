@@ -177,11 +177,11 @@ export async function findRowsOfImages(imageIds: number[]): Promise<GalleryRow[]
     .orderBy(imageFile.id)
 }
 
-// 一张图的拍摄信息
-export async function findImageExif(imageId: number): Promise<unknown> {
+// 一张图的拍摄信息和分级来源（详情面板用）
+export async function findImageExtras(imageId: number): Promise<{ exif: unknown; ratingSource: 'MODEL' | 'MANUAL' | null }> {
   const { db } = getDatabase()
-  const [row] = await db.select({ exif: image.exif }).from(image).where(eq(image.id, imageId)).limit(1)
-  return row?.exif ?? null
+  const [row] = await db.select({ exif: image.exif, ratingSource: image.ratingSource }).from(image).where(eq(image.id, imageId)).limit(1)
+  return { exif: row?.exif ?? null, ratingSource: row?.ratingSource ?? null }
 }
 
 // 按 id 查一个文件位置的绝对路径所需信息

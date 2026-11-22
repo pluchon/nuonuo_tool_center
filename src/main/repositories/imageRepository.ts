@@ -1,4 +1,4 @@
-import { eq, inArray } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { image } from '../db/schema'
 
@@ -52,7 +52,35 @@ export async function updateDisplayName(id: number, displayName: string | null):
 // 批量设置 R-18
 export async function updateR18(ids: number[], isR18: boolean): Promise<void> {
   const { db } = getDatabase()
-  await db.update(image).set({ isR18 }).where(inArray(image.id, ids))
+  // 手动开关过的图记成 MANUAL：本地模型以后不再改它
+  await db.update(image).set({ isR18, ratingSource: 'MANUAL' }).where(inArray(image.id, ids))
+}
+
+// 还没分级过的图（手动开关过的、缩略图没生成好的不算），先导入的先判
+export async function findRatingCandidates(limit: number): Promise<Array<{ id: number; contentHash: string }>> {
+  const { db } = getDatabase()
+  return db
+    .select({ id: image.id, contentHash: image.contentHash })
+    .from(image)
+    .where(and(eq(image.deleteState, 0), isNull(image.ratingSource), eq(image.thumbReady, THUMB_READY)))
+    .orderBy(asc(image.id))
+    .limit(limit)
+}
+
+// 记下本地模型的分级；只在这张图还没被手动开关过时写（和手动操作并发时手动的赢），返回是否写入
+export async function saveModelRating(
+  id: number,
+  rating: 'UNKNOWN' | 'GENERAL' | 'SENSITIVE' | 'QUESTIONABLE' | 'EXPLICIT',
+  scores: unknown,
+  isR18: boolean
+): Promise<boolean> {
+  const { db } = getDatabase()
+  const rows = await db
+    .update(image)
+    .set({ rating, ratingScores: scores, ratingSource: 'MODEL', ...(isR18 ? { isR18: true } : {}) })
+    .where(and(eq(image.id, id), isNull(image.ratingSource)))
+    .returning({ id: image.id })
+  return rows.length > 0
 }
 
 // 只更新缩略图状态

@@ -36,7 +36,7 @@
   ipc/*（参数校验、调用）→ services/*（业务、事务、状态流转）→ repositories/*（Drizzle）→ PGlite
   ├─ services/scan        扫描、缩略图、实时监听
   ├─ services/fileOps     唯一允许写文件系统的地方，操作串行排队，先写日志再动文件
-  ├─ services/rating      WD 分级（开工时挪进 utilityProcess，不卡主进程）
+  ├─ services/rating      WD 分级（调度在主进程，推理在 workers/ratingWorker 的 utilityProcess 里，不卡主进程）
   ├─ services/cloud       OSS 临时上传、百炼调用、用量记账
   └─ services/ai          诺诺：harness、找图、看图队列、记忆与做梦（第 6 节，待建）
 自定义协议 ltm://thumb/{hash}、ltm://file/{fileId}、ltm://bg/{name}
@@ -159,6 +159,9 @@
 
 - 一张图是否 R-18 由 `is_r18` 决定：你手动开关的永远优先（`rating_source = MANUAL`）；本地 WD 模型判为 R-18 的直接打上（`MODEL`），详情的 R-18 一行标“诺诺判的”，判错了关掉开关就行，不设单独的复核流程。
 - 本地判定口径：questionable + explicit 分数之和 ≥ 0.5 才算（只标明显的）【已核实：用户确认安全的 100 张全部放行，随机 40 张拦下 3 张】。只用 CPU 2 线程，扫描后在后台补判，不跑 DirectML。
+- 怎么跑：WD 在单独的 utilityProcess（`workers/ratingWorker.ts`，进程优先级调低）里推理，输入是已经生成好的缩略图（所有格式都已解码成 webp，不再读原图）。启动后和每次扫描结束时开始一轮，扫描进行中让路，一次一张；空闲 2 分钟关掉工作进程（模型常驻约 0.8 GB）。判过的记 `rating`、`rating_scores`、`rating_source = MODEL`；判不了的（缩略图读不出、超时）记成 UNKNOWN，不反复重试。判出 R-18 时通知界面刷新侧栏计数和网格。
+- 手动开关过的图记 `rating_source = MANUAL`，模型永远不改；模型写库时也只写还没有来源的图，和手动操作同时发生时手动的赢。本地分级上线前已有的 R-18 标记由迁移 0004 记成手动的。
+- 模型（`wd-swinv2-tagger-v3` 的 `model.onnx` 和 `selected_tags.csv`）在数据目录的 `models` 下，缺了在后台自动下载：先 huggingface.co，不通换 hf-mirror.com；下到 `.part`，断了下次用 Range 接着下，下完改名。开发和端到端测试用 `LTM_MODEL_DIR` 共用 `D:\ltm-dev\models` 里的一份。
 - 开关：关着是普通输入框的底加中性开关（白底灰圆点），开着整行淡玫红、开关变红。
 - “R-18 图”视图只列开了 R-18 的图；缩略图在所有视图里默认模糊（设置可关），选中后详情和大图正常显示。在这个视图里关掉开关，图就离开列表。
 - R-18 图不上云、不进 AI 记忆和云端检索；本地关键词检索照常能搜到。
@@ -338,6 +341,7 @@ AI 前置实测（2026-11-22，测试图是画出来的，没用真实图片）�
 
 - 单元测试 `npm test`；端到端 `npm run build` 后 `npm run test:e2e`（Playwright 驱动 Electron，每个场景用独立的 `D:\ltm-dev\e2e\<场景>`）。
 - `tests/e2e/assistant.test.ts` 走一遍诺诺助手（本地路由、开 R-18、交给模型的一问、大图、范围、对话记录、没有凭证的整页提示），交给模型的那一问会真实调用百炼（约 3k token）。
+- `tests/e2e/rating.test.ts` 用渐变测试图走本地分级：正常阈值下不打 R-18；`LTM_R18_THRESHOLD=0`（测试用，只能往下调）时全部判成 R-18、标“诺诺判的”，手动关掉后重启也不会被判回来。
 - `tests/e2e/usersim.test.ts` 把主要操作都点一遍，全程收集控制台报错和未捕获异常，必须为空；`extreme.test.ts` 覆盖空文件、坏文件、超大图、极端比例、深目录、怪文件名、运行中源目录被删等；`tour.test.ts` 在浅色、深色下各走一遍主要页面并截图（`test-output/phase1/app/tour-*.png`），改界面后对照检查。“打开文件夹”类按钮在测试里只记录、不弹资源管理器。
 - README 截图由 `LTM_SHOTS=1` 时的 `readme-shots.test.ts` 生成（画出来的风景图，不用真实图片）；README 的图片放 OSS `zlhimage` 的 `item_picture/nuonuo_tool_center/readme/`，不进仓库，不写图片怎么生成的。
 - 原型预览：`node docs/prototype/tools/render.cjs` 把原型按预设展开成静态 HTML（见 [`prototype/README.md`](prototype/README.md)）。
@@ -346,7 +350,7 @@ AI 前置实测（2026-11-22，测试图是画出来的，没用真实图片）�
 
 **已完成（P0）**：导入、扫描、缩略图、实时监听；网格浏览、筛选、多选；名字、标签、R-18 手动标记；删除、移动、复制和撤销、崩溃对账；目录管理；标签管理；大图；设置；各种特殊和异常状态。
 
-**AI 阶段开工顺序**（第 1、2 步已完成）：
+**AI 阶段开工顺序**（第 1、2、3 步已完成）：
 1. 前置：补 AI 相关表和迁移；`api_usage` 记账；百炼客户端统一前缀和缓存标记；验证函数调用、显式缓存、base64 传图、批量推理。
 2. 诺诺助手：harness、本地找图路由、关键词检索、对话页和对话记录、反馈。
 3. 本地分级：WD 挪进 utilityProcess，扫描后补判，“诺诺判的”。

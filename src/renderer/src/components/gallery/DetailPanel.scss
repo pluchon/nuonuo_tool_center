@@ -216,6 +216,21 @@
     color: var(--c-i-A23D62);
   }
 
+  // “诺诺判的”小胶囊
+  &__by-model {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 18px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: var(--c-surface);
+    border: 1px solid var(--c-b-F2C6D4);
+    color: var(--c-i-A23D62);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
   &__switch {
     position: relative;
     width: 44px;
