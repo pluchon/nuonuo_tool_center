@@ -8,7 +8,7 @@ const MODEL_MAX_OUTPUT = 131_072
 
 // 百炼返回实际用量前，以 UTF-8 字节数保守估算文本，并给协议封装留出余量。
 // 传给对话模型的图片已经缩至长边 512 像素，base64 字符串不作为文本计数。
-function messageBound(message: PromptMessage): number {
+export function messageBound(message: PromptMessage): number {
   const text = typeof message.content === 'string'
     ? Buffer.byteLength(message.content)
     : message.content.reduce((total, part) => total + (part.type === 'text' ? Buffer.byteLength(part.text) : 1024) + 16, 0)

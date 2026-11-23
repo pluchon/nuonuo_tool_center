@@ -30,7 +30,7 @@ const used = computed(() => usage.value?.usedTokens ?? 0)
 const percent = computed(() => Math.min(100, used.value / AI_CONTEXT_WINDOW * 100))
 const percentText = computed(() => percent.value > 0 && percent.value < 1 ? '<1%' : Math.round(percent.value) + '%')
 const legend = computed(() => usage.value
-  ? `${usage.value.estimated ? '最近请求估算' : '最近请求'} ${used.value.toLocaleString('zh-CN')} / 475K Token`
+  ? `${usage.value.compacted ? '精简后估算' : usage.value.estimated ? '最近请求估算' : '最近请求'} ${used.value.toLocaleString('zh-CN')} / 475K Token`
   : `${props.messages.length ? '—' : '0'} / 475K Token`)
 </script>
 

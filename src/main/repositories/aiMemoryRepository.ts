@@ -1,13 +1,20 @@
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
-import { getDatabase } from '../db/client'
+import { getDatabase, type AppDatabase } from '../db/client'
 import { aiEvent, aiJob, aiMemory } from '../db/schema'
 
 export type AiMemoryEntity = typeof aiMemory.$inferSelect
 export type AiEventEntity = typeof aiEvent.$inferSelect
 
+export async function excludedImageIds(prefix: string): Promise<Set<number>> {
+  const rows = await getDatabase().db.select({ content: aiMemory.content }).from(aiMemory).where(and(
+    eq(aiMemory.kind, 'preference'), eq(aiMemory.deleteState, 0), isNull(aiMemory.validTo),
+    sql`starts_with(${aiMemory.content}, ${prefix}::text)`
+  ))
+  return new Set(rows.map((row) => Number(row.content.slice(prefix.length))).filter(Number.isSafeInteger))
+}
+
 // 还有效的记忆（可信度高的在前）
-export async function findValidMemories(limit = 200): Promise<AiMemoryEntity[]> {
-  const { db } = getDatabase()
+export async function findValidMemories(limit = 200, db: Pick<AppDatabase, 'select'> = getDatabase().db): Promise<AiMemoryEntity[]> {
   return db
     .select()
     .from(aiMemory)
@@ -28,9 +35,11 @@ export async function findValidMemoryByContent(content: string): Promise<AiMemor
 }
 
 // 新增一条记忆
-export async function insertMemoryRow(content: string, kind: string, confidence: number, sourceEventId: number | null): Promise<void> {
+export async function insertMemoryRow(content: string, kind: string, confidence: number, sourceEventId: number | null, blockKey?: string): Promise<void> {
   const { db } = getDatabase()
-  await db.insert(aiMemory).values({ content, kind, confidence, sourceEventId })
+  await db.execute(sql`insert into ai_memory(content,kind,confidence,source_event_id)
+    select ${content},${kind},${confidence},${sourceEventId} where not exists
+    (select 1 from app_setting where key=${blockKey ?? ''} and delete_state=0 and (value #>> '{}')::bigint >= ${sourceEventId})`)
 }
 
 // 改可信度；低到一定程度就标失效（旧的只标失效、不删）
@@ -49,13 +58,6 @@ export async function findMemoriesByIds(ids: number[]): Promise<AiMemoryEntity[]
   }
   const { db } = getDatabase()
   return db.select().from(aiMemory).where(inArray(aiMemory.id, ids))
-}
-
-// 记忆最近一次变化的时间（新增、改可信度、失效都算）
-export async function lastMemoryChange(): Promise<Date | null> {
-  const { db } = getDatabase()
-  const [row] = await db.select({ t: sql<Date | null>`max(${aiMemory.updateTime})` }).from(aiMemory)
-  return row?.t ? new Date(row.t) : null
 }
 
 // 某条之后的事件（不含 R-18 的），按先后
