@@ -1,11 +1,16 @@
-import { mkdir, readdir, stat, unlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { mkdir, open, readdir, readFile, stat, unlink, type FileHandle } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import sharp from 'sharp'
-import { CUSTOM_BACKGROUND_NAME } from '@shared/settings'
+import { CUSTOM_BACKGROUND_NAME, type AppSettings } from '@shared/settings'
 import { BizError } from '../common/bizError'
 import { getLogger } from '../common/logger'
+import { publishExclusive } from '../common/publishFile'
 import { getDatabase } from '../db/client'
 import { findAllContentHashes } from '../repositories/imageRepository'
+import { updateSettings } from './settingsService'
+import { openBmp } from './scan/bmpDecoder'
+import { formatOfFile } from './scan/formats'
 
 const log = getLogger('system')
 
@@ -66,11 +71,30 @@ export async function exportBackup(target: string): Promise<number> {
   const { pg } = getDatabase()
   const dump = await pg.dumpDataDir('gzip')
   const bytes = Buffer.from(await dump.arrayBuffer())
-  await writeFile(target, bytes, { flag: 'wx' }).catch((err: NodeJS.ErrnoException) => {
-    throw new BizError('DEPENDENCY_FAILED', err.code === 'EEXIST' ? '这个位置已经有同名文件了' : `备份写不进去：${err.message}`)
-  })
+  const staging = join(dirname(target), `.ltm-backup-${randomUUID()}.tmp`)
+  try {
+    const file = await open(staging, 'wx')
+    try {
+      await writeAndClose(file, bytes)
+      await publishExclusive(staging, target)
+    } finally {
+      await unlinkWithRetry(staging).catch((err: unknown) => log.warn('无法清理临时备份文件', err))
+    }
+  } catch (err) {
+    const cause = err as NodeJS.ErrnoException
+    throw new BizError('DEPENDENCY_FAILED', cause.code === 'EEXIST' ? '这个位置已经有同名文件了' : `备份写不进去：${cause.message}`)
+  }
   log.info(`已导出备份：${target}（${bytes.length} 字节）`)
   return bytes.length
+}
+
+async function writeAndClose(file: FileHandle, bytes: Buffer): Promise<void> {
+  try {
+    await file.writeFile(bytes)
+    await file.sync()
+  } finally {
+    await file.close()
+  }
 }
 
 // 删一个文件；刚写好的文件可能正被杀毒软件扫描（EBUSY / EPERM），隔一会儿再试几次
@@ -102,22 +126,42 @@ export async function pruneBackgrounds(bgDir: string, keep: string | null): Prom
   )
 }
 
-// 导入自定义背景：缩到最长边 2560、转成 webp 存进 backgrounds，顺手删掉旧的；返回新文件名
-export async function importCustomBackground(source: string, bgDir: string, now = Date.now()): Promise<string> {
+let backgroundSave: Promise<void> = Promise.resolve()
+
+// 按选图顺序提交。数据库确认新文件后，才能清理仍在使用的旧背景。
+export function importCustomBackground(source: string, bgDir: string, now = Date.now()): Promise<AppSettings> {
+  const save = backgroundSave.then(() => saveBackground(source, bgDir, now))
+  backgroundSave = save.then(() => undefined, () => undefined)
+  return save
+}
+
+async function saveBackground(source: string, bgDir: string, now: number): Promise<AppSettings> {
   await mkdir(bgDir, { recursive: true })
-  const name = `custom-${now}.webp`
+  let bytes: Buffer
   try {
-    await sharp(source, { limitInputPixels: 400_000_000 })
+    const input = formatOfFile(source) === 'BMP' ? openBmp(await readFile(source)) : sharp(source, { limitInputPixels: 400_000_000 })
+    if (!input) throw new Error('不支持或已损坏的 BMP')
+    bytes = await input
       .rotate()
       .resize({ width: BACKGROUND_MAX_EDGE, height: BACKGROUND_MAX_EDGE, fit: 'inside', withoutEnlargement: true })
       .webp({ quality: 86 })
-      .toFile(join(bgDir, name))
+      .toBuffer()
   } catch (err) {
     log.warn(`背景图读不了：${source}`, err)
     throw new BizError('BAD_REQUEST', '这张图读不了，换一张试试')
   }
-  await pruneBackgrounds(bgDir, name)
-  return name
+  for (let stamp = now; ; stamp++) {
+    const name = `custom-${stamp}.webp`
+    const file = await open(join(bgDir, name), 'wx').catch((err: NodeJS.ErrnoException) => {
+      if (err.code === 'EEXIST') return null
+      throw err
+    })
+    if (!file) continue
+    await writeAndClose(file, bytes)
+    const settings = await updateSettings({ background: 'custom', customBackground: name })
+    await pruneBackgrounds(bgDir, name)
+    return settings
+  }
 }
 
 // 开机自动启动只在正式使用（没设 LTM_DATA_DIR）时改系统登记，开发和测试不碰
