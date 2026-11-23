@@ -1,5 +1,6 @@
 import type { BrowserWindow, Rectangle } from 'electron'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { getLogger } from '../common/logger'
 
 const log = getLogger('window')
@@ -62,17 +63,25 @@ export function fitToScreens(state: WindowState, workAreas: Rectangle[]): Window
     const h = Math.min(state.y + state.height, a.y + a.height) - Math.max(state.y, a.y)
     return { w, h }
   }
-  const host = workAreas.find((a) => {
-    const o = overlap(a)
-    return o.w >= VISIBLE_W && o.h >= VISIBLE_H
-  })
+  let host: Rectangle | undefined
+  let largest = 0
+  for (const area of workAreas) {
+    const { w, h } = overlap(area)
+    if (w >= VISIBLE_W && h >= VISIBLE_H && w * h > largest) {
+      host = area
+      largest = w * h
+    }
+  }
   const area = host ?? workAreas[0]
   const width = Math.min(state.width, Math.max(MIN_WIDTH, area.width))
   const height = Math.min(state.height, Math.max(MIN_HEIGHT, area.height))
   if (!host) {
     return { ...state, x: null, y: null, width, height }
   }
-  return { ...state, width, height }
+  // 上方显示器断开或缩放改变后，窗口下半部可能仍可见，但标题栏已在屏幕外。
+  const y = state.y
+  const titleVisible = y !== null && workAreas.some((a) => y >= a.y && y + 32 <= a.y + a.height && overlap(a).w >= VISIBLE_W)
+  return { ...state, y: titleVisible ? y : host.y, width, height }
 }
 
 // 读上次的窗口状态；没有或读不了时返回 null（用默认大小居中）
@@ -100,10 +109,17 @@ export function trackWindowState(win: BrowserWindow, file: string): void {
     }
     const b = win.getNormalBounds()
     const state: WindowState = { x: b.x, y: b.y, width: b.width, height: b.height, maximized: win.isMaximized() }
+    const tmp = `${file}.${randomUUID()}.tmp`
     try {
-      writeFileSync(file, JSON.stringify(state))
+      writeFileSync(tmp, JSON.stringify(state), { flush: true })
+      renameSync(tmp, file)
     } catch (err) {
       log.warn('记不下窗口位置', err)
+      try {
+        rmSync(tmp, { force: true })
+      } catch (cleanupError) {
+        log.warn('清理窗口状态临时文件失败', cleanupError)
+      }
     }
   }
   const later = (): void => {

@@ -32,6 +32,18 @@ describe('窗口位置记忆', () => {
     expect(fitToScreens(s, [MAIN]).x).toBeNull()
   })
 
+  it('上方显示器断开后，将仍露出一部分的窗口标题栏移回工作区', () => {
+    const saved = { x: 120, y: -600, width: 1280, height: 820, maximized: false }
+    expect(fitToScreens(saved, [MAIN])).toEqual({ ...saved, y: 0 })
+  })
+
+  it('横跨两块屏幕时按重叠面积最大的工作区恢复尺寸', () => {
+    const smaller = { ...MAIN, width: 1000 }
+    const second = { ...SIDE, x: 1000 }
+    const saved = { x: 800, y: 60, width: 1300, height: 800, maximized: false }
+    expect(fitToScreens(saved, [smaller, second])).toEqual(saved)
+  })
+
   it('比屏幕还大的窗口缩到工作区以内', () => {
     const s = { x: 0, y: 0, width: 3000, height: 2000, maximized: false }
     expect(fitToScreens(s, [MAIN])).toMatchObject({ width: 1920, height: 1040 })
