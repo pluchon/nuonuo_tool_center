@@ -27,7 +27,7 @@
       </div>
 
       <!-- “AI 建议”视图里：诺诺的建议 -->
-      <AiSuggestCard v-if="aiView" :image-id="detail.imageId" />
+      <AiSuggestCard v-if="aiView" :image-id="detail.imageId" :is-r18="detail.isR18" />
 
       <div class="detail-panel__block">
         <div class="detail-panel__row-head">

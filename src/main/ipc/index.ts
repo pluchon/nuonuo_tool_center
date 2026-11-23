@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, shell, type IpcMainInvokeEvent } from 'elec
 import { join } from 'node:path'
 import {
   IpcChannel,
+  organizeUsesLookQueue,
   type AddTagDTO,
   type AiAskDTO,
   type CreateTagDTO,
@@ -396,6 +397,9 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   })
   handle(IpcChannel.lookCancelAll, async () => {
     requireDatabase()
+    if (organizeUsesLookQueue(getOrganizeState().phase)) {
+      throw new BizError('CONFLICT', '请从一键整理停止当前整理')
+    }
     return cancelAllLooks()
   })
   handle(IpcChannel.suggestionList, async (_event, imageId: number) => {

@@ -529,13 +529,13 @@ export interface AiAskResultVO {
   message: AiMessageVO
 }
 
-// 看图队列里的一张：正在看 / 等待中 / 出错（带原因）
+// 看图队列里的一张：实时看图、批量处理、等待中或出错
 export interface LookRowVO {
   jobId: number
   imageId: number
   name: string
   hash: string
-  state: 'RUNNING' | 'QUEUED' | 'FAILED'
+  state: 'RUNNING' | 'BATCH' | 'QUEUED' | 'FAILED'
   error: string | null
 }
 
@@ -543,13 +543,18 @@ export interface LookRowVO {
 export interface LookStateVO {
   count: number
   rows: LookRowVO[]
+  canCancel: boolean
+  needsApiKey: boolean
+  localOnly?: boolean
 }
+
+export const LOOK_KEY_HINT = '请在「设置 → AI」中配置百炼 API Key'
 
 // 一项待确认的 AI 建议
 export interface AiSuggestionVO {
-  // 名字 name、角色 who、作品 work、出处 src、标签 tag:<名字>、放进类目录 dir
+  // 名字、角色、作品、出处、标签、放进类目录和 R-18 分级复核
   key: string
-  kind: 'name' | 'tag' | 'who' | 'work' | 'src' | 'dir'
+  kind: 'name' | 'tag' | 'who' | 'work' | 'src' | 'dir' | 'r18Review'
   value: string
   // 诺诺看图给的，还是外部 AI 贴回来的
   origin: 'NONO' | 'EXTERNAL'
@@ -584,6 +589,11 @@ export interface OrganizeFolderVO {
 // 一键整理的阶段：空闲、看图中、出方案中、方案待确认、分图中、方案已批后陆续补图（本地分级后判完的老图按半价看完再按方案分）
 export type OrganizePhase = 'IDLE' | 'LOOKING' | 'PLANNING' | 'PLAN_READY' | 'ASSIGNING' | 'FOLLOWING'
 
+// 整理正在使用看图队列时，避免从队列弹窗取消整理需要的图片。
+export function organizeUsesLookQueue(phase: OrganizePhase): boolean {
+  return phase === 'LOOKING' || phase === 'FOLLOWING'
+}
+
 // 一键整理的状态
 export interface OrganizeStateVO {
   phase: OrganizePhase
@@ -605,7 +615,7 @@ export interface OrganizeEstimateVO {
   toLook: number
   tokens: number
   yuan: number
-  // 本地分级还剩多少张没判：不挡着开始，判完的按半价陆续补进来（费用已按最多都要看算进去）
+  // 本地分级还剩多少张没判；全部判完后才能开始整理。
   ratingLeft: number
 }
 

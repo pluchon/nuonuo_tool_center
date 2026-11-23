@@ -2,6 +2,7 @@
 // 结果都是“放进类目录”的建议，进“AI 建议”由你审；R-18 图不看、不分。状态记在 app_setting，退出后重开接着来
 import {
   DIR_NAME_MAX,
+  LOOK_KEY_HINT,
   ORGANIZE_FOLDERS_MAX,
   ORGANIZE_TERMS_MAX,
   type OrganizeEstimateVO,
@@ -9,7 +10,7 @@ import {
   type OrganizeStateVO
 } from '@shared/api'
 import { parseAssistJson } from '@shared/assistJson'
-import { BAILIAN_CONFIG, ORGANIZE_COST, readCloudCredentials } from '../../config/cloudConfig'
+import { BAILIAN_CONFIG, ORGANIZE_COST, bailianUnavailableMessage, isTokenPlanLocalMode, readCloudCredentials } from '../../config/cloudConfig'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isValidDirName } from '../../common/pathUtil'
@@ -17,12 +18,12 @@ import { findActiveSettings, upsertSettings } from '../../repositories/appSettin
 import {
   countLookCandidates,
   countLookProgress,
-  findLookCandidates,
+  enqueueNewLookJobs,
   findOpenLookJobs,
   findOrganizeTerms,
   cancelBacklogJobs,
-  cancelFailedLookJobs,
-  insertLookJobs,
+  enqueueOrganizeLooks,
+  LOOK_BACKLOG_PRIORITY,
   insertOrganizeResults,
   type OrganizeTerms
 } from '../../repositories/aiResultRepository'
@@ -30,7 +31,7 @@ import { countRatingCandidates } from '../../repositories/imageRepository'
 import { categoryTopNames } from '../fileOps/folderOpsService'
 import { isRatingBusy } from '../rating/ratingService'
 import { chatCall } from './bailianClient'
-import { PRIORITY_BACKLOG, scheduleLook } from './lookService'
+import { scheduleLook } from './lookService'
 import { habitLines } from './suggestionService'
 
 const log = getLogger('organize')
@@ -55,7 +56,8 @@ export interface OrganizeConfig {
 
 let config: OrganizeConfig | null = null
 let state: OrganizeStateVO = { phase: 'IDLE', plan: null, error: null }
-let planning = false
+let starting = false
+let planning: OrganizeStateVO | null = null
 let lookFrom: Date | null = null
 
 // 配置（启动时调一次）
@@ -68,27 +70,45 @@ export function getOrganizeState(): OrganizeStateVO {
   return state
 }
 
+// 耗时的整理阶段优先处理，自动扫描等到整理结束或方案待确认。
+export function isOrganizing(): boolean {
+  return state.phase !== 'IDLE' && state.phase !== 'PLAN_READY'
+}
+
 // 改状态：存库并推给界面
 async function setState(next: OrganizeStateVO): Promise<void> {
   state = next
   await upsertSettings([{ key: STATE_KEY, value: next }])
-  config?.onState(next)
+  if (state === next) {
+    config?.onState(next)
+  }
 }
 
-// 启动：读回上次的状态；看图中的检查一下看完没有，出方案出到一半的重新出
-export async function initOrganize(): Promise<void> {
+// 在窗口和自动扫描启动前恢复状态，让界面从上次进度开始显示。
+export async function restoreOrganize(): Promise<void> {
   const rows = await findActiveSettings()
   const row = rows.find((s) => s.key === STATE_KEY)
   const saved = row?.value as OrganizeStateVO | undefined
   const from = rows.find((s) => s.key === LOOK_FROM_KEY)?.value
-  if (typeof from === 'string' && !Number.isNaN(new Date(from).getTime())) {
-    lookFrom = new Date(from)
-  }
+  lookFrom = typeof from === 'string' && !Number.isNaN(new Date(from).getTime()) ? new Date(from) : null
   if (saved && typeof saved === 'object' && typeof saved.phase === 'string') {
     state = { phase: saved.phase, plan: saved.plan ?? null, error: saved.error ?? null }
+    config?.onState(state)
   }
+  if (state.phase === 'LOOKING') {
+    await refreshLooked()
+  }
+}
+
+// 看图队列恢复后继续原来的阶段。
+export async function resumeOrganize(): Promise<void> {
+  if (isTokenPlanLocalMode() && state.phase !== 'ASSIGNING') return
   if (state.phase === 'ASSIGNING') {
-    await setState({ phase: 'IDLE', plan: null, error: null })
+    if (state.plan) {
+      await applyApprovedPlan(state.plan)
+    } else {
+      await setState({ phase: 'IDLE', plan: null, error: null })
+    }
   } else if (state.phase === 'PLANNING') {
     void makePlan()
   } else if (state.phase === 'LOOKING') {
@@ -111,37 +131,41 @@ export async function estimateOrganize(): Promise<OrganizeEstimateVO> {
 // 方案出错后再点一次就是重试
 export async function startOrganize(): Promise<OrganizeStateVO> {
   if (!readCloudCredentials().dashscopeApiKey) {
-    throw new BizError('DEPENDENCY_FAILED', '诺诺还没连上云端')
+    throw new BizError('DEPENDENCY_FAILED', bailianUnavailableMessage(LOOK_KEY_HINT))
   }
   if (state.phase === 'PLAN_READY' && !state.plan) {
     void makePlan()
     return state
   }
-  if (state.phase !== 'IDLE') {
+  if (state.phase !== 'IDLE' || starting) {
     throw new BizError('CONFLICT', '一键整理已经在进行了')
   }
-  // 本地分级判完才能开始（没判完的图不知道能不能上云，整理一半再补容易出岔子）
-  const ratingLeft = await countRatingCandidates()
-  if (isRatingBusy() || ratingLeft > 0) {
-    throw new BizError('CONFLICT', ratingLeft > 0 ? `本地分级还剩 ${ratingLeft.toLocaleString('zh-CN')} 张，判完才能整理` : '本地分级还在进行，判完才能整理')
+  starting = true
+  try {
+    const ratingLeft = await countRatingCandidates()
+    if (isRatingBusy() || ratingLeft > 0) {
+      throw new BizError('CONFLICT', ratingLeft > 0 ? `本地分级还剩 ${ratingLeft.toLocaleString('zh-CN')} 张，判完才能整理` : '本地分级还在进行，判完才能整理')
+    }
+    const from = new Date()
+    const next: OrganizeStateVO = { phase: 'LOOKING', plan: null, error: null }
+    const enqueued = await enqueueOrganizeLooks([{ key: LOOK_FROM_KEY, value: from.toISOString() }, { key: STATE_KEY, value: next }])
+    lookFrom = from
+    state = next
+    if (enqueued > 0) {
+      log.info(`一键整理：排进 ${enqueued} 张看图`)
+    }
+    config?.onState(state)
+    scheduleLook()
+    await checkLooking()
+    return state
+  } finally {
+    starting = false
   }
-  lookFrom = new Date()
-  await upsertSettings([{ key: LOOK_FROM_KEY, value: lookFrom.toISOString() }])
-  // 取消过、出错过的图这次重新看
-  await cancelFailedLookJobs()
-  const ids = await findLookCandidates(new Date(0), 1_000_000, true)
-  if (ids.length > 0) {
-    await insertLookJobs(ids)
-    log.info(`一键整理：排进 ${ids.length} 张看图`)
-  }
-  await setState({ phase: 'LOOKING', plan: null, error: null })
-  scheduleLook()
-  await checkLooking()
-  return state
 }
 
 // 看图队列变了时调用：整理在等看图、队列里已经没有排队和进行中的（出错的不等），就出方案
 export async function checkLooking(): Promise<void> {
+  if (isTokenPlanLocalMode()) return
   if (state.phase === 'FOLLOWING') {
     await maybeFinish()
     return
@@ -150,8 +174,9 @@ export async function checkLooking(): Promise<void> {
     return
   }
   await refreshLooked()
+  const from = lookFrom
   const open = await findOpenLookJobs()
-  if (open.some((j) => j.status === 'QUEUED' || j.status === 'RUNNING')) {
+  if (state.phase !== 'LOOKING' || lookFrom !== from || open.some((j) => j.status === 'QUEUED' || j.status === 'RUNNING')) {
     return
   }
   void makePlan()
@@ -178,10 +203,14 @@ async function refreshLooked(): Promise<void> {
 
 // 取消：回到空闲（已经交出去的看完为止，还没交的补图取消，已经生成的建议留着）
 export async function cancelOrganize(): Promise<OrganizeStateVO> {
-  if (state.phase === 'FOLLOWING') {
+  if (state.phase === 'ASSIGNING') {
+    throw new BizError('CONFLICT', '正在生成分图建议，请稍候')
+  }
+  const following = state.phase === 'FOLLOWING'
+  await setState({ phase: 'IDLE', plan: null, error: null })
+  if (following) {
     await cancelBacklogJobs()
   }
-  await setState({ phase: 'IDLE', plan: null, error: null })
   return state
 }
 
@@ -189,13 +218,13 @@ export async function cancelOrganize(): Promise<OrganizeStateVO> {
 
 // 分级每判完一小批：判完、过了闸门、还没看过的老图按半价排进看图（只走批量）
 export async function onRatingBatch(): Promise<void> {
+  if (isTokenPlanLocalMode()) return
   if (state.phase !== 'FOLLOWING') {
     return
   }
-  const ids = await findLookCandidates(new Date(0), 1_000_000)
-  if (ids.length > 0) {
-    await insertLookJobs(ids, PRIORITY_BACKLOG)
-    log.info(`一键整理补图：排进 ${ids.length} 张（批量）`)
+  const count = await enqueueNewLookJobs(new Date(0), 1_000_000, LOOK_BACKLOG_PRIORITY)
+  if (count > 0) {
+    log.info(`一键整理补图：排进 ${count} 张（批量）`)
   }
   scheduleLook()
   await maybeFinish()
@@ -330,12 +359,13 @@ export function sanitizePlan(raw: unknown, allowed: Set<string>, existing: strin
 
 // 出方案：一次纯文本调用（flash、关思考、只调一次不打缓存标记）；失败时留在“方案待确认”并带上原因，可以重试
 async function makePlan(): Promise<void> {
-  if (planning) {
+  if (planning === state) {
     return
   }
-  planning = true
+  const current: OrganizeStateVO = { phase: 'PLANNING', plan: null, error: null }
+  planning = current
   try {
-    await setState({ phase: 'PLANNING', plan: null, error: null })
+    await setState(current)
     const all = await findOrganizeTerms()
     const existing = await categoryTopNames()
     const stats = {
@@ -344,6 +374,10 @@ async function makePlan(): Promise<void> {
       tags: topTerms(all, (t) => t.tags, STAT_LIMITS.tags)
     }
     const allowed = new Set([...stats.characters, ...stats.works, ...stats.tags].map(([w]) => w))
+    const habits = allowed.size ? await habitLines() : []
+    if (state !== current) {
+      return
+    }
     if (allowed.size === 0) {
       await setState({ phase: 'PLAN_READY', plan: null, error: '没有能用来分类的标签和建议，先让诺诺看看图或打几个标签' })
       return
@@ -351,9 +385,12 @@ async function makePlan(): Promise<void> {
     const res = await chatCall({
       kind: 'organize',
       model: BAILIAN_CONFIG.chatModel,
-      messages: [{ role: 'user', content: planPrompt(existing, all.length, stats, await habitLines()) }],
+      messages: [{ role: 'user', content: planPrompt(existing, all.length, stats, habits) }],
       timeoutMs: PLAN_TIMEOUT_MS
     })
+    if (state !== current) {
+      return
+    }
     const text = String(res.message.content ?? '')
     const plan = sanitizePlan(parseAssistJson(text), allowed, existing)
     if (plan.length === 0) {
@@ -362,10 +399,14 @@ async function makePlan(): Promise<void> {
     }
     await setState(plan.length ? { phase: 'PLAN_READY', plan, error: null } : { phase: 'PLAN_READY', plan: null, error: '诺诺没给出能用的方案，再试一次' })
   } catch (err) {
-    log.warn('一键整理出方案失败', err)
-    await setState({ phase: 'PLAN_READY', plan: null, error: '出方案时网络异常，再试一次' })
+    if (state === current) {
+      log.warn('一键整理出方案失败', err)
+      await setState({ phase: 'PLAN_READY', plan: null, error: '出方案时出现错误，再试一次' })
+    }
   } finally {
-    planning = false
+    if (planning === current) {
+      planning = null
+    }
   }
 }
 
@@ -426,6 +467,11 @@ export async function approveOrganize(rawPlan: unknown): Promise<number> {
   }
   const plan = checkPlan(rawPlan, await categoryTopNames())
   await setState({ phase: 'ASSIGNING', plan, error: null })
+  return applyApprovedPlan(plan)
+}
+
+// 已生成的建议会被数据库查询排除，退出后可接着给剩余图片生成建议。
+async function applyApprovedPlan(plan: OrganizeFolderVO[]): Promise<number> {
   let n = 0
   try {
     n = await insertOrganizeResults(assignFolders(await findOrganizeTerms(), plan), BAILIAN_CONFIG.chatModel)

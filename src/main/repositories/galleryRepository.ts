@@ -2,7 +2,7 @@ import { and, eq, inArray, ne, or, sql, type SQL } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { col, likeEscape } from '../db/sqlUtil'
 import { image, imageFile, imageTag, libraryRoot, tag } from '../db/schema'
-import { hasPendingSuggestion } from './aiResultRepository'
+import { hasPendingR18Review, hasPendingSuggestion } from './aiResultRepository'
 
 // 网格查询的一行：一个文件位置连同它的图片
 export interface GalleryRow {
@@ -181,10 +181,10 @@ export async function findRowsOfImages(imageIds: number[]): Promise<GalleryRow[]
 }
 
 // 一张图的拍摄信息和分级来源（详情面板用）
-export async function findImageExtras(imageId: number): Promise<{ exif: unknown; ratingSource: 'MODEL' | 'MANUAL' | null }> {
+export async function findImageExtras(imageId: number): Promise<{ exif: unknown; ratingSource: 'MODEL' | 'MANUAL' | null; r18Pending: boolean }> {
   const { db } = getDatabase()
-  const [row] = await db.select({ exif: image.exif, ratingSource: image.ratingSource }).from(image).where(eq(image.id, imageId)).limit(1)
-  return { exif: row?.exif ?? null, ratingSource: row?.ratingSource ?? null }
+  const [row] = await db.select({ exif: image.exif, ratingSource: image.ratingSource, r18Pending: hasPendingR18Review }).from(image).where(eq(image.id, imageId)).limit(1)
+  return { exif: row?.exif ?? null, ratingSource: row?.ratingSource ?? null, r18Pending: row?.r18Pending ?? false }
 }
 
 // 按 id 查一个文件位置的绝对路径所需信息

@@ -5,7 +5,7 @@ import OrganizeDialog from '@/components/dialogs/OrganizeDialog.vue'
 // 每个阶段按钮上的字
 const LABELS = {
   IDLE: '一键整理',
-  LOOKING: '整理中·看图',
+  LOOKING: '正在统计看图进度',
   PLANNING: '整理中·出方案',
   PLAN_READY: '方案待确认',
   ASSIGNING: '整理中·分图',
@@ -21,11 +21,10 @@ export default defineComponent({
     onMounted(() => {
       void org.init()
     })
-    // 看图中带上进度：整理中·看图 120/1,850
     const label = computed(() => {
       const l = org.looked
-      if (org.phase === 'LOOKING' && l && l.total > 0) {
-        return `${LABELS.LOOKING} ${l.done.toLocaleString('zh-CN')}/${l.total.toLocaleString('zh-CN')}`
+      if (org.phase === 'LOOKING' && l) {
+        return `看了 ${l.done.toLocaleString('zh-CN')} / ${l.total.toLocaleString('zh-CN')} 张图`
       }
       return LABELS[org.phase]
     })

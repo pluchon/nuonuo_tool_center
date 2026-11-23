@@ -1,5 +1,5 @@
 // AI 建议的统一格式：诺诺看图的结果和外部 AI 贴回来的结果都整理成这样，再拆成一项一项让你确认（设计 6.5、6.6）
-import { NAME_MAX, TAGS_PER_IMAGE, TAG_NAME_MAX } from '@shared/api'
+import { NAME_MAX, TAGS_PER_IMAGE, TAG_NAME_MAX, type AiSuggestionVO } from '@shared/api'
 
 // 一份建议
 export interface SuggestionFields {
@@ -11,8 +11,7 @@ export interface SuggestionFields {
   description: string
 }
 
-// 建议里一项的种类：名字、标签、角色、作品、出处、放进类目录（一键整理）
-export type SuggestionKind = 'name' | 'tag' | 'who' | 'work' | 'src' | 'dir'
+export type SuggestionKind = AiSuggestionVO['kind']
 
 // 一项建议在 fieldStatus 里的键：name、who、work、src、dir、tag:<标签名>
 export function fieldKey(kind: SuggestionKind, value: string): string {
@@ -24,7 +23,7 @@ export function kindOfKey(key: string): SuggestionKind | null {
   if (key.startsWith('tag:')) {
     return 'tag'
   }
-  return key === 'name' || key === 'who' || key === 'work' || key === 'src' || key === 'dir' ? key : null
+  return key === 'name' || key === 'who' || key === 'work' || key === 'src' || key === 'dir' || key === 'r18Review' ? key : null
 }
 
 // 截到最多 n 个字（按字算，不按 UTF-16 码元）
@@ -45,7 +44,7 @@ export interface NormalizeContext {
   existing: string[]
 }
 
-// 把一份原始结果整理干净：字数上限、标签对齐到图库里已有的叫法、去重、不和角色作品重复、不和已有标签重复、最多 5 个；
+// 把一份原始结果整理干净：字数上限、标签对齐到图库里已有的叫法、去重、不和角色作品重复、不和已有标签重复；
 // 出处只接受 http(s) 链接
 export function normalizeFields(raw: unknown, ctx: NormalizeContext): SuggestionFields {
   const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
@@ -61,13 +60,14 @@ export function normalizeFields(raw: unknown, ctx: NormalizeContext): Suggestion
       continue
     }
     tags.push(name)
+    if (tags.length === TAGS_PER_IMAGE) break
   }
   const source = str(o.source)
   return {
     name: clip(str(o.name), NAME_MAX),
     character: existing.has(character.toLowerCase()) ? '' : character,
     work: existing.has(work.toLowerCase()) ? '' : work,
-    tags: tags.slice(0, TAGS_PER_IMAGE),
+    tags,
     source: /^https?:\/\/\S+$/i.test(source) ? source.slice(0, 300) : '',
     description: clip(str(o.description), 200)
   }

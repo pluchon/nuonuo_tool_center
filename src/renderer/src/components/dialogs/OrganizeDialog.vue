@@ -26,11 +26,13 @@
         </header>
 
         <!-- 开始前：一排三个“名称 数字”、三行说明、一个按钮 -->
-        <template v-if="org.dialog === 'confirm' && est">
-          <div class="org-dlg__stats">
+        <template v-if="org.dialog === 'confirm'">
+          <div class="org-dlg__stats" role="status" :aria-busy="!est" :aria-label="est ? '整理估算' : '正在估算'">
             <div v-for="s in stats" :key="s.label" class="org-dlg__stat" :class="`org-dlg__stat--${s.key}`">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="s.icon" /></svg>
-              <span>{{ s.label }}</span><b>{{ s.value }}</b>
+              <span>{{ s.label }}</span>
+              <b v-if="est">{{ s.value }}</b>
+              <span v-else class="org-dlg__spinner" aria-hidden="true"></span>
             </div>
           </div>
           <ul class="org-dlg__lines">
@@ -38,7 +40,7 @@
               <span class="org-dlg__dot"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="l.icon" /></svg></span>{{ l.text }}
             </li>
           </ul>
-          <button class="org-dlg__go" type="button" :disabled="org.busy" @click="org.start()">
+          <button class="org-dlg__go" type="button" :disabled="org.busy || !est" @click="org.start()">
             <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path :d="starPath" fill="currentColor" /></svg>开始整理
           </button>
         </template>

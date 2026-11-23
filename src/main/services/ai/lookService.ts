@@ -1,24 +1,39 @@
 // 诺诺看图队列（设计 6.5）：新导入、还没打标签、过了本地分级闸门的非 R-18 图自动排队；
-// 平时逐张实时看（并发 2、单张 5 分钟超时、不自动重试，出错的挂标签由你重试），一次排进 50 张以上时超出的部分走批量推理（半价）。
+// 平时逐张实时看（并发 2、不自动重发推理请求），一次排进 50 张以上时超出的部分走批量推理（半价）。
 // 结果存成 AI 建议，等你逐项确认
 import { createReadStream } from 'node:fs'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { LookStateVO } from '@shared/api'
-import { BAILIAN_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
+import { BAILIAN_CONFIG, ORGANIZE_COST, isTokenPlanLocalMode, readCloudCredentials } from '../../config/cloudConfig'
+import { TOKEN_PLAN_LOCAL_HINT } from '@shared/settings'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
+import { isDatabaseOpen } from '../../db/client'
 import { findActiveSettings, upsertSettings } from '../../repositories/appSettingRepository'
 import {
+  archiveReviewedLookFailures,
+  attachLookBatch,
   cancelOpenLookJobs,
-  fillDescription,
+  completeLookJob,
+  enqueueNewLookJobs,
+  failLookBatch,
   findLookBriefs,
-  findLookCandidates,
   findLookInfo,
   findOpenLookJobs,
-  insertAiResult,
   insertLookJobs,
+  lookBatchFileId,
+  LOOK_BACKLOG_PRIORITY,
+  LOOK_BATCH_PRIORITY,
+  LOOK_CONTENT_REJECTED,
+  markRejectedImageForReview,
+  pauseLookBatch,
+  preferBatchForLookJobs,
+  rememberLookBatch,
+  requeueLookJob,
+  requeuePausedLookBatch,
   requeueRunningLookJobs,
+  resumesAfterLookCancel,
   updateJob,
   type AiJobEntity
 } from '../../repositories/aiResultRepository'
@@ -36,13 +51,18 @@ const log = getLogger('look')
 
 // 实时看图的并发数、单张超时
 const CONCURRENCY = 2
-const TIMEOUT_MS = 5 * 60_000
+const TIMEOUT_MS = 120_000
 // 队列里超过这么多张时，超出的部分走批量推理
-const BATCH_OVER = 50
+const BATCH_OVER = ORGANIZE_COST.realtimeMax
+const LOOK_PREFIX_IDLE_MS = 5 * 60_000
 // 一个批次最多几张（每张图 base64 后几百 KB，批次文件不宜太大）
 const BATCH_SIZE = 100
 // 多久查一次批量任务
-const BATCH_POLL_MS = 5 * 60_000
+const BATCH_POLL_MS = 60_000
+const BATCH_RETRY_MS = 15_000
+const BATCH_READ_TIMEOUT_MS = 20_000
+const BATCH_CANCEL_TIMEOUT_MS = 10_000
+const BATCH_CONFIRM_WINDOW_MS = 5 * 60_000
 // 发给模型的图：长边缩到 1024
 const LONG_EDGE = 1024
 // 记在设置里的“从什么时候起导入的图自动看”（第一次启用看图时写入，之前的老图不自动排队，免得一次花掉很多钱）
@@ -60,18 +80,23 @@ export interface LookConfig {
   onState: (state: LookStateVO) => void
   // 有新建议了：界面刷新“AI 建议”计数
   onSuggested: () => void
+  // 输入图片审核拦截后，刷新图库里的 R-18 标记及复核建议。
+  onR18?: (count: number) => void
   // 后面还会不会有图排进来（本地分级还在跑）：会的话不满一批的补图先攒着
   moreLater?: () => boolean
 }
-
-// 一键整理陆续补进来的老图：优先级为负，只走批量推理（半价、不联网），不占实时看图
-export const PRIORITY_BACKLOG = -1
 
 let config: LookConfig | null = null
 let since: Date | null = null
 let active = 0
 let stopping = false
 let pollTimer: ReturnType<typeof setTimeout> | null = null
+let polling = false
+let batchRegistration: Promise<void> | null = null
+let shutdown: Promise<void> | null = null
+const realtimeAbort = new AbortController()
+const retryingBatches = new Set<string>()
+let realtimePrefix: { value: Promise<string>; lastUse: number } | undefined
 // 正在实时看的任务
 const runningIds = new Set<number>()
 // 正在打包交批量的任务（实时那边不碰）
@@ -79,6 +104,7 @@ const packingIds = new Set<number>()
 // 交批量同一时间只跑一路；跑着时又被叫到，跑完再来一轮（免得两路把同一批图各交一次）
 let submitting = false
 let submitAgain = false
+let changingBailianKey = false
 
 // 配置看图服务（启动时调一次）
 export function configureLook(next: LookConfig): void {
@@ -117,22 +143,36 @@ export async function getLookState(): Promise<LookStateVO> {
     if (!info || !j.imageId) {
       continue
     }
+    const batch = j.remoteId ?? lookBatchFileId(j)
     rows.push({
       jobId: j.id,
       imageId: j.imageId,
       name: info.name,
       hash: info.hash,
-      state: j.status === 'FAILED' ? ('FAILED' as const) : runningIds.has(j.id) ? ('RUNNING' as const) : ('QUEUED' as const),
-      error: j.status === 'FAILED' ? (j.error ?? '出错了') : null
+      state: j.status === 'FAILED' ? ('FAILED' as const) : batch ? ('BATCH' as const) : runningIds.has(j.id) ? ('RUNNING' as const) : ('QUEUED' as const),
+      error: j.status === 'FAILED' ? (j.error ?? '出错了') : batch && retryingBatches.has(batch) ? '正在重试查询' : null
     })
   }
-  return { count: jobs.length, rows }
+  const canCancel = jobs.some((j) => (j.status === 'QUEUED' || j.status === 'FAILED') && !j.remoteId && !runningIds.has(j.id) && !packingIds.has(j.id))
+  return { count: jobs.length, rows, canCancel, needsApiKey: !cloudReady(), ...(isTokenPlanLocalMode() ? { localOnly: true } : {}) }
+}
+
+// 密钥恢复后继续处理原队列，包括已经提交、等待查询结果的批次。
+export async function onLookKeyChanged(): Promise<void> {
+  if (!config || stopping || !isDatabaseOpen()) return
+  await pushState()
+  if (cloudReady()) {
+    schedulePoll(0)
+    scheduleLook()
+  }
 }
 
 // 推一次状态
 async function pushState(): Promise<void> {
+  if (stopping) return
   try {
-    config?.onState(await getLookState())
+    const current = await getLookState()
+    if (!stopping) config?.onState(current)
   } catch (err) {
     log.error('读看图队列失败', err)
   }
@@ -140,6 +180,8 @@ async function pushState(): Promise<void> {
 
 // 启动：上次退出时没做完的放回排队，接着查批量任务，再排新图
 export async function initLook(): Promise<void> {
+  if (isTokenPlanLocalMode()) return
+  await archiveReviewedLookFailures()
   await requeueRunningLookJobs()
   await lookSince()
   schedulePoll(10_000)
@@ -148,13 +190,12 @@ export async function initLook(): Promise<void> {
 
 // 把符合条件的新图排进队列，然后开始看
 export async function enqueueNewImages(): Promise<void> {
-  if (!config || stopping) {
+  if (!config || stopping || isTokenPlanLocalMode()) {
     return
   }
-  const ids = await findLookCandidates(await lookSince(), 1000)
-  if (ids.length > 0) {
-    await insertLookJobs(ids)
-    log.info(`看图队列：新排进 ${ids.length} 张`)
+  const count = await enqueueNewLookJobs(await lookSince(), 1000)
+  if (count > 0) {
+    log.info(`看图队列：新排进 ${count} 张`)
   }
   await pushState()
   scheduleLook()
@@ -165,8 +206,20 @@ function imageDataUrl(info: NonNullable<Awaited<ReturnType<typeof findLookInfo>>
   return prepareImage(info, config!.thumbsDir, LONG_EDGE)
 }
 
-// 整理时用的图库信息：叫法对齐表、这张图已有的标签
-async function normalizeContext(imageId: number): Promise<{ canonical: Map<string, string>; existing: string[] }> {
+function realtimeLookInstructions(): Promise<string> {
+  const now = Date.now()
+  if (!realtimePrefix || now - realtimePrefix.lastUse >= LOOK_PREFIX_IDLE_MS) {
+    const value = profileOfConversation(null).then((profile) => `${LOOK_RULES}\n\n${profile}`)
+    realtimePrefix = { value, lastUse: now }
+    void value.catch(() => {
+      if (realtimePrefix?.value === value) realtimePrefix = undefined
+    })
+  }
+  realtimePrefix.lastUse = now
+  return realtimePrefix.value
+}
+
+async function loadCanonicalTags(): Promise<Map<string, string>> {
   const vocab = await findVocabulary()
   const canonical = new Map<string, string>()
   for (const t of vocab) {
@@ -174,12 +227,21 @@ async function normalizeContext(imageId: number): Promise<{ canonical: Map<strin
       canonical.set(n.toLowerCase(), t.name)
     }
   }
-  return { canonical, existing: (await findTagNamesOf([imageId])).get(imageId) ?? [] }
+  return canonical
 }
 
 // 存下看图结果：整理成建议、描述直接补上（不覆盖已有的）
-async function saveLookResult(imageId: number, raw: Record<string, unknown> | null, clues: LocalClues, sources: string[] | null, model: string, usage: unknown): Promise<void> {
-  const fields: SuggestionFields = normalizeFields(raw ?? {}, await normalizeContext(imageId))
+async function saveLookResult(jobId: number, imageId: number, content: unknown, clues: LocalClues, sources: string[] | null, model: string, usage: unknown, knownTags?: Map<string, string>): Promise<boolean> {
+  if (stopping) return false
+  const raw = typeof content === 'string' ? parseJsonBlock(content) : null
+  if (!raw) {
+    await failLookBatch([jobId], '看图结果格式异常')
+    return false
+  }
+  const canonical = knownTags ?? await loadCanonicalTags()
+  const existing = (await findTagNamesOf([imageId])).get(imageId) ?? []
+  const fields: SuggestionFields = normalizeFields(raw, { canonical, existing })
+  if (stopping) return false
   // 出处：文件名能确定的直接用；否则只要搜索工具返回过的链接（批量里没有搜索，只用文件名的）
   if (clues.source) {
     fields.source = clues.source
@@ -189,11 +251,7 @@ async function saveLookResult(imageId: number, raw: Record<string, unknown> | nu
   if (!fields.character && clues.character) {
     fields.character = clues.character
   }
-  await insertAiResult({ imageId, kind: 'IDENTIFY', origin: 'NONO', model, result: fields, fieldStatus: pendingStatus(fields), usage: usage ?? null })
-  if (fields.description) {
-    await fillDescription(imageId, fields.description)
-  }
-  config?.onSuggested()
+  return completeLookJob(jobId, { imageId, kind: 'IDENTIFY', origin: 'NONO', model, result: fields, fieldStatus: pendingStatus(fields), usage: usage ?? null }, fields.description)
 }
 
 // 一张图的线索
@@ -215,7 +273,8 @@ async function lookOne(job: AiJobEntity): Promise<void> {
     return
   }
   const clues = cluesOf(info)
-  const instructions = `${LOOK_RULES}\n\n${await profileOfConversation(null)}`
+  const instructions = await realtimeLookInstructions()
+  if (stopping) return
   try {
     const res = await searchCall({
       kind: 'look',
@@ -225,15 +284,43 @@ async function lookOne(job: AiJobEntity): Promise<void> {
       text: lookTail(clues),
       imageDataUrl: url,
       search: !clues.photo && !clues.source,
-      timeoutMs: TIMEOUT_MS
+      timeoutMs: TIMEOUT_MS,
+      signal: realtimeAbort.signal
     })
-    await saveLookResult(info.id, parseJsonBlock(res.text), clues, res.sources.map((s) => s.url), BAILIAN_CONFIG.chatModel, res.usage)
-    await updateJob(job.id, { status: 'DONE', error: null, finishedAt: new Date() })
+    if (stopping) return
+    if (await saveLookResult(job.id, info.id, res.text, clues, res.sources.map((s) => s.url), BAILIAN_CONFIG.chatModel, res.usage)) {
+      config?.onSuggested()
+    }
   } catch (err) {
-    const timeout = err instanceof Error && /timed? ?out|超时/i.test(err.message + err.name)
+    if (stopping) return
     log.warn(`看图失败（图片 ${info.id}）`, err)
-    await updateJob(job.id, { status: 'FAILED', error: timeout ? '超时' : '网络异常', finishedAt: new Date() })
+    const failure = lookError(err)
+    if (failure.inputImageRejected) {
+      if (await markRejectedImageForReview(job.id, BAILIAN_CONFIG.chatModel)) config?.onR18?.(1)
+    } else {
+      await updateJob(job.id, { status: 'FAILED', error: failure.message, finishedAt: new Date() })
+    }
   }
+}
+
+type CloudLookError = { code?: string; type?: string; status?: number; message?: string; name?: string }
+
+function lookError(err: unknown): { message: string; inputImageRejected?: true } {
+  const failure = err as (CloudLookError & { error?: CloudLookError }) | null
+  const message = `${failure?.message ?? ''} ${failure?.error?.message ?? ''}`
+  const details = `${failure?.code ?? ''} ${failure?.type ?? ''} ${failure?.error?.code ?? ''} ${failure?.error?.type ?? ''} ${message} ${failure?.name ?? ''}`
+  const explicitImage = /\binput\s+(?:image|picture)\b|输入(?:的)?(?:图像|图片)/i.test(message)
+  const moderation = /data[_ ]?inspection[_ ]?failed|content[_ ]filter/i.test(details) ||
+    (explicitImage && /inappropriate content|rejected.{0,60}before model inference|内容审核/i.test(message))
+  if (moderation) {
+    // 输出被拦截或未指明是哪部分输入有问题时，保留原分级。
+    return explicitImage
+      ? { message: LOOK_CONTENT_REJECTED, inputImageRejected: true }
+      : { message: LOOK_CONTENT_REJECTED }
+  }
+  if (/timed? ?out|timeout|超时/i.test(details) || failure?.status === 408) return { message: '超时' }
+  if (failure?.status === 429) return { message: '云端限流' }
+  return { message: failure?.status ? `云端请求失败（${failure.status}）` : '网络异常' }
 }
 
 // 开始干活：两个并发逐张实时看（马上就有结果），同时把超出 50 张的部分打成批量
@@ -270,15 +357,20 @@ async function fillRealtime(): Promise<void> {
 
 // 排着的超出 50 张的部分、攒够的补图，打成批量交上去
 async function submitQueued(): Promise<void> {
+  if (!config?.canRun()) {
+    return
+  }
   const queued = (await findOpenLookJobs()).filter((j) => j.status === 'QUEUED' && !j.remoteId && !runningIds.has(j.id) && !packingIds.has(j.id))
   const normal = queued.filter((j) => j.priority >= 0)
-  if (normal.length > BATCH_OVER) {
-    await submitBatches(normal.slice(BATCH_OVER).filter((j) => j.priority === 0))
+  const batch = [...queued.filter((j) => j.priority === LOOK_BATCH_PRIORITY), ...normal.slice(BATCH_OVER).filter((j) => j.priority === 0)]
+  if (batch.length > 0) {
+    await submitBatches(batch)
   }
   // 补图：攒够一批（100 张）再交，分级判完了就把剩下的不满一批也交了
-  const backlog = queued.filter((j) => j.priority < 0)
-  if (backlog.length >= BATCH_SIZE || (backlog.length > 0 && !config?.moreLater?.())) {
-    await submitBatches(backlog.slice(0, Math.floor(backlog.length / BATCH_SIZE) * BATCH_SIZE || backlog.length))
+  const backlog = queued.filter((j) => j.priority === LOOK_BACKLOG_PRIORITY)
+  const ready = config.moreLater?.() ? Math.floor(backlog.length / BATCH_SIZE) * BATCH_SIZE : backlog.length
+  if (ready > 0) {
+    await submitBatches(backlog.slice(0, ready))
   }
 }
 
@@ -291,37 +383,49 @@ async function pumpOne(): Promise<boolean> {
   const pick = (j: AiJobEntity): boolean => j.status === 'QUEUED' && !j.remoteId && !runningIds.has(j.id) && !packingIds.has(j.id) && j.priority >= 0
   const next = (await findOpenLookJobs()).find(pick)
   // 查库期间别的地方可能已经拿走了它或占满了空位
-  if (!next || !pick(next) || active >= CONCURRENCY) {
+  if (stopping || !next || !pick(next) || active >= CONCURRENCY) {
     return false
   }
   active++
   runningIds.add(next.id)
-  await updateJob(next.id, { status: 'RUNNING', startedAt: new Date(), attempts: next.attempts + 1 })
+  try {
+    await updateJob(next.id, { status: 'RUNNING', startedAt: new Date(), attempts: next.attempts + 1 })
+  } catch (err) {
+    active--
+    runningIds.delete(next.id)
+    throw err
+  }
   await pushState()
   void lookOne(next)
-    .catch((err: unknown) => log.error('看图出错', err))
+    .catch(async (err: unknown) => {
+      if (stopping) return
+      log.error('本地处理看图任务失败', err)
+      await updateJob(next.id, { status: 'FAILED', error: '本地处理失败', finishedAt: new Date() })
+    })
     .finally(async () => {
       active--
       runningIds.delete(next.id)
       await pushState()
       scheduleLook()
-    })
+    }).catch((err: unknown) => log.error('更新看图任务失败', err))
   return true
 }
 
 // 重试一张出错的
 export async function retryLook(jobId: number): Promise<void> {
-  await updateJob(jobId, { status: 'QUEUED', error: null, remoteId: null, startedAt: null, finishedAt: null })
+  if (isTokenPlanLocalMode()) throw new BizError('DEPENDENCY_FAILED', TOKEN_PLAN_LOCAL_HINT)
+  await requeueLookJob(jobId)
   await pushState()
   scheduleLook()
 }
 
 // 让某张图现在就看：排到最前面（已经在队列里就提优先级）
 export async function lookNow(imageId: number): Promise<void> {
+  if (isTokenPlanLocalMode()) throw new BizError('DEPENDENCY_FAILED', TOKEN_PLAN_LOCAL_HINT)
   const open = (await findOpenLookJobs()).find((j) => j.imageId === imageId)
   if (open) {
-    if (open.status === 'FAILED' || (open.status === 'QUEUED' && !open.remoteId)) {
-      await updateJob(open.id, { status: 'QUEUED', priority: 10, error: null })
+    if (!packingIds.has(open.id)) {
+      await requeueLookJob(open.id, 10)
     }
   } else {
     const info = await findLookInfo(imageId)
@@ -342,7 +446,7 @@ export async function lookNow(imageId: number): Promise<void> {
 
 // 全部取消：排队中和出错的都取消（已经发出去的几张做完为止）
 export async function cancelAllLooks(): Promise<number> {
-  const n = await cancelOpenLookJobs()
+  const n = await cancelOpenLookJobs([...runningIds, ...packingIds])
   await pushState()
   return n
 }
@@ -350,7 +454,7 @@ export async function cancelAllLooks(): Promise<number> {
 // ===== 批量推理 =====
 
 // 一张图的批量请求（Chat Completions，带图，不联网）
-async function batchLine(job: AiJobEntity): Promise<string | null> {
+async function batchLine(job: AiJobEntity, instructions: string): Promise<string | null> {
   const info = job.imageId ? await findLookInfo(job.imageId) : undefined
   if (!info || !info.cloudAllowed) {
     await updateJob(job.id, { status: 'CANCELLED', finishedAt: new Date() })
@@ -365,7 +469,7 @@ async function batchLine(job: AiJobEntity): Promise<string | null> {
     model: BAILIAN_CONFIG.chatModel,
     enable_thinking: false,
     messages: [
-      { role: 'system', content: `${LOOK_RULES}\n\n${await profileOfConversation(null)}` },
+      { role: 'system', content: instructions },
       { role: 'user', content: [{ type: 'text', text: lookTail(cluesOf(info)) }, { type: 'image_url', image_url: { url } }] }
     ]
   }
@@ -374,8 +478,11 @@ async function batchLine(job: AiJobEntity): Promise<string | null> {
 
 // 把一批任务提交成批量推理（每批最多 100 张，带图的请求单独成批）
 async function submitBatches(jobs: AiJobEntity[]): Promise<void> {
+  if (changingBailianKey || !cloudReady()) return
   jobs.forEach((j) => packingIds.add(j.id))
   try {
+    // 已分配给批量的图片在退出恢复后继续走批量，避免再次占用实时配额。
+    await preferBatchForLookJobs(jobs.filter((j) => j.priority === 0).map((j) => j.id))
     await submitChunks(jobs)
   } finally {
     jobs.forEach((j) => packingIds.delete(j.id))
@@ -385,44 +492,87 @@ async function submitBatches(jobs: AiJobEntity[]): Promise<void> {
   }
   await pushState()
   schedulePoll(BATCH_POLL_MS)
+  void fillRealtime().catch((err: unknown) => log.error('看图队列出错', err))
 }
 
 // 按每批 100 张逐批打包上传；退出时立刻停下（没交的下次启动再交）
 async function submitChunks(jobs: AiJobEntity[]): Promise<void> {
   const cfg = config!
+  // 百炼批量输入不享受上下文缓存。词表在本地归一化时读取，云端只保留整理习惯。
+  const instructions = `${LOOK_RULES}\n\n${await profileOfConversation(null, false)}`
   for (let i = 0; i < jobs.length && !stopping; i += BATCH_SIZE) {
     const chunk = jobs.slice(i, i + BATCH_SIZE)
     const lines: string[] = []
-    const ids: number[] = []
+    const prepared: AiJobEntity[] = []
     for (const j of chunk) {
       if (stopping) {
         return
       }
-      const line = await batchLine(j)
+      const line = await batchLine(j, instructions)
       if (line) {
         lines.push(line)
-        ids.push(j.id)
+        prepared.push(j)
       }
     }
     if (lines.length === 0) {
       continue
     }
-    await mkdir(cfg.tempDir, { recursive: true })
     const file = join(cfg.tempDir, `look-batch-${Date.now()}.jsonl`)
+    const ids = prepared.map((job) => job.id)
     try {
+      await mkdir(cfg.tempDir, { recursive: true })
       await writeFile(file, lines.join('\n'))
+      if (stopping) return
       const client = getBailianClient()
-      const up = await client.files.create({ file: createReadStream(file), purpose: 'batch' })
-      const batch = await client.batches.create({ input_file_id: up.id, endpoint: '/v1/chat/completions', completion_window: '24h' })
-      for (const id of ids) {
-        await updateJob(id, { status: 'RUNNING', remoteId: batch.id, startedAt: new Date() })
+      const upload = await client.files.create({ file: createReadStream(file), purpose: 'batch' }, { signal: realtimeAbort.signal })
+      if (stopping) return
+      const registration = registerLookBatch(client, ids, upload.id)
+      batchRegistration = registration
+      try {
+        await registration
+      } finally {
+        batchRegistration = null
       }
-      log.info(`看图批量推理已提交：${batch.id}，${ids.length} 张`)
     } catch (err) {
-      log.warn('提交批量推理失败，这些图留在队列里逐张看', err)
+      if (!stopping) {
+        log.warn('上传批量看图文件失败', err)
+        await failLookBatch(ids, '批量文件上传失败')
+      }
     } finally {
-      await rm(file, { force: true })
+      await rm(file, { force: true }).catch((err: unknown) => log.warn('清理看图批量临时文件失败', err))
     }
+  }
+}
+
+async function registerLookBatch(client: ReturnType<typeof getBailianClient>, ids: number[], fileId: string): Promise<void> {
+  if (!(await rememberLookBatch(ids, fileId))) {
+    submitAgain = true
+    return
+  }
+  try {
+    const batch = await client.batches.create({ input_file_id: fileId, endpoint: '/v1/chat/completions', completion_window: '24h' }, { timeout: BATCH_READ_TIMEOUT_MS })
+    await attachLookBatch(ids, batch.id)
+    log.info(`看图批量推理已提交：${batch.id}，${ids.length} 张`)
+  } catch (err) {
+    // 请求超时也可能已在云端创建成功。使用上传文件 ID 对账，避免重复计费。
+    log.warn('批量提交结果待确认，将核对云端任务', err)
+    retryingBatches.add(fileId)
+    schedulePoll(BATCH_RETRY_MS)
+  }
+}
+
+// 云端批次需要用提交时的账号查询和取消。保存新密钥期间暂停提交，避免检查后又产生旧账号的批次。
+export async function changeLookBatchKey<T>(save: () => Promise<T>): Promise<T> {
+  changingBailianKey = true
+  try {
+    const hasRemote = isDatabaseOpen() && (await findOpenLookJobs()).some((job) =>
+      job.status === 'RUNNING' && (job.remoteId || lookBatchFileId(job)))
+    if (packingIds.size > 0 || hasRemote) {
+      throw new BizError('CONFLICT', '请等批量看图结束后再更换百炼 API Key')
+    }
+    return await save()
+  } finally {
+    changingBailianKey = false
   }
 }
 
@@ -437,60 +587,176 @@ function schedulePoll(ms: number): void {
   }, ms)
 }
 
-// 查所有已提交的批量任务：完成的取回结果，失败、过期的把图标成出错
+// 一个批次查询失败时继续查其余批次，下一轮再试未取回的结果。
 async function pollBatches(): Promise<void> {
-  if (!cloudReady()) {
+  if (stopping || !cloudReady()) {
     return
   }
-  const remote = (await findOpenLookJobs()).filter((j) => j.remoteId && j.status === 'RUNNING')
-  const batchIds = [...new Set(remote.map((j) => j.remoteId as string))]
-  if (batchIds.length === 0) {
+  if (polling) {
+    schedulePoll(BATCH_POLL_MS)
     return
   }
-  const client = getBailianClient()
-  let waiting = false
-  for (const bid of batchIds) {
-    const b = await client.batches.retrieve(bid)
-    const mine = remote.filter((j) => j.remoteId === bid)
-    if (b.status === 'completed' && b.output_file_id) {
-      const text = await (await client.files.content(b.output_file_id)).text()
-      const done = new Set<number>()
-      for (const line of text.split('\n').filter((l) => l.trim())) {
-        const row = JSON.parse(line) as { custom_id: string; response?: { status_code?: number; body?: { choices?: Array<{ message?: { content?: string } }>; usage?: unknown } } }
-        const job = mine.find((j) => String(j.id) === row.custom_id)
-        if (!job || !job.imageId) {
-          continue
-        }
-        done.add(job.id)
-        const body = row.response?.body
-        if (row.response?.status_code !== 200 || !body) {
-          await updateJob(job.id, { status: 'FAILED', error: '批量推理失败', remoteId: null, finishedAt: new Date() })
-          continue
-        }
-        const usage = await recordBatchUsage({ kind: 'look', model: BAILIAN_CONFIG.chatModel, imageId: job.imageId }, body.usage)
-        const info = await findLookInfo(job.imageId)
-        if (!info || info.isR18) {
-          await updateJob(job.id, { status: 'CANCELLED', finishedAt: new Date() })
-          continue
-        }
-        await saveLookResult(job.imageId, parseJsonBlock(body.choices?.[0]?.message?.content ?? ''), cluesOf(info), null, BAILIAN_CONFIG.chatModel, usage)
-        await updateJob(job.id, { status: 'DONE', finishedAt: new Date() })
+  polling = true
+  let waiting = true
+  let retry = false
+  try {
+    const open = (await findOpenLookJobs()).filter((job) => job.status === 'RUNNING')
+    const pending = groupLookJobs(open, lookBatchFileId)
+    waiting = false
+    if (pending.size > 0) {
+      try {
+        waiting = await reconcileLookBatches(pending)
+      } catch (err) {
+        if (stopping) return
+        retry = true
+        pending.forEach((_jobs, fileId) => retryingBatches.add(fileId))
+        log.warn('核对已提交看图批次失败，将重试', err)
       }
-      for (const j of mine.filter((x) => !done.has(x.id))) {
-        await updateJob(j.id, { status: 'FAILED', error: '批量推理失败', remoteId: null, finishedAt: new Date() })
-      }
-    } else if (['failed', 'expired', 'cancelled'].includes(b.status)) {
-      for (const j of mine) {
-        await updateJob(j.id, { status: 'FAILED', error: '批量推理失败', remoteId: null, finishedAt: new Date() })
-      }
-    } else {
-      waiting = true
+    }
+    if (stopping) return
+    const batches = groupLookJobs(pending.size ? (await findOpenLookJobs()).filter((job) => job.status === 'RUNNING') : open, (job) => job.remoteId)
+    const groups = [...batches]
+    for (let offset = 0; offset < groups.length && !stopping; offset += 4) {
+      await Promise.all(groups.slice(offset, offset + 4).map(async ([id, jobs]) => {
+        try {
+          const pending = await pollBatch(id, jobs)
+          waiting ||= pending
+          retryingBatches.delete(id)
+        } catch (err) {
+          if (stopping) return
+          log.warn('查询看图批量结果失败，将继续查询', err)
+          retryingBatches.add(id)
+          retry = true
+        }
+      }))
+      await pushState()
+    }
+    if (groups.length === 0 && pending.size > 0) {
+      await pushState()
+    }
+    if (groups.length > 0) scheduleLook()
+  } catch (err) {
+    if (stopping) return
+    retry = true
+    throw err
+  } finally {
+    polling = false
+    if (retry || waiting) {
+      schedulePoll(retry ? BATCH_RETRY_MS : BATCH_POLL_MS)
     }
   }
-  await pushState()
-  if (waiting) {
-    schedulePoll(BATCH_POLL_MS)
+}
+
+function groupLookJobs(jobs: AiJobEntity[], keyOf: (job: AiJobEntity) => string | null): Map<string, AiJobEntity[]> {
+  const groups = new Map<string, AiJobEntity[]>()
+  for (const job of jobs) {
+    const key = keyOf(job)
+    if (key) {
+      const group = groups.get(key) ?? []
+      group.push(job)
+      groups.set(key, group)
+    }
   }
+  return groups
+}
+
+async function reconcileLookBatches(groups: Map<string, AiJobEntity[]>, closing = false): Promise<boolean> {
+  const unmatched = new Map(groups)
+  const earliest = Math.min(...[...groups.values()].map(([job]) => job.startedAt?.getTime() ?? 0))
+  const options = { timeout: BATCH_READ_TIMEOUT_MS, signal: closing ? undefined : realtimeAbort.signal }
+  for await (const batch of getBailianClient().batches.list({ limit: 100 }, options)) {
+    if (stopping && !closing) return true
+    const jobs = unmatched.get(batch.input_file_id)
+    if (jobs) {
+      await attachLookBatch(jobs.map((job) => job.id), batch.id)
+      unmatched.delete(batch.input_file_id)
+      retryingBatches.delete(batch.input_file_id)
+    }
+    if (unmatched.size === 0 || batch.created_at * 1000 < earliest - 60_000) break
+  }
+  for (const [fileId, jobs] of unmatched) {
+    if (Date.now() - (jobs[0].startedAt?.getTime() ?? 0) >= BATCH_CONFIRM_WINDOW_MS) {
+      await failLookBatch(jobs.map((job) => job.id), '未查到提交的批量任务')
+      unmatched.delete(fileId)
+      retryingBatches.delete(fileId)
+    }
+  }
+  return unmatched.size > 0
+}
+
+// 批次仍在处理时返回 true。批次结束后，只把没有可用结果的图片标成失败。
+async function pollBatch(id: string, jobs: AiJobEntity[]): Promise<boolean> {
+  const client = getBailianClient()
+  const options = { timeout: BATCH_READ_TIMEOUT_MS, signal: realtimeAbort.signal }
+  const batch = await client.batches.retrieve(id, options)
+  if (stopping) return false
+  if (!['completed', 'failed', 'expired', 'cancelled'].includes(batch.status)) {
+    return true
+  }
+  const unresolved = new Map(jobs.map((job) => [String(job.id), job]))
+  let saved = false
+  let reviews = 0
+  let canonical: Map<string, string> | undefined
+  const files = [...new Set([batch.output_file_id, batch.error_file_id].filter((id): id is string => !!id))]
+  const results = await Promise.allSettled(files.map(async (fileId) => (await client.files.content(fileId, options)).text()))
+  const lines = results.flatMap((result) => result.status === 'fulfilled' ? result.value.split('\n') : [])
+  try {
+    for (const line of lines) {
+      if (stopping) {
+        return false
+      }
+      if (!line.trim()) {
+        continue
+      }
+      let row: {
+        custom_id: string
+        error?: CloudLookError
+        response?: { status_code?: number; body?: CloudLookError & { choices?: Array<{ message?: { content?: unknown } }>; usage?: unknown; error?: CloudLookError } }
+      }
+      try {
+        row = JSON.parse(line)
+      } catch {
+        continue
+      }
+      const job = unresolved.get(row?.custom_id)
+      if (!job?.imageId) continue
+      const body = row?.response?.body
+      if (row.response?.status_code !== 200 || !body) {
+        const failure = lookError(body?.error ?? row.error ?? body)
+        if (failure.inputImageRejected) {
+          if (await markRejectedImageForReview(job.id, BAILIAN_CONFIG.chatModel)) reviews++
+          unresolved.delete(row.custom_id)
+        } else if (failure.message === LOOK_CONTENT_REJECTED) {
+          await failLookBatch([job.id], failure.message)
+          unresolved.delete(row.custom_id)
+        }
+        continue
+      }
+      const usage = await recordBatchUsage({ kind: 'look', model: BAILIAN_CONFIG.chatModel, imageId: job.imageId }, body.usage)
+      const info = await findLookInfo(job.imageId)
+      if (info && !info.isR18) {
+        canonical ??= await loadCanonicalTags()
+        const done = await saveLookResult(job.id, job.imageId, body.choices?.[0]?.message?.content, cluesOf(info), null, BAILIAN_CONFIG.chatModel, usage, canonical)
+        saved ||= done
+      } else {
+        await updateJob(job.id, { status: 'CANCELLED', finishedAt: new Date() })
+      }
+      unresolved.delete(row.custom_id)
+    }
+  } finally {
+    if (!stopping && reviews > 0) config?.onR18?.(reviews)
+    if (!stopping && saved) config?.onSuggested()
+  }
+  if (stopping || unresolved.size === 0) return false
+  const failedFile = results.find((result) => result.status === 'rejected')
+  if (failedFile) throw failedFile.reason
+  const toResume = [...unresolved.values()].filter((job) => batch.status === 'cancelled' && resumesAfterLookCancel(job)).map((job) => job.id)
+  if (toResume.length > 0) await requeuePausedLookBatch(toResume)
+  const failed = [...unresolved.values()].filter((job) => !toResume.includes(job.id)).map((job) => job.id)
+  if (failed.length > 0) {
+    await failLookBatch(failed, '批量推理没有返回结果')
+  }
+  return false
 }
 
 // 是不是正在实时看图（做梦时看忙不忙）
@@ -498,11 +764,51 @@ export function isLookBusy(): boolean {
   return active > 0
 }
 
-// 退出前：不再开始新的，手上的不等（下次启动放回排队）
-export function stopLook(): void {
+// 退出先中断本机看图并停止提交，再撤销仍在云端处理的批次。
+export function stopLook(): Promise<void> {
+  if (shutdown) return shutdown
   stopping = true
+  realtimeAbort.abort()
   if (pollTimer) {
     clearTimeout(pollTimer)
     pollTimer = null
+  }
+  shutdown = cancelLookBatchesOnExit()
+  return shutdown
+}
+
+async function cancelLookBatchesOnExit(): Promise<void> {
+  await batchRegistration?.catch((err: unknown) => log.warn('退出时批量提交状态未能落盘', err))
+  if (!isDatabaseOpen() || !cloudReady()) return
+  const open = (await findOpenLookJobs()).filter((job) => job.status === 'RUNNING')
+  const pending = groupLookJobs(open, lookBatchFileId)
+  if (pending.size > 0) {
+    await reconcileLookBatches(pending, true).catch((err: unknown) => log.warn('退出时无法确认部分批量任务', err))
+  }
+  const active = pending.size ? (await findOpenLookJobs()).filter((job) => job.status === 'RUNNING') : open
+  const ids = [...groupLookJobs(active, (job) => job.remoteId).keys()]
+  if (ids.length === 0) return
+  const client = getBailianClient()
+  for (let offset = 0; offset < ids.length; offset += 8) {
+    await Promise.all(ids.slice(offset, offset + 8).map(async (id) => {
+      try {
+        await pauseLookBatch(id)
+        const options = { timeout: BATCH_CANCEL_TIMEOUT_MS }
+        try {
+          await client.batches.cancel(id, options)
+        } catch (err) {
+          const status = (err as { status?: number } | null)?.status
+          // 取消是幂等操作，临时网络或服务故障时再请求一次。
+          if (!status || status === 408 || status === 429 || status >= 500) {
+            await client.batches.cancel(id, options)
+          } else {
+            const batch = await client.batches.retrieve(id, options)
+            if (!['cancelling', 'cancelled', 'completed', 'failed', 'expired'].includes(batch.status)) throw err
+          }
+        }
+      } catch (err) {
+        log.warn(`退出时未能确认批量任务已停止：${id}`, err)
+      }
+    }))
   }
 }

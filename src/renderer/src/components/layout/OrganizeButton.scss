@@ -17,6 +17,8 @@
   font: inherit;
   font-size: 12px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   cursor: pointer;
   transition:
     background 0.15s,
@@ -38,9 +40,8 @@
     cursor: not-allowed;
   }
 
-  // 进行中：文字慢慢呼吸
-  &--busy {
-    animation: organize-breathe 2.4s ease-in-out infinite;
+  &__spinner {
+    animation: organize-spin 0.9s linear infinite;
   }
 
   // 方案待确认：主题色描边，右上角一个小红点
@@ -60,14 +61,14 @@
   }
 }
 
-@keyframes organize-breathe {
-  50% {
-    color: var(--a);
+@keyframes organize-spin {
+  to {
+    transform: rotate(1turn);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .organize--busy {
+  .organize__spinner {
     animation: none;
   }
 }

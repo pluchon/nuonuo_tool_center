@@ -5,8 +5,9 @@ import { categoryTopNames, ensureCategoryTop } from '../fileOps/folderOpsService
 import { copyImages } from '../fileOps/transferService'
 import { getDatabase } from '../../db/client'
 import { findImageBrief, findTagNamesOf, findVocabulary } from '../../repositories/aiSearchRepository'
-import { findResultsOf, insertAiResult, updateFieldStatus, updateSource, type FieldState } from '../../repositories/aiResultRepository'
+import { findResultsOf, insertAiResult, LOOK_CONTENT_REJECTED, updateFieldStatus, updateSource, type FieldState } from '../../repositories/aiResultRepository'
 import { findLatestProfile } from '../../repositories/aiProfileRepository'
+import { updateR18 } from '../../repositories/imageRepository'
 import { findCategories } from '../../repositories/tagRepository'
 import { addTag, renameImage } from '../imageEditService'
 import { recordEvent, recordEvents } from './eventService'
@@ -33,22 +34,30 @@ export async function listSuggestions(imageId: number): Promise<AiSuggestionVO[]
       if (state !== 'PENDING' || !kind || out.some((s) => s.key === key)) {
         continue
       }
-      out.push({ key, kind, value: valueOf(r.result as SuggestionFields, key), origin: r.origin })
+      const value = kind === 'r18Review' ? LOOK_CONTENT_REJECTED : valueOf(r.result as SuggestionFields, key)
+      out.push({ key, kind, value, origin: r.origin })
     }
   }
   // 放进类目录的：标出目录现在还不存在（采用时新建）
-  const dir = out.find((s) => s.kind === 'dir')
-  if (dir) {
-    const names = (await categoryTopNames()).map((n) => n.toLowerCase())
-    dir.isNew = !names.includes(dir.value.toLowerCase())
+  const dir = out.findIndex((s) => s.kind === 'dir')
+  if (dir >= 0) {
+    if ((await findImageBrief(imageId))?.isR18) {
+      out.splice(dir, 1)
+    } else {
+      const names = (await categoryTopNames()).map((n) => n.toLowerCase())
+      out[dir].isNew = !names.includes(out[dir].value.toLowerCase())
+    }
   }
   // 按名字、标签、角色、作品、出处、放进类目录的顺序
-  const order = ['name', 'tag', 'who', 'work', 'src', 'dir']
+  const order = ['r18Review', 'name', 'tag', 'who', 'work', 'src', 'dir']
   return out.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind))
 }
 
 // 复制进类目录（目录不在就建），源目录里的原图不动；有没复制成的报原因
 async function copyIntoCategory(imageIds: number[], name: string): Promise<void> {
+  const { pg } = getDatabase()
+  const { rows } = await pg.query('SELECT 1 FROM image WHERE id = ANY($1::bigint[]) AND is_r18 LIMIT 1', [imageIds])
+  if (rows.length > 0) throw new BizError('CONFLICT', 'R-18 图片不参与自动整理')
   const abs = await ensureCategoryTop(name)
   const res = await copyImages({ view: 'all', sort: 'new' }, imageIds, [abs])
   if (res.failed > 0) {
@@ -62,7 +71,7 @@ async function categoryIdOf(name: string): Promise<number | undefined> {
 }
 
 // 采用一项：名字写进图片名字，标签、角色、作品当标签加上（角色、作品放进对应分类），出处记下来
-async function apply(imageId: number, kind: AiSuggestionVO['kind'], value: string): Promise<void> {
+async function apply(imageId: number, kind: Exclude<AiSuggestionVO['kind'], 'r18Review'>, value: string): Promise<void> {
   if (kind === 'name') {
     await renameImage(imageId, value, { record: false })
   } else if (kind === 'dir') {
@@ -96,6 +105,10 @@ export async function decideSuggestion(imageId: number, key: string, accept: boo
   if (!item) {
     throw new BizError('NOT_FOUND', '这条建议已经处理过了')
   }
+  if (item.kind === 'r18Review') {
+    if (!(await updateR18([imageId], accept, true))) throw new BizError('NOT_FOUND', '这条建议已经处理过了')
+    return listSuggestions(imageId)
+  }
   if (accept) {
     await apply(imageId, item.kind, item.value)
   }
@@ -109,6 +122,7 @@ export async function acceptAllSuggestions(imageId: number): Promise<AiSuggestio
   checkId(imageId)
   let firstError: unknown = null
   for (const item of await listSuggestions(imageId)) {
+    if (item.kind === 'r18Review') continue
     try {
       await apply(imageId, item.kind, item.value)
       await mark(imageId, item.key, 'ACCEPTED')
@@ -134,8 +148,12 @@ export async function decideMany(rawIds: unknown, accept: unknown): Promise<Sugg
   // 放进类目录的按目录分组，其余的逐项处理
   const byDir = new Map<string, number[]>()
   const bad = new Set<number>()
+  let reviewOnly = 0
   for (const id of ids) {
-    for (const item of await listSuggestions(id)) {
+    const suggestions = await listSuggestions(id)
+    if (suggestions.length === 1 && suggestions[0].kind === 'r18Review') reviewOnly++
+    for (const item of suggestions) {
+      if (item.kind === 'r18Review') continue
       if (!accept) {
         await mark(id, item.key, 'REJECTED')
         await recordEvent('suggestion.reject', id, { kind: item.kind, value: item.value, origin: item.origin })
@@ -167,7 +185,7 @@ export async function decideMany(rawIds: unknown, accept: unknown): Promise<Sugg
       error ??= err instanceof Error ? err.message : String(err)
     }
   }
-  return { done: ids.length - bad.size, failed: bad.size, error }
+  return { done: ids.length - bad.size - reviewOnly, failed: bad.size, error }
 }
 
 // ===== 其他 AI 辅助整理 =====
@@ -231,7 +249,7 @@ export async function assistPrompt(imageId: number): Promise<string> {
     '## 要求',
     '- 只根据图片内容和上面的信息判断；认不出、不确定的字段写空字符串，不要编造。',
     '- 名字、角色、作品、每个标签都不超过 15 个字。',
-    '- 标签最多 5 个，不要和已有标签重复，不要把角色名和作品名再写进标签。',
+    `- 标签最多 ${TAGS_PER_IMAGE} 个，只写有辨识度的内容，不重复已有标签、角色名或作品名。`,
     '- 出处只写你能确定的作品页面链接（http 开头）；不确定就写空字符串。',
     '- 描述用一句话；如果图里有文字（比如表情包），把文字原样写进描述。',
     '- 用中文回答。只输出下面格式的一个 json 代码块，代码块前后不要写任何别的文字。',

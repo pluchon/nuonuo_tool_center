@@ -12,15 +12,18 @@ import { configureFileOps, flushPendingDeletes, recoverFileOps } from './service
 import { configureTransfer } from './services/fileOps/transferService'
 import { configureFolderOps } from './services/fileOps/folderOpsService'
 import { originalPathOf } from './services/galleryService'
-import { configureScan, getScanState, onScanState, requeueScan, resumeScan, startScan, stopScanAndWait } from './services/scan/scanService'
+import { configureScan, getScanState, isScanningRoot, onScanState, requeueScan, resumeScan, runQueuedScans, startScan, stopScanAndWait } from './services/scan/scanService'
 import { configureRating, isRatingBusy, scheduleRating, stopRating, thresholdFromEnv } from './services/rating/ratingService'
-import { configureLook, enqueueNewImages, initLook, isLookBusy, stopLook } from './services/ai/lookService'
-import { checkLooking, configureOrganize, initOrganize, onLookResult, onRatingBatch } from './services/ai/organizeService'
+import { configureLook, enqueueNewImages, initLook, isLookBusy, scheduleLook, stopLook } from './services/ai/lookService'
+import { checkLooking, configureOrganize, isOrganizing, onLookResult, onRatingBatch, restoreOrganize, resumeOrganize } from './services/ai/organizeService'
 import { startDreaming, stopDreaming } from './services/ai/dreamService'
 import { isAnswering } from './services/ai/assistantService'
 import { configureEmbedding, isEmbedBusy, scheduleEmbedding, stopEmbedding } from './services/ai/embeddingService'
 import { configureWatch, stopWatching, syncWatching } from './services/scan/watchService'
 import { getSettings } from './services/settingsService'
+import { initAiCredentialSettings, waitForAiCredentialSaves } from './services/aiCredentialSettings'
+import { ensureCategoryRoot } from './services/categoryHome'
+import { findActiveRootsByKind } from './repositories/libraryRootRepository'
 import { windowBackground } from './window/windowControl'
 import { loadWindowState, MIN_HEIGHT, MIN_WIDTH, trackWindowState } from './window/windowState'
 import { attachCloseBehavior, markQuitting } from './window/trayControl'
@@ -166,18 +169,24 @@ async function autoScanOnStart(): Promise<void> {
   try {
     if ((await getSettings()).autoScan) {
       startScan(null, true)
+    } else {
+      // 首次登记已有类目录时导入一次，之后启动直接使用已有索引。
+      const [registered] = await findActiveRootsByKind('CATEGORY')
+      const category = await ensureCategoryRoot(paths.categoryHomeOverride)
+      if (!registered && category) startScan(category.id, true)
     }
   } catch (err) {
-    log.warn('读取“启动时自动扫描”设置失败，这次不自动扫描', err)
+    log.warn('启动时初始化扫描失败', err)
   }
 }
 
 // 启动顺序：数据库（打不开也继续，由界面显示原因和“重试”）→ 协议 → IPC → 窗口 → 自动扫描
 async function bootstrap(): Promise<void> {
   log.info(`启动，数据目录：${paths.root}`)
-  const state = await bootDatabase(dbLocation)
+  const [state] = await Promise.all([bootDatabase(dbLocation), initAiCredentialSettings(paths.root)])
   handleLtmProtocol(paths.thumbs, paths.backgrounds, originalPathOf)
-  configureScan({ thumbsDir: paths.thumbs, categoryHomeOverride: paths.categoryHomeOverride })
+  configureScan({ thumbsDir: paths.thumbs, categoryHomeOverride: paths.categoryHomeOverride, canRunAuto: () => !isOrganizing() })
+  let queueingAfterRating = 0
   // 本地分级：扫描进行中让路；判出 R-18 时通知界面刷新
   configureRating({
     modelsRoot: paths.models,
@@ -197,12 +206,21 @@ async function bootstrap(): Promise<void> {
     },
     // 一轮判完：补语义向量，一键整理看看能不能收尾
     onDone: () => {
-      void enqueueNewImages().catch((err: unknown) => log.error('排看图队列失败', err))
+      queueingAfterRating++
+      void enqueueNewImages()
+        .catch((err: unknown) => log.error('排看图队列失败', err))
+        .finally(() => {
+          queueingAfterRating--
+          scheduleEmbedding()
+        })
       void onRatingBatch().catch((err: unknown) => log.error('一键整理补图失败', err))
-      scheduleEmbedding()
     }
   })
-  configureEmbedding({ thumbsDir: paths.thumbs, tempDir: join(paths.root, 'tmp'), canRun: () => getScanState().progress === null })
+  configureEmbedding({
+    thumbsDir: paths.thumbs,
+    tempDir: join(paths.root, 'tmp'),
+    canRun: () => getScanState().progress === null && !isRatingBusy() && queueingAfterRating === 0
+  })
   // 诺诺看图：扫描进行中让路；队列变化和新建议推给界面
   configureLook({
     thumbsDir: paths.thumbs,
@@ -212,6 +230,7 @@ async function bootstrap(): Promise<void> {
     moreLater: () => isRatingBusy(),
     onState: (state) => {
       broadcast(IpcEvent.lookState, state)
+      if (!isRatingBusy()) scheduleEmbedding()
       // 一键整理在等看图：看完了就出方案
       void checkLooking().catch((err: unknown) => log.error('一键整理检查看图进度失败', err))
     },
@@ -219,10 +238,14 @@ async function bootstrap(): Promise<void> {
       broadcast(IpcEvent.aiSuggested, null)
       // 方案已批、在陆续补图：新看完的图按方案分进类目录
       onLookResult()
-    }
+    },
+    onR18: (count) => broadcast(IpcEvent.ratingR18, count)
   })
   configureOrganize({
-    onState: (state) => broadcast(IpcEvent.organizeState, state),
+    onState: (state) => {
+      broadcast(IpcEvent.organizeState, state)
+      runQueuedScans()
+    },
     onSuggested: () => broadcast(IpcEvent.aiSuggested, null)
   })
   // 扫描做完（目录可能有增删、移动硬盘接回来了）后重新对一遍监听的目录，再给新图分级
@@ -232,10 +255,11 @@ async function bootstrap(): Promise<void> {
     if (scanning && !state.progress) {
       void syncWatching()
       scheduleRating()
+      scheduleLook()
     }
     scanning = state.progress !== null
   })
-  configureWatch(requeueScan)
+  configureWatch(requeueScan, isScanningRoot)
   configureFileOps({ trash: trashFunction(), onDone: broadcastFileOpDone })
   configureTransfer(paths.categoryHomeOverride)
   configureFolderOps(paths.categoryHomeOverride)
@@ -253,18 +277,23 @@ async function bootstrap(): Promise<void> {
         await pruneBackgrounds(paths.backgrounds, s.customBackground)
       })
       .catch((err: unknown) => log.warn('读取关闭窗口设置失败，按退出应用处理', err))
+    await restoreOrganize().catch((err: unknown) => log.error('恢复整理状态失败', err))
   }
   createMainWindow(await initialTheme(state === 'READY'))
   if (state === 'READY') {
-    await autoScanOnStart()
-    // 上次退出时没扫完的接着扫，进度接着上次的数
-    await resumeScan().catch((err: unknown) => log.warn('接着上次的扫描失败', err))
+    // 扫描断点优先，避免先排启动扫描，再重复排一次断点里的扫描。
+    const scanResumed = await resumeScan().catch((err: unknown) => {
+      log.warn('接着上次的扫描失败', err)
+      return false
+    })
+    if (!scanResumed) await autoScanOnStart()
     await syncWatching()
     // 上次没判完的接着判（自动扫描在跑时先让路，扫完会再叫一次）
     scheduleRating()
     // 看图队列：上次没做完的接着做，查已提交的批量任务
     await initLook().catch((err: unknown) => log.error('看图队列启动失败', err))
-    await initOrganize().catch((err: unknown) => log.error('一键整理启动失败', err))
+    if (closing) return
+    await resumeOrganize().catch((err: unknown) => log.error('继续一键整理失败', err))
     // 做梦：几分钟没操作、扫描分级看图对话都不在跑时，把事件整理成记忆和核心档案
     startDreaming({ isBusy: () => getScanState().progress !== null || isRatingBusy() || isLookBusy() || isAnswering() || isEmbedBusy() })
     // 上次没补完的向量接着补
@@ -303,19 +332,20 @@ app.on('will-quit', (event) => {
   }
   closing = true
   event.preventDefault()
+  const lookingStopped = stopLook().catch((err: unknown) => log.warn('退出前停止看图失败', err))
+  const embeddingStopped = stopEmbedding().catch((err: unknown) => log.warn('退出前停止向量索引失败', err))
   // 等着进回收站的删除马上执行，再让扫描停下（手上的文件写完），最后关数据库
   void stopWatching()
     .then(() => flushPendingDeletes())
     .catch((err: unknown) => log.error('退出前执行删除失败', err))
     .then(() => stopScanAndWait())
     .catch((err: unknown) => log.error('停止扫描失败', err))
-    .then(() => {
-      stopDreaming()
-      stopLook()
-      stopEmbedding()
-    })
+    .then(() => stopDreaming())
     .then(() => stopRating())
     .catch((err: unknown) => log.error('停止本地分级失败', err))
+    .then(() => lookingStopped)
+    .then(() => embeddingStopped)
+    .then(waitForAiCredentialSaves)
     .then(() => shutdownDatabase(paths.lockFile))
     .catch((err: unknown) => log.error('关闭数据库失败', err))
     .finally(() => app.exit(0))

@@ -354,7 +354,7 @@ export async function getImageDetail(imageId: number): Promise<ImageDetailVO> {
     hash: rep.contentHash,
     thumb: thumbOf(rep.thumbReady),
     isR18: rep.isR18,
-    r18ByModel: rep.isR18 && extras.ratingSource === 'MODEL',
+    r18ByModel: rep.isR18 && extras.ratingSource === 'MODEL' && !extras.r18Pending,
     importedAt: rep.createTime.toISOString(),
     takenAt: rep.takenAt ? rep.takenAt.toISOString() : null,
     exif: (extras.exif as ExifInfo | null) ?? null,

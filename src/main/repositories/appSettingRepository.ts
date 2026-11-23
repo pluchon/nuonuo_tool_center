@@ -1,5 +1,5 @@
 import { eq, sql } from 'drizzle-orm'
-import { getDatabase } from '../db/client'
+import { getDatabase, type AppDatabase } from '../db/client'
 import { appSetting } from '../db/schema'
 
 export type AppSettingEntity = typeof appSetting.$inferSelect
@@ -12,17 +12,18 @@ export async function findActiveSettings(): Promise<AppSettingEntity[]> {
 
 // 在一个事务里写入多项设置：按 key 存在则更新，不存在则新增
 export async function upsertSettings(entries: Array<{ key: string; value: unknown }>): Promise<void> {
-  const { db } = getDatabase()
-  await db.transaction(async (tx) => {
-    for (const entry of entries) {
-      await tx
-        .insert(appSetting)
-        .values({ key: entry.key, value: entry.value })
-        .onConflictDoUpdate({
-          target: appSetting.key,
-          targetWhere: sql`${appSetting.deleteState} = 0`,
-          set: { value: entry.value, updateTime: new Date() }
-        })
-    }
-  })
+  await getDatabase().db.transaction((tx) => writeSettings(tx, entries))
+}
+
+export async function writeSettings(db: Pick<AppDatabase, 'insert'>, entries: Array<{ key: string; value: unknown }>): Promise<void> {
+  for (const entry of entries) {
+    await db
+      .insert(appSetting)
+      .values({ key: entry.key, value: entry.value })
+      .onConflictDoUpdate({
+        target: appSetting.key,
+        targetWhere: sql`${appSetting.deleteState} = 0`,
+        set: { value: entry.value, updateTime: new Date() }
+      })
+  }
 }

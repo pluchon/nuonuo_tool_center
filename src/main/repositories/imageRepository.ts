@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
-import { image } from '../db/schema'
+import { image, imageAiResult } from '../db/schema'
 
 export type ImageEntity = typeof image.$inferSelect
 export type NewImage = typeof image.$inferInsert
@@ -50,10 +50,17 @@ export async function updateDisplayName(id: number, displayName: string | null):
 }
 
 // 批量设置 R-18
-export async function updateR18(ids: number[], isR18: boolean): Promise<void> {
-  const { db } = getDatabase()
-  // 手动开关过的图记成 MANUAL：本地模型以后不再改它
-  await db.update(image).set({ isR18, ratingSource: 'MANUAL' }).where(inArray(image.id, ids))
+export async function updateR18(ids: number[], isR18: boolean, onlyPendingReview = false): Promise<boolean> {
+  return getDatabase().db.transaction(async (tx) => {
+    const reviews = await tx.update(imageAiResult)
+      .set({ fieldStatus: sql`jsonb_set(${imageAiResult.fieldStatus}, '{r18Review}', to_jsonb(${isR18 ? 'ACCEPTED' : 'REJECTED'}::text))` })
+      .where(and(inArray(imageAiResult.imageId, ids), eq(imageAiResult.deleteState, 0), sql`${imageAiResult.fieldStatus}->>'r18Review' = 'PENDING'`))
+      .returning({ imageId: imageAiResult.imageId })
+    if (onlyPendingReview && reviews.length === 0) return false
+    // 手动开关和确认复核都以用户的决定为准。
+    await tx.update(image).set({ isR18, ratingSource: 'MANUAL' }).where(inArray(image.id, ids))
+    return true
+  })
 }
 
 // 还没分级过的图（手动开关过的、缩略图没生成好的不算），先导入的先判

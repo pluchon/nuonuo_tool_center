@@ -4,6 +4,7 @@ import { approveOrganize, cancelOrganize, fetchOrganizeEstimate, fetchOrganizeSt
 import { fetchRatingProgress, onRatingProgress } from '@/api/rating'
 import { useGalleryStore } from './gallery'
 import { useToastStore } from './toast'
+import { useLookStore } from './look'
 
 // 错误信息
 function errText(err: unknown): string {
@@ -23,6 +24,7 @@ export const useOrganizeStore = defineStore('organize', {
     // 弹窗：开始前确认（带估算）、方案（可编辑的草稿）、停止确认
     dialog: null as 'confirm' | 'plan' | 'stop' | null,
     estimate: null as OrganizeEstimateVO | null,
+    estimateRequest: 0,
     draft: [] as OrganizeFolderVO[],
     busy: false,
     rating: { running: false, done: 0, total: 0 } as RatingProgressVO
@@ -52,6 +54,7 @@ export const useOrganizeStore = defineStore('organize', {
       this.plan = plan
       this.error = error
       this.looked = s.looked ?? null
+      if (phase !== 'IDLE' && this.dialog === 'confirm') this.close()
       // 方案刚出来：弹出来给你批
       if (phase === 'PLAN_READY' && !wasReady) {
         this.openPlan()
@@ -59,9 +62,15 @@ export const useOrganizeStore = defineStore('organize', {
       if (phase !== 'PLAN_READY' && this.dialog === 'plan') {
         this.dialog = null
       }
+      if ((phase === 'IDLE' || phase === 'ASSIGNING') && this.dialog === 'stop') {
+        this.dialog = null
+      }
     },
-    // 点底栏按钮：空闲时先估算再确认；方案好了打开方案；进行中问要不要停
+    // 打开确认框后异步读取估算，关闭或重新打开时丢弃旧请求的结果。
     async click(): Promise<void> {
+      if (this.busy || this.dialog || this.phase === 'ASSIGNING') {
+        return
+      }
       if (this.phase === 'PLAN_READY') {
         this.openPlan()
         return
@@ -75,16 +84,25 @@ export const useOrganizeStore = defineStore('organize', {
         useToastStore().show('本地分级判完才能整理')
         return
       }
+      if (useLookStore().needsApiKey) {
+        useToastStore().show(useLookStore().keyHint)
+        return
+      }
+      this.estimate = null
+      this.dialog = 'confirm'
+      const request = ++this.estimateRequest
       try {
         const est = await fetchOrganizeEstimate()
-        // 本地分级还没判完（比如扫描时暂停着）：先不弹确认框
+        if (request !== this.estimateRequest) return
         if (est.ratingLeft > 0) {
+          this.close()
           useToastStore().show(`本地分级还剩 ${est.ratingLeft.toLocaleString('zh-CN')} 张，判完才能整理`)
           return
         }
         this.estimate = est
-        this.dialog = 'confirm'
       } catch (err) {
+        if (request !== this.estimateRequest) return
+        this.close()
         useToastStore().show(errText(err), 'error')
       }
     },
@@ -93,10 +111,13 @@ export const useOrganizeStore = defineStore('organize', {
       this.dialog = 'plan'
     },
     close(): void {
+      this.estimateRequest++
+      this.estimate = null
       this.dialog = null
     },
     // 开始，或方案出错后重试
     async start(): Promise<void> {
+      if (this.busy || (this.dialog === 'confirm' && !this.estimate)) return
       this.busy = true
       try {
         const s = await startOrganize()
@@ -134,11 +155,15 @@ export const useOrganizeStore = defineStore('organize', {
     },
     // 停下一键整理（已经排进看图队列的照常看完）
     async cancel(): Promise<void> {
+      const stoppedLooking = this.phase === 'LOOKING' || this.phase === 'FOLLOWING'
       this.busy = true
       try {
         const s = await cancelOrganize()
         this.apply(s)
         this.dialog = null
+        if (stoppedLooking) {
+          useToastStore().show('已停止整理，剩余看图任务会继续处理')
+        }
       } catch (err) {
         useToastStore().show(errText(err), 'error')
       } finally {

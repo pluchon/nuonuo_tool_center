@@ -3,8 +3,9 @@ import { join } from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
-import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
+import { closeLeftoverApps, freshCase, setAppearance, shot } from './support/app'
 import { importFolder } from './support/picker'
+import { bailianRequests, launchWithMockBailian } from './support/mockBailian'
 
 sharp.cache(false)
 
@@ -23,7 +24,41 @@ function navCount(page: Page, label: string): Promise<string | null> {
 }
 
 describe('诺诺看图和 AI 建议', () => {
-  it('新图过了本地分级自动排队、真实看图出建议；逐项和全部采用；其他 AI 辅助整理；浅色深色截图', async () => {
+  it('一张图片被百炼拦截后移出队列并待复核，另一张仍会生成建议', async () => {
+    const dirs = freshCase('look-moderation')
+    const source = join(dirs.root, 'pics')
+    mkdirSync(source, { recursive: true })
+    await makeImage(join(source, 'a.jpg'), '示例一', '#CFE3F5')
+    await makeImage(join(source, 'b.jpg'), '示例二', '#E2F4EE')
+
+    const { app, page } = await launchWithMockBailian(dirs, 1)
+    await importFolder(app, page, source)
+    await page.locator('.side-nav__label:text-is("AI 建议")').click()
+    await page.waitForFunction(() => document.querySelectorAll('.tile').length === 2)
+    expect((await bailianRequests(app)).filter((route) => route === 'responses')).toHaveLength(2)
+    expect(await page.evaluate(() => window.api.look.state())).toMatchObject({ ok: true, data: { count: 0, rows: [] } })
+    const suggestions = await page.evaluate(() => window.api.gallery.list({ view: 'ai', sort: 'new' }))
+    if (!suggestions.ok) throw new Error(suggestions.message)
+    const rejected = suggestions.data.items.filter((image) => image.isR18)
+    const accepted = suggestions.data.items.filter((image) => !image.isR18)
+    expect(rejected).toHaveLength(1)
+    expect(accepted).toHaveLength(1)
+    await page.locator(`.tile[aria-label="${rejected[0].name}"]`).click()
+    await page.getByText('云端内容审核未通过', { exact: true }).waitFor()
+    await page.getByRole('button', { name: '保留 R-18' }).click()
+    await page.waitForFunction(() => document.querySelectorAll('.tile').length === 1)
+    await page.locator('.tile').click()
+    await page.getByRole('button', { name: '全部采用' }).waitFor()
+    const embeddings = async () => (await bailianRequests(app)).filter((route) => route === 'multimodal-embedding').length
+    expect(await embeddings()).toBe(0)
+    await page.getByRole('button', { name: '全部采用' }).click()
+    await expect.poll(embeddings, { timeout: 10_000 }).toBe(1)
+    await page.waitForTimeout(700)
+    expect(await embeddings()).toBe(1)
+    await app.close()
+  })
+
+  it('新图过了本地分级自动排队并生成建议，支持逐项采用、全部采用和导入外部建议', async () => {
     const dirs = freshCase('look')
     const source = join(dirs.root, 'pics')
     mkdirSync(source, { recursive: true })
@@ -31,7 +66,7 @@ describe('诺诺看图和 AI 建议', () => {
     await makeImage(join(source, '12345678_p0.jpg'), '晚安', '#CFE3F5')
     await makeImage(join(source, 'third.jpg'), '早上好', '#E2F4EE')
 
-    const { app, page } = await launchApp(dirs)
+    const { app, page } = await launchWithMockBailian(dirs)
     const errors: string[] = []
     page.on('pageerror', (e) => errors.push(e.message))
     page.on('console', (m) => {
@@ -41,15 +76,16 @@ describe('诺诺看图和 AI 建议', () => {
     })
     await importFolder(app, page, source)
 
-    // 本地分级判完 → 排队 → 真实看图；三张都看完，“AI 建议”有 3 张
+    // 本地分级和看图处理完后，三张图片进入 AI 建议。
     await page.waitForFunction(
       () => {
         const row = [...document.querySelectorAll('.side-nav__item')].find((e) => e.querySelector('.side-nav__label')?.textContent === 'AI 建议')
         return row?.querySelector('.side-nav__count')?.textContent === '3'
       },
       null,
-      { timeout: 240_000 }
+      { timeout: 60_000 }
     )
+    expect((await bailianRequests(app)).filter((route) => route === 'responses')).toHaveLength(3)
     expect(await page.locator('.look__badge').first().textContent()).toBe('0')
     await page.click('.look__pill')
     await page.waitForSelector('.look__empty')

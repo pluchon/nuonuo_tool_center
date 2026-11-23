@@ -1,7 +1,9 @@
-import { defineComponent, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineComponent, onBeforeUnmount, onMounted, ref } from 'vue'
+import { organizeUsesLookQueue } from '@shared/api'
 import { thumbUrl } from '@/api/gallery'
 import NonoArt from '@/components/nono/NonoArt.vue'
 import { useLookStore } from '@/stores/look'
+import { useOrganizeStore } from '@/stores/organize'
 import { ICON } from '@/theme/icons'
 
 // 底栏左侧“诺诺在看图”胶囊（照原型 aiBar）：渐变四角星（排队时按节奏转动）+ 数量；点开是带尖角的卡片
@@ -10,6 +12,8 @@ export default defineComponent({
   components: { NonoArt },
   setup() {
     const look = useLookStore()
+    const org = useOrganizeStore()
+    const canCancel = computed(() => look.canCancel && !organizeUsesLookQueue(org.phase))
     const pillRef = ref<HTMLButtonElement | null>(null)
 
     // 点在卡片和胶囊以外的地方、按 Esc 就收起
@@ -33,6 +37,6 @@ export default defineComponent({
       window.removeEventListener('keydown', onKey)
     })
 
-    return { look, pillRef, thumbUrl, starPath: ICON.spark }
+    return { look, canCancel, pillRef, thumbUrl, starPath: ICON.spark }
   }
 })

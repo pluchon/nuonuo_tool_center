@@ -7,9 +7,11 @@ import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/clie
 // 出方案的模型调用换成脚本
 let planReply = ''
 const prompts: string[] = []
+let planGate: Promise<void> | undefined
 vi.mock('../../src/main/services/ai/bailianClient', () => ({
   chatCall: vi.fn(async (input: { messages: Array<{ content: string }> }) => {
     prompts.push(input.messages[0].content)
+    await planGate
     return { message: { role: 'assistant', content: planReply }, finishReason: 'stop', usage: {} }
   }),
   searchCall: vi.fn(),
@@ -26,6 +28,7 @@ const { configureTransfer } = await import('../../src/main/services/fileOps/tran
 const { configureFileOps } = await import('../../src/main/services/fileOps/fileOpsService')
 const { updateSettings } = await import('../../src/main/services/settingsService')
 const { insertOrganizeResults } = await import('../../src/main/repositories/aiResultRepository')
+const { upsertSettings } = await import('../../src/main/repositories/appSettingRepository')
 
 describe('方案整理和本地分图（纯函数）', () => {
   it('名字不合法、词不在给的范围里、重复的词和没词的目录都去掉；沿用现有目录不分大小写', () => {
@@ -118,6 +121,13 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
   })
 
   it('估算只算还没看过、没打标签、过了闸门的图；还报本地分级还剩几张', async () => {
+    vi.stubEnv('DASHSCOPE_API_KEY', '')
+    try {
+      await expect(org.startOrganize()).rejects.toMatchObject({ code: 'DEPENDENCY_FAILED', message: '请在「设置 → AI」中配置百炼 API Key' })
+      expect(org.getOrganizeState().phase).toBe('IDLE')
+    } finally {
+      vi.unstubAllEnvs()
+    }
     const before = await org.estimateOrganize()
     expect(before).toMatchObject({ toLook: 1, ratingLeft: 0 })
     const { pg } = getDatabase()
@@ -242,8 +252,8 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
       INSERT INTO ai_job (kind, image_id, status, remote_id) SELECT 'LOOK', id, 'FAILED', 'batch-x' FROM image WHERE content_hash = 'h10';
     `)
     const ids = (await pg.query<{ id: number }>(`SELECT id FROM image WHERE content_hash IN ('h9', 'h10') ORDER BY id`)).rows.map((r) => Number(r.id))
-    const { findLookCandidates } = await import('../../src/main/repositories/aiResultRepository')
-    expect(await findLookCandidates(new Date(0), 100)).toEqual([])
+    const { countLookCandidates } = await import('../../src/main/repositories/aiResultRepository')
+    expect(await countLookCandidates(new Date(0))).toBe(0)
     expect((await org.estimateOrganize()).toLook).toBe(2)
     const s = await org.startOrganize()
     expect(s.phase).toBe('LOOKING')
@@ -259,5 +269,41 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     ])
     expect(s.looked).toEqual({ done: 0, total: 2 })
     await org.cancelOrganize()
+  })
+
+  it('启动时将上次待确认的方案推给界面', async () => {
+    const onState = vi.fn()
+    org.configureOrganize({ onState, onSuggested: () => undefined })
+    const saved = { phase: 'PLAN_READY', plan: [{ name: '风景', tags: ['风景'], characters: [], works: [], isNew: false }], error: null }
+    await upsertSettings([{ key: 'ai.organize', value: saved }])
+    await org.restoreOrganize()
+    expect(onState).toHaveBeenCalledWith(saved)
+    await org.cancelOrganize()
+  })
+
+  it('停止整理后，迟到的方案不会重新打开确认窗口', async () => {
+    const { pg } = getDatabase()
+    await pg.exec(`
+      UPDATE ai_job SET status = 'DONE', finished_at = now() WHERE kind = 'LOOK' AND status = 'QUEUED';
+      INSERT INTO image_tag (image_id, tag_id, source, status) VALUES (4, 2, 'MANUAL', 'ACCEPTED');
+    `)
+    planReply = '```json\n{"folders":[{"name":"风景","tags":["风景"]}]}\n```'
+    const onState = vi.fn()
+    org.configureOrganize({ onState, onSuggested: () => undefined })
+    let release = (): void => undefined
+    planGate = new Promise<void>((resolve) => { release = resolve })
+    const calls = prompts.length
+    try {
+      await org.startOrganize()
+      await vi.waitFor(() => expect(prompts).toHaveLength(calls + 1))
+      expect(org.getOrganizeState().phase).toBe('PLANNING')
+      await org.cancelOrganize()
+    } finally {
+      planGate = undefined
+      release()
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(org.getOrganizeState().phase).toBe('IDLE')
+    expect(onState).not.toHaveBeenCalledWith(expect.objectContaining({ phase: 'PLAN_READY' }))
   })
 })

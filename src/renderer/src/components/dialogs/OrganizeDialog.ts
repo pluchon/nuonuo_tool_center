@@ -69,16 +69,13 @@ export default defineComponent({
       return t >= 10_000 ? `${(t / 10_000).toFixed(t >= 1_000_000 ? 0 : 1)} 万` : t.toLocaleString('zh-CN')
     })
     const head = computed(() => HEADS[org.dialog ?? 'confirm'])
-    // 开始前的一排数字：待看张数、token、花费（分级判完才会弹这个框，ratingLeft 此时是 0）
+    // 估算返回前保留三个数值的位置，避免弹窗跳动。
     const stats = computed(() => {
       const e = est.value
-      if (!e) {
-        return []
-      }
       return [
-        { key: 'look', label: '待看', value: (e.toLook + e.ratingLeft).toLocaleString('zh-CN'), icon: STAT_ICON.look },
-        { key: 'token', label: 'token', value: tokenText.value, icon: STAT_ICON.token },
-        { key: 'money', label: '花费', value: `¥${e.yuan.toFixed(2)}`, icon: STAT_ICON.money }
+        { key: 'look', label: '待看', value: e ? (e.toLook + e.ratingLeft).toLocaleString('zh-CN') : null, icon: STAT_ICON.look },
+        { key: 'token', label: 'token', value: e ? tokenText.value : null, icon: STAT_ICON.token },
+        { key: 'money', label: '花费', value: e ? `¥${e.yuan.toFixed(2)}` : null, icon: STAT_ICON.money }
       ]
     })
 
