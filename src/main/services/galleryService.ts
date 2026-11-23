@@ -17,6 +17,7 @@ import { BizError } from '../common/bizError'
 import { normalizeRelDir } from '../common/pathUtil'
 import type { ExifInfo } from './scan/exifInfo'
 import { formatOfFile } from './scan/formats'
+import type { AiSearchFilter } from '../repositories/aiSearchRepository'
 import {
   findFileLocation,
   findGalleryRows,
@@ -289,8 +290,8 @@ async function withAiOrder(items: GalleryItemVO[]): Promise<GalleryItemVO[]> {
 }
 
 // 按给定顺序把图片 id 换成网格项（诺诺回复里的结果图）；已经删掉、没有位置的图跳过
-export async function itemsOfImages(imageIds: number[]): Promise<GalleryItemVO[]> {
-  const rows = await findRowsOfImages(imageIds)
+export async function itemsOfImages(imageIds: number[], includeR18 = false, dirs?: AiSearchFilter['dirs']): Promise<GalleryItemVO[]> {
+  const rows = await findRowsOfImages(imageIds, { includeR18, dirs })
   const offline = await offlineRoots(rows)
   const byImage = new Map<number, GalleryRow[]>()
   for (const row of rows) {

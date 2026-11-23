@@ -1,14 +1,19 @@
 import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { col, likeEscape } from '../db/sqlUtil'
-import { image, imageEmbedding, imageFile, imageTag, libraryRoot, tag, tagAlias } from '../db/schema'
+import { aiJob, image, imageEmbedding, imageFile, imageTag, libraryRoot, tag, tagAlias } from '../db/schema'
+import { hasPendingSuggestion } from './aiResultRepository'
 
 // 诺诺找图的检索条件（服务层已经解析好：词已对到标签 id，对不上的留作关键词）
 export interface AiSearchFilter {
+  // 复核已有候选时限制到这些图片。
+  ids?: number[]
   // 每组是一个条件的候选标签（组内任一），组与组之间都要满足
   tagGroups: number[][]
-  // 关键词（已转小写）：任一个在名字、文件名、描述、标签名或别名里出现就算（模型常把同义词一起给）
-  keywords: string[]
+  // 字面检索时另外标记全部由已确认标签满足的结果，不影响其余候选的准入条件。
+  preferredTagGroups?: number[][]
+  // 关键词已转小写。每个条件都要匹配，同一条件内的同义词可以互换。
+  keywordGroups: string[][]
   orientation?: 'portrait' | 'landscape' | 'square'
   // 只要最近这么多天导入的
   recentDays?: number
@@ -18,49 +23,67 @@ export interface AiSearchFilter {
   dirs?: Array<{ rootId: number; prefix: string }>
   // 普通检索排除 R-18；R-18 那一路只查 R-18
   r18: 'exclude' | 'only'
-  limit: number
   // 语义那一路：按和这个向量的相似度排（只在已经有向量的图里找），低于 minSimilarity 的不要
-  vector?: { values: number[]; model: string; minSimilarity: number }
+  vector?: { values: number[]; model: string; minSimilarity: number; contrast?: { values: number[][]; minMargin: number } }
 }
 
-// 检索结果：按导入时间从新到旧的图片 id（最多 limit 张）和总数
+// 检索结果：按导入时间从新到旧的图片 id 和总数
 export interface AiSearchHit {
   ids: number[]
   total: number
+  tagMatchedIds?: number[]
 }
 
 // 已确认的标签
-const acceptedTag = sql`${imageTag.deleteState} = 0 and ${imageTag.status} = 'ACCEPTED'`
+const acceptedTag = sql`${col(imageTag.deleteState)} = 0 and ${col(imageTag.status)} = 'ACCEPTED'`
 
-// 图片至少有一个活着的位置（在目录范围内）
-function aliveIn(dirs: AiSearchFilter['dirs']): SQL {
-  const dirCond =
-    dirs && dirs.length > 0
-      ? sql` and (${sql.join(
-          dirs.map((d) =>
-            d.prefix
-              ? sql`(${col(imageFile.rootId)} = ${d.rootId} and lower(${col(imageFile.relPath)}) like ${likeEscape(d.prefix.toLowerCase()) + '\\\\%'})`
-              : sql`${col(imageFile.rootId)} = ${d.rootId}`
-          ),
-          sql` or `
-        )})`
-      : sql``
+// 检索、历史结果及向量索引共用同一范围。采用的建议只有在整张图复核完毕后才参与检索。
+export const confirmedForSearch = sql`not ${hasPendingSuggestion} and exists (
+  select 1 from ${imageTag} join ${tag} on ${col(tag.id)} = ${col(imageTag.tagId)}
+  where ${col(imageTag.imageId)} = ${col(image.id)} and ${acceptedTag} and ${col(tag.deleteState)} = 0)`
+
+const relativePath = sql`replace(${col(imageFile.relPath)}, chr(92), '/')`
+
+// 未选目录时包含所有类目录。空数组表示原目录已移除或旧版的源目录范围。
+export function categoryPosition(dirs?: AiSearchFilter['dirs']): SQL {
+  if (dirs?.length === 0) return sql`false`
+  const category = sql`${col(libraryRoot.kind)} = 'CATEGORY' and strpos(${relativePath}, '/') > 0`
+  if (!dirs) return category
+  const positions = dirs.map(({ rootId, prefix }) =>
+    prefix
+      ? sql`(${col(imageFile.rootId)} = ${rootId} and starts_with(lower(${relativePath}), ${prefix.toLowerCase() + '/'}))`
+      : sql`${col(imageFile.rootId)} = ${rootId}`)
+  return sql`${category} and (${sql.join(positions, sql` or `)})`
+}
+
+function aliveIn(dirs: AiSearchFilter['dirs'], categoryOnly = true): SQL {
   return sql`exists (select 1 from ${imageFile} join ${libraryRoot} on ${col(libraryRoot.id)} = ${col(imageFile.rootId)}
     where ${col(imageFile.imageId)} = ${col(image.id)} and ${col(imageFile.deleteState)} = 0 and ${col(imageFile.status)} <> 'DELETED'
-    and ${col(libraryRoot.deleteState)} = 0${dirCond})`
+    and ${col(libraryRoot.deleteState)} = 0 and ${categoryOnly ? categoryPosition(dirs) : sql`true`})`
+}
+
+export async function hasSearchableImage(dirs: AiSearchFilter['dirs'], includeR18: boolean): Promise<boolean> {
+  const rows = await getDatabase().db.select({ id: image.id }).from(image).where(and(
+    eq(image.deleteState, 0), includeR18 ? undefined : eq(image.isR18, false), confirmedForSearch, aliveIn(dirs)
+  )).limit(1)
+  return rows.length > 0
 }
 
 // 带其中任一标签
 function hasAnyTag(ids: number[]): SQL {
-  return sql`exists (select 1 from ${imageTag} where ${col(imageTag.imageId)} = ${col(image.id)} and ${acceptedTag} and ${inArray(imageTag.tagId, ids)})`
+  return sql`exists (select 1 from ${imageTag} join ${tag} on ${col(tag.id)} = ${col(imageTag.tagId)}
+    where ${col(imageTag.imageId)} = ${col(image.id)} and ${acceptedTag} and ${col(tag.deleteState)} = 0 and ${inArray(imageTag.tagId, ids)})`
 }
 
 // 一个关键词：名字、描述、文件名、标签名、别名里出现就算
-function keywordHit(word: string): SQL {
+function keywordHit(word: string, dirs: AiSearchFilter['dirs']): SQL {
   const p = `%${likeEscape(word)}%`
   return sql`(lower(coalesce(${image.displayName}, '')) like ${p}
     or lower(coalesce(${image.description}, '')) like ${p}
-    or exists (select 1 from ${imageFile} where ${col(imageFile.imageId)} = ${col(image.id)} and ${col(imageFile.deleteState)} = 0 and lower(${col(imageFile.relPath)}) like ${p})
+    or exists (select 1 from ${imageFile} join ${libraryRoot} on ${col(libraryRoot.id)} = ${col(imageFile.rootId)}
+      where ${col(imageFile.imageId)} = ${col(image.id)} and ${col(imageFile.deleteState)} = 0 and ${col(imageFile.status)} <> 'DELETED'
+      and ${col(libraryRoot.deleteState)} = 0 and ${categoryPosition(dirs)}
+      and lower(regexp_replace(replace(${col(imageFile.relPath)}, chr(92), '/'), '^.*/', '')) like ${p})
     or exists (select 1 from ${imageTag} join ${tag} on ${col(tag.id)} = ${col(imageTag.tagId)}
       left join ${tagAlias} on ${col(tagAlias.tagId)} = ${col(tag.id)} and ${col(tagAlias.deleteState)} = 0
       where ${col(imageTag.imageId)} = ${col(image.id)} and ${acceptedTag} and ${col(tag.deleteState)} = 0
@@ -79,15 +102,62 @@ function orientationOf(o: NonNullable<AiSearchFilter['orientation']>): SQL {
   return sql`${r} between 0.95 and 1.05`
 }
 
-// 按条件找图，只要没删的图
+// 按当前可见卡片定位追问的序号。能否读取详情另按本轮目录和最新分级校验。
+export async function visibleResultIds(ids: number[], includeR18: boolean, dirs?: AiSearchFilter['dirs']): Promise<Set<number>> {
+  if (!ids.length) return new Set()
+  const rows = await getDatabase().db.select({ id: image.id }).from(image).where(
+    and(sql`${image.id} = any(${sql.param(ids)}::bigint[])`, eq(image.deleteState, 0), includeR18 ? undefined : eq(image.isR18, false), confirmedForSearch, aliveIn(dirs))
+  )
+  return new Set(rows.map((r) => r.id))
+}
+
+// 读取或补充本地识别结果时重新校验图库范围，避免复核或分级变动后继续读取图片。
+function visualFeatureScope(imageId: number): SQL | undefined {
+  return and(eq(image.id, imageId), eq(image.deleteState, 0), eq(image.isR18, false), confirmedForSearch, aliveIn(undefined))
+}
+
+export async function findSearchVisualFeatures(imageId: number) {
+  const [row] = await getDatabase().db
+    .select({ contentHash: image.contentHash, features: image.visualFeatures })
+    .from(image)
+    .where(visualFeatureScope(imageId))
+    .limit(1)
+  return row
+}
+
+// 批量判断具有当前版本识别记录的普通图，只返回编号和是否匹配。调用处提供本轮可见候选。
+export async function cachedFeatureMatches(ids: number[], revision: string, required: string, anyOf: string[], ambiguous: string[]) {
+  if (!ids.length) return []
+  const tags = sql`(${image.visualFeatures}->'tags')`
+  return getDatabase().db.select({
+    id: image.id,
+    matches: sql<boolean | null>`case when not (${tags} ? ${required} and ${tags} ?| ${sql.param(anyOf)}::text[]) then false
+      when ${tags} ?| ${sql.param(ambiguous)}::text[] then null else true end`
+  }).from(image).where(and(
+    sql`${image.id} = any(${sql.param(ids)}::bigint[])`, eq(image.isR18, false),
+    sql`${image.visualFeatures}->>'revision' = ${revision} and jsonb_typeof(${tags}) = 'array'`
+  ))
+}
+
+export async function saveSearchVisualFeatures(imageId: number, revision: string, tags: string[]): Promise<boolean> {
+  const rows = await getDatabase().db.update(image)
+    .set({ visualFeatures: { revision, tags } })
+    .where(visualFeatureScope(imageId))
+    .returning({ id: image.id })
+  return rows.length > 0
+}
+
+// 按条件检索已确认的图片。
 export async function searchImages(f: AiSearchFilter): Promise<AiSearchHit> {
+  if (f.ids?.length === 0 || f.untagged || (f.vector && f.r18 === 'only')) return { ids: [], total: 0 }
   const { db } = getDatabase()
-  const conds: Array<SQL | undefined> = [eq(image.deleteState, 0), aliveIn(f.dirs), eq(image.isR18, f.r18 === 'only')]
+  const conds: Array<SQL | undefined> = [eq(image.deleteState, 0), confirmedForSearch, aliveIn(f.dirs), eq(image.isR18, f.r18 === 'only')]
+  if (f.ids) conds.push(sql`${image.id} = any(${sql.param(f.ids)}::bigint[])`)
   for (const group of f.tagGroups) {
     conds.push(group.length > 0 ? hasAnyTag(group) : sql`false`)
   }
-  if (f.keywords.length > 0) {
-    conds.push(sql`(${sql.join(f.keywords.map(keywordHit), sql` or `)})`)
+  for (const group of f.keywordGroups) {
+    conds.push(group.length ? sql`(${sql.join(group.map((word) => keywordHit(word, f.dirs)), sql` or `)})` : sql`false`)
   }
   if (f.orientation) {
     conds.push(orientationOf(f.orientation))
@@ -95,45 +165,61 @@ export async function searchImages(f: AiSearchFilter): Promise<AiSearchHit> {
   if (f.recentDays !== undefined) {
     conds.push(sql`${image.createTime} >= now() - make_interval(days => ${f.recentDays})`)
   }
-  if (f.untagged) {
-    conds.push(sql`not exists (select 1 from ${imageTag} where ${col(imageTag.imageId)} = ${col(image.id)} and ${acceptedTag})`)
-  }
   if (f.vector) {
-    // 余弦距离 = 1 - 相似度；向量用字面量传进去
-    const lit = `[${f.vector.values.join(',')}]`
-    const distance = sql<number>`(select ${col(imageEmbedding.embedding)} <=> ${lit}::vector from ${imageEmbedding}
-      where ${col(imageEmbedding.imageId)} = ${col(image.id)} and ${col(imageEmbedding.model)} = ${f.vector.model} and ${col(imageEmbedding.deleteState)} = 0 limit 1)`
+    const distanceTo = (values: number[]): SQL<number> =>
+      sql<number>`(${imageEmbedding.embedding} <=> ${`[${values.join(',')}]`}::vector)`
+    const distance = distanceTo(f.vector.values)
     conds.push(sql`${distance} <= ${1 - f.vector.minSimilarity}`)
+    // 正反例几乎同分时保留空结果，避免把相近耳形、发色或构图当作明确匹配。
+    if (f.vector.contrast) {
+      for (const other of f.vector.contrast.values) {
+        conds.push(sql`${distance} + ${f.vector.contrast.minMargin}::float8 <= ${distanceTo(other)}`)
+      }
+    }
     const rows = await db
-      .select({ id: image.id, total: sql<number>`count(*) over ()::int` })
+      .select({ id: image.id })
       .from(image)
+      .innerJoin(imageEmbedding, and(eq(imageEmbedding.imageId, image.id), eq(imageEmbedding.model, f.vector.model), eq(imageEmbedding.deleteState, 0)))
       .where(and(...conds))
       .orderBy(distance, desc(image.id))
-      .limit(f.limit)
-    return { ids: rows.map((r) => r.id), total: rows[0]?.total ?? 0 }
+    return { ids: rows.map((r) => r.id), total: rows.length }
   }
+  const preferred = f.preferredTagGroups
+  const tagMatch = preferred && preferred.every((group) => group.length > 0)
+    ? and(...preferred.map(hasAnyTag)) ?? sql`true`
+    : sql`false`
   const rows = await db
-    .select({ id: image.id, total: sql<number>`count(*) over ()::int` })
+    .select({ id: image.id, tagMatch: sql<boolean>`${tagMatch}` })
     .from(image)
     .where(and(...conds))
     .orderBy(desc(image.createTime), desc(image.id))
-    .limit(f.limit)
-  return { ids: rows.map((r) => r.id), total: rows[0]?.total ?? 0 }
+  return {
+    ids: rows.map((r) => r.id),
+    total: rows.length,
+    ...(preferred ? { tagMatchedIds: rows.filter((row) => row.tagMatch).map((row) => row.id) } : {})
+  }
 }
 
 // 还没有向量、又过了上云闸门的图（本地模型判过且不是明显 R-18，或你手动关过 R-18），先导入的先做
-export async function findEmbedCandidates(model: string, limit: number): Promise<number[]> {
+export async function findEmbedCandidates(model: string, limit: number, imageId?: number): Promise<number[]> {
   const { db } = getDatabase()
   const hasVec = sql`exists (select 1 from ${imageEmbedding} where ${col(imageEmbedding.imageId)} = ${col(image.id)} and ${col(imageEmbedding.model)} = ${model} and ${col(imageEmbedding.deleteState)} = 0)`
+  const awaitingLook = sql`exists (select 1 from ${aiJob} where ${col(aiJob.imageId)} = ${col(image.id)}
+    and ${col(aiJob.kind)} = 'LOOK' and ${col(aiJob.status)} in ('QUEUED', 'RUNNING') and ${col(aiJob.deleteState)} = 0)`
   const rows = await db
     .select({ id: image.id })
     .from(image)
     .where(
       and(
+        imageId === undefined ? undefined : eq(image.id, imageId),
+        confirmedForSearch,
+        aliveIn(undefined),
         eq(image.deleteState, 0),
         eq(image.isR18, false),
         sql`(${image.ratingSource} = 'MANUAL' or (${image.ratingSource} = 'MODEL' and ${image.rating} in ('GENERAL', 'SENSITIVE')))`,
-        sql`not ${hasVec}`
+        sql`not ${hasVec}`,
+        // 看图可能将图片转入 R-18 复核，等看图结果落库后再决定是否生成向量。
+        sql`not ${awaitingLook}`
       )
     )
     .orderBy(image.id)
@@ -182,11 +268,13 @@ export async function findTagNamesOf(imageIds: number[]): Promise<Map<number, st
 }
 
 // 标签词表：每个标签的名字、别名、分类，以及是否用在至少一张非 R-18 图上
-export async function findVocabulary(): Promise<Array<{ id: number; name: string; categoryId: number; aliases: string[]; general: boolean }>> {
+export async function findVocabulary(searchOnly = false): Promise<Array<{ id: number; name: string; categoryId: number; aliases: string[]; general: boolean }>> {
   const { db } = getDatabase()
-  const general = sql<boolean>`exists (select 1 from ${imageTag} join ${image} on ${col(image.id)} = ${col(imageTag.imageId)}
-    where ${col(imageTag.tagId)} = ${col(tag.id)} and ${acceptedTag} and ${col(image.deleteState)} = 0 and ${col(image.isR18)} = false)`
-  const tags = await db.select({ id: tag.id, name: tag.name, categoryId: tag.categoryId, general }).from(tag).where(eq(tag.deleteState, 0)).orderBy(tag.id)
+  const used = (onlyGeneral: boolean) => sql<boolean>`exists (select 1 from ${imageTag} join ${image} on ${col(image.id)} = ${col(imageTag.imageId)}
+    where ${col(imageTag.tagId)} = ${col(tag.id)} and ${acceptedTag} and ${col(image.deleteState)} = 0
+    and not ${hasPendingSuggestion} and ${aliveIn(undefined, searchOnly)} ${onlyGeneral ? sql`and ${col(image.isR18)} = false` : sql``})`
+  const tags = await db.select({ id: tag.id, name: tag.name, categoryId: tag.categoryId, general: used(true) }).from(tag)
+    .where(and(eq(tag.deleteState, 0), searchOnly ? used(false) : undefined)).orderBy(tag.id)
   const aliases = await db
     .select({ tagId: tagAlias.tagId, name: tagAlias.name })
     .from(tagAlias)
@@ -199,32 +287,20 @@ export async function findVocabulary(): Promise<Array<{ id: number; name: string
   return tags.map((t) => ({ ...t, aliases: byTag.get(t.id) ?? [] }))
 }
 
-// 目录名：源目录名和类目录的顶层文件夹名（本地路由匹配“某某目录里的”）
+// 自然语言中可选择的目录，与聊天输入框的类目录范围一致。
 export async function findDirNames(): Promise<Array<{ rootId: number; kind: 'SOURCE' | 'CATEGORY'; name: string }>> {
-  const { db } = getDatabase()
-  const roots = await db
-    .select({ id: libraryRoot.id, kind: libraryRoot.kind, name: libraryRoot.name })
-    .from(libraryRoot)
-    .where(eq(libraryRoot.deleteState, 0))
-  const out: Array<{ rootId: number; kind: 'SOURCE' | 'CATEGORY'; name: string }> = roots
-    .filter((r) => r.kind === 'SOURCE')
-    .map((r) => ({ rootId: r.id, kind: 'SOURCE', name: r.name }))
-  const cat = roots.find((r) => r.kind === 'CATEGORY')
-  if (cat) {
-    const tops = await db
-      .selectDistinct({ top: sql<string>`split_part(${imageFile.relPath}, '\\', 1)` })
-      .from(imageFile)
-      .where(and(eq(imageFile.rootId, cat.id), eq(imageFile.deleteState, 0), sql`strpos(${imageFile.relPath}, '\\') > 0`))
-    for (const t of tops) {
-      out.push({ rootId: cat.id, kind: 'CATEGORY', name: t.top })
-    }
-  }
-  return out
+  const rows = await getDatabase().db
+    .selectDistinct({ rootId: imageFile.rootId, name: sql<string>`split_part(${relativePath}, '/', 1)` })
+    .from(imageFile).innerJoin(libraryRoot, eq(libraryRoot.id, imageFile.rootId))
+    .where(and(categoryPosition(), eq(libraryRoot.deleteState, 0), eq(imageFile.deleteState, 0),
+      sql`${imageFile.status} <> 'DELETED' and strpos(${relativePath}, '/') > 0`))
+  return rows.map((row) => ({ ...row, kind: 'CATEGORY' }))
 }
 
 // 一张图给模型看的信息：名字、文件名、尺寸、是否 R-18
 export async function findImageBrief(
-  imageId: number
+  imageId: number,
+  search?: { dirs: AiSearchFilter['dirs'] }
 ): Promise<{ id: number; displayName: string | null; relPath: string | null; width: number | null; height: number | null; isR18: boolean; description: string | null } | undefined> {
   const { db } = getDatabase()
   const [row] = await db
@@ -235,10 +311,14 @@ export async function findImageBrief(
       height: image.height,
       isR18: image.isR18,
       description: image.description,
-      relPath: sql<string | null>`(select ${col(imageFile.relPath)} from ${imageFile} where ${col(imageFile.imageId)} = ${col(image.id)} and ${col(imageFile.deleteState)} = 0 order by ${col(imageFile.id)} limit 1)`
+      relPath: sql<string | null>`(select ${col(imageFile.relPath)} from ${imageFile}
+        join ${libraryRoot} on ${col(libraryRoot.id)} = ${col(imageFile.rootId)}
+        where ${col(imageFile.imageId)} = ${col(image.id)} and ${col(imageFile.deleteState)} = 0
+        and ${col(imageFile.status)} <> 'DELETED' and ${col(libraryRoot.deleteState)} = 0
+        and ${search ? categoryPosition(search.dirs) : sql`true`} order by ${col(imageFile.id)} limit 1)`
     })
     .from(image)
-    .where(and(eq(image.id, imageId), eq(image.deleteState, 0)))
+    .where(and(eq(image.id, imageId), eq(image.deleteState, 0), search ? and(confirmedForSearch, aliveIn(search.dirs), eq(image.isR18, false)) : undefined))
     .limit(1)
   return row
 }

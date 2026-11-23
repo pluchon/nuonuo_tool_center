@@ -97,12 +97,13 @@ export async function saveModelRating(
   id: number,
   rating: 'UNKNOWN' | 'GENERAL' | 'SENSITIVE' | 'QUESTIONABLE' | 'EXPLICIT',
   scores: unknown,
-  isR18: boolean
+  isR18: boolean,
+  visualFeatures?: NonNullable<NewImage['visualFeatures']>
 ): Promise<boolean> {
   const { db } = getDatabase()
   const rows = await db
     .update(image)
-    .set({ rating, ratingScores: scores, ratingSource: 'MODEL', ...(isR18 ? { isR18: true } : {}) })
+    .set({ rating, ratingScores: scores, ratingSource: 'MODEL', visualFeatures, ...(isR18 ? { isR18: true } : {}) })
     .where(and(eq(image.id, id), isNull(image.ratingSource)))
     .returning({ id: image.id })
   return rows.length > 0

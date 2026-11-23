@@ -59,6 +59,7 @@ import {
   voteMessage
 } from '../services/ai/assistantService'
 import { cancelAllLooks, getLookState, lookNow, retryLook } from '../services/ai/lookService'
+import { scheduleEmbedding } from '../services/ai/embeddingService'
 import { startNativeDrag } from '../services/fileOps/nativeDragService'
 import { acceptAllSuggestions, assistPrompt, decideMany, decideSuggestion, importAssist, listSuggestions } from '../services/ai/suggestionService'
 import { approveOrganize, cancelOrganize, estimateOrganize, getOrganizeState, startOrganize } from '../services/ai/organizeService'
@@ -79,6 +80,12 @@ function requireDatabase(): void {
   if (getDbBootState() !== 'READY') {
     throw new BizError('DEPENDENCY_FAILED', '图库数据还没打开')
   }
+}
+
+// 标签或复核状态提交成功后，已有图库可能首次出现可建立向量索引的图片。
+function refreshImageIndex<T>(result: T): T {
+  scheduleEmbedding()
+  return result
 }
 
 // 注册全部 IPC 处理器：只做参数绑定与调用服务
@@ -234,11 +241,11 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   })
   handle(IpcChannel.imageSetR18, async (_event, imageIds: number[], value: boolean) => {
     requireDatabase()
-    return setR18(imageIds, value)
+    return setR18(imageIds, value).then(refreshImageIndex)
   })
   handle(IpcChannel.imageAddTag, async (_event, dto: AddTagDTO) => {
     requireDatabase()
-    return addTag(dto)
+    return addTag(dto).then(refreshImageIndex)
   })
   handle(IpcChannel.imageRemoveTag, async (_event, imageIds: number[], tagId: number) => {
     requireDatabase()
@@ -414,18 +421,18 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
     if (typeof key !== 'string' || typeof accept !== 'boolean') {
       throw new BizError('BAD_REQUEST', '参数不对')
     }
-    return decideSuggestion(imageId, key, accept)
+    return decideSuggestion(imageId, key, accept).then(refreshImageIndex)
   })
   handle(IpcChannel.suggestionAcceptAll, async (_event, imageId: number) => {
     requireDatabase()
-    return acceptAllSuggestions(imageId)
+    return acceptAllSuggestions(imageId).then(refreshImageIndex)
   })
   handle(IpcChannel.suggestionDecideMany, async (_event, imageIds: unknown, accept: unknown) => {
     requireDatabase()
     if (typeof accept !== 'boolean') {
       throw new BizError('BAD_REQUEST', '参数不对')
     }
-    return decideMany(imageIds, accept)
+    return decideMany(imageIds, accept).then(refreshImageIndex)
   })
   handle(IpcChannel.ratingProgress, async () => getRatingProgress())
   handle(IpcChannel.organizeState, async () => {

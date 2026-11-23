@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -6,8 +7,7 @@ import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/clie
 import { findRatingCandidates, saveModelRating, updateR18 } from '../../src/main/repositories/imageRepository'
 import { getImageDetail } from '../../src/main/services/galleryService'
 
-// ratingService 引用了 electron 的 utilityProcess；这里只测纯函数，换成空壳
-vi.mock('electron', () => ({ utilityProcess: {}, clipboard: {}, ClipboardItem: class {}, nativeImage: {}, shell: {} }))
+vi.mock('electron', () => ({ utilityProcess: { fork: vi.fn() }, clipboard: {}, ClipboardItem: class {}, nativeImage: {}, shell: {} }))
 const { isObviousR18, pickThreads, ratingOf, thresholdFromEnv, THREADS_ACTIVE, THREADS_IDLE } = await import('../../src/main/services/rating/ratingService')
 
 describe('分级线程', () => {
@@ -89,10 +89,10 @@ describe('分级写库', () => {
     mkdirSync(source)
     await openDatabase(join(dir, 'pgdata'), resolve('drizzle'))
     const { pg } = getDatabase()
-    await pg.query(`INSERT INTO library_root (kind, name, path) VALUES ('SOURCE', 'pics', $1)`, [source])
+    await pg.query(`INSERT INTO library_root (kind, name, path) VALUES ('CATEGORY', '类目录', $1)`, [source])
     await pg.exec(`
       INSERT INTO image (content_hash, format, byte_size, thumb_ready) VALUES ('h1', 'JPG', 1, 1), ('h2', 'JPG', 1, 1), ('h3', 'JPG', 1, 2), ('h4', 'JPG', 1, 1);
-      INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES (1, 1, 'a.jpg', now()), (2, 1, 'b.jpg', now()), (3, 1, 'c.jpg', now()), (4, 1, 'd.jpg', now());
+      INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES (1, 1, 'a.jpg', now()), (2, 1, 'pics/b.jpg', now()), (3, 1, 'c.jpg', now()), (4, 1, 'd.jpg', now());
     `)
   })
   afterAll(async () => {
@@ -122,5 +122,38 @@ describe('分级写库', () => {
     expect(await saveModelRating(1, 'EXPLICIT', scores, true)).toBe(false)
     expect(await saveModelRating(4, 'EXPLICIT', scores, true)).toBe(false)
     expect((await getImageDetail(4)).isR18).toBe(false)
+  })
+
+  it('旧图只对并发检索推理一次；持久缓存按版本读取，重新分级后立即排除', async () => {
+    const { pg } = getDatabase()
+    await pg.exec(`
+      INSERT INTO tag (name, category_id) VALUES ('测试特征检索', 4);
+      INSERT INTO image_tag (image_id,tag_id,source,status) VALUES (2,1,'MANUAL','ACCEPTED');
+      UPDATE image SET visual_features = '{"revision":"旧版","tags":["cat_ears"]}' WHERE id = 2;
+    `)
+    const { utilityProcess } = await import('electron')
+    const store = await import('../../src/main/services/rating/modelStore')
+    const { configureRating, getVisualTagsForSearch, stopRating } = await import('../../src/main/services/rating/ratingService')
+    const ready = vi.spyOn(store, 'isModelReady').mockResolvedValue(true)
+    const worker = Object.assign(new EventEmitter(), {
+      kill: vi.fn(),
+      postMessage: vi.fn(({ id }: { id: number }) => queueMicrotask(() =>
+        worker.emit('message', { id, ok: true, scores: {}, tags: ['blue_hair'] })))
+    })
+    vi.mocked(utilityProcess.fork).mockReturnValue(worker as unknown as ReturnType<typeof utilityProcess.fork>)
+    configureRating({ modelsRoot: dir, thumbsDir: dir, workerPath: '', canRun: () => true, onR18: () => {}, threshold: 0.5, onDone: () => {} })
+    try {
+      expect(await Promise.all([getVisualTagsForSearch(2), getVisualTagsForSearch(2)])).toEqual([['blue_hair'], ['blue_hair']])
+      expect(worker.postMessage).toHaveBeenCalledTimes(1)
+      ready.mockResolvedValue(false)
+      expect(await getVisualTagsForSearch(2)).toEqual(['blue_hair'])
+      expect(ready).toHaveBeenCalledTimes(1)
+      expect(await getVisualTagsForSearch(3)).toBeNull()
+      await updateR18([2], true)
+      expect(await getVisualTagsForSearch(2)).toBeNull()
+    } finally {
+      await stopRating()
+      ready.mockRestore()
+    }
   })
 })

@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import * as ort from 'onnxruntime-node'
 import sharp from 'sharp'
 import { pickModelFile } from './modelFile'
+import { WD_GENERAL_THRESHOLD } from './ratingProtocol'
 
 // WD tagger v3 的输入边长与标签分类编号
 const INPUT_SIZE = 448
@@ -90,7 +91,7 @@ export class WdTagger {
 
   // 对单张图推理
   async predict(filePath: string, options: WdPredictOptions = {}): Promise<WdPrediction> {
-    const { generalThreshold = 0.35, characterThreshold = 0.85 } = options
+    const { generalThreshold = WD_GENERAL_THRESHOLD, characterThreshold = 0.85 } = options
     const input = await toInputTensor(filePath)
     const output = await this.session.run({ [this.session.inputNames[0]]: input })
     const probs = output[this.session.outputNames[0]].data as Float32Array

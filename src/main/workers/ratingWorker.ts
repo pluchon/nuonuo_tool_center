@@ -54,7 +54,7 @@ process.parentPort.on('message', (event) => {
     try {
       const t = await getTagger(req.modelDir, req.threads)
       const p = await t.predict(req.file)
-      reply({ id: req.id, ok: true, scores: p.ratingScores })
+      reply({ id: req.id, ok: true, scores: p.ratingScores, tags: p.generalTags.map((tag) => tag.name) })
     } catch (err) {
       reply({ id: req.id, ok: false, error: err instanceof Error ? err.message.slice(0, 200) : String(err) })
     }

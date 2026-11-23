@@ -5,10 +5,11 @@ import { utilityProcess, type UtilityProcess } from 'electron'
 import { getLogger } from '../../common/logger'
 import type { RatingProgressVO } from '@shared/api'
 import { countRatingCandidates, findRatingCandidates, saveModelRating } from '../../repositories/imageRepository'
-import type { RatingRequest, RatingResponse } from './ratingProtocol'
+import { findSearchVisualFeatures, saveSearchVisualFeatures } from '../../repositories/aiSearchRepository'
+import { WD_GENERAL_THRESHOLD, type RatingRequest, type RatingResponse } from './ratingProtocol'
 import { loadCheckpoint, RATING_CHECKPOINT, saveCheckpoint } from '../progressCheckpoint'
 import { pickModelFile } from './modelFile'
-import { ensureModel, modelDirOf } from './modelStore'
+import { ensureModel, isModelReady, MODEL_NAME, modelDirOf } from './modelStore'
 import type { WdRating } from './wdTagger'
 
 const log = getLogger('rating')
@@ -19,6 +20,8 @@ const BATCH = 20
 const PER_IMAGE_TIMEOUT_MS = 120_000
 // 空闲多久关掉工作进程（模型常驻约 0.8 GB）
 const IDLE_EXIT_MS = 2 * 60_000
+// 更换模型或通用标签阈值时更新版本，旧缓存按查询逐张重建。
+export const FEATURE_REVISION = `${MODEL_NAME}:general-${WD_GENERAL_THRESHOLD}-v1`
 // 明显 R-18 的口径：questionable + explicit ≥ 0.5（用户确认过的阈值）
 export const R18_THRESHOLD = 0.5
 // 推理线程：你在用这个软件时 3 个；插着电且软件不在前台或电脑 1 分钟没人操作时 4 个（int8 实测 2/3/4 线程一张约 0.54/0.44/0.39 秒，再多几乎不快了）
@@ -104,6 +107,8 @@ let running: Promise<void> | null = null
 let stopping = false
 let seq = 0
 const waiters = new Map<number, (r: RatingResponse) => void>()
+let workerQueue: Promise<void> = Promise.resolve()
+const pendingFeatures = new Map<number, Promise<string[] | null>>()
 
 // 配置分级服务（启动时调一次）
 export function configureRating(next: RatingConfig): void {
@@ -142,9 +147,8 @@ function ensureWorker(): UtilityProcess {
     }
   })
   child.on('exit', (code) => {
-    if (worker === child) {
-      worker = null
-    }
+    if (worker !== child) return
+    worker = null
     // 进程没了：还在等的都按失败处理
     for (const [id, done] of waiters) {
       done({ id, ok: false, error: `工作进程退出（${code}）` })
@@ -166,12 +170,13 @@ function killWorker(): void {
 }
 
 // 发一张给工作进程，等结果或超时
-function rateFile(file: string, modelDir: string, threadCount: number): Promise<RatingResponse> {
+function inferFile(file: string, modelDir: string, threadCount: number): Promise<RatingResponse> {
   const id = ++seq
   const child = ensureWorker()
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       waiters.delete(id)
+      killWorker()
       resolve({ id, ok: false, error: '超时' })
     }, PER_IMAGE_TIMEOUT_MS)
     waiters.set(id, (r) => {
@@ -179,8 +184,52 @@ function rateFile(file: string, modelDir: string, threadCount: number): Promise<
       resolve(r)
     })
     const req: RatingRequest = { id, file, modelDir, threads: threadCount }
-    child.postMessage(req)
+    try {
+      child.postMessage(req)
+    } catch {
+      clearTimeout(timer)
+      waiters.delete(id)
+      resolve({ id, ok: false, error: '工作进程无法接收请求' })
+    }
   })
+}
+
+// 分级、上传和搜索共用一个工作进程，线程数调整必须等当前推理完成。
+function rateFile(file: string, modelDir: string, threadCount: number): Promise<RatingResponse> {
+  const request = workerQueue.then(async (): Promise<RatingResponse> => {
+    if (stopping) return { id: 0, ok: false, error: '正在退出' }
+    if (idleTimer) clearTimeout(idleTimer)
+    try {
+      return await inferFile(file, modelDir, threadCount)
+    } finally {
+      if (!stopping) idleTimer = setTimeout(killWorker, IDLE_EXIT_MS)
+    }
+  })
+  workerQueue = request.then(() => undefined, () => undefined)
+  return request
+}
+
+// 只为本轮普通图片候选补充特征。并发搜索共享推理，缺少本地模型时保留未知状态。
+export function getVisualTagsForSearch(imageId: number): Promise<string[] | null> {
+  const pending = pendingFeatures.get(imageId)
+  if (pending) return pending
+  if (stopping) return Promise.resolve(null)
+  const request = (async () => {
+    const row = await findSearchVisualFeatures(imageId)
+    if (!row) return null
+    const cached = row.features
+    if (cached?.revision === FEATURE_REVISION && Array.isArray(cached.tags) && cached.tags.every((tag) => typeof tag === 'string')) return cached.tags
+    const cfg = config
+    if (!cfg || !(await isModelReady(cfg.modelsRoot))) return null
+    const res = await rateFile(join(cfg.thumbsDir, row.contentHash + '.webp'), modelDirOf(cfg.modelsRoot), threads)
+    if (!res.ok || stopping) return null
+    return await saveSearchVisualFeatures(imageId, FEATURE_REVISION, res.tags) ? res.tags : null
+  })().catch((error: unknown) => {
+    log.warn(`图片 ${imageId} 无法校验本地画面特征`, error)
+    return null
+  }).finally(() => pendingFeatures.delete(imageId))
+  pendingFeatures.set(imageId, request)
+  return request
 }
 
 // 跑一轮：一批一批取还没分级的图，直到没有了、扫描开始了或要退出了
@@ -217,9 +266,11 @@ async function runOnce(): Promise<void> {
         break
       }
       const res = await rateFile(join(cfg.thumbsDir, `${img.contentHash}.webp`), modelDir, threadsNow())
+      if (stopping && !res.ok) break
       if (res.ok) {
         const hit = isObviousR18(res.scores, cfg.threshold)
-        if ((await saveModelRating(img.id, ratingOf(res.scores), res.scores, hit)) && hit) {
+        const features = hit ? undefined : { revision: FEATURE_REVISION, tags: res.tags }
+        if ((await saveModelRating(img.id, ratingOf(res.scores), res.scores, hit, features)) && hit) {
           r18++
         }
       } else {
@@ -258,10 +309,6 @@ export function scheduleRating(): void {
       if (progress.running) {
         setProgress({ ...progress, running: false })
       }
-      if (idleTimer) {
-        clearTimeout(idleTimer)
-      }
-      idleTimer = setTimeout(killWorker, IDLE_EXIT_MS)
     })
 }
 
@@ -273,10 +320,6 @@ export async function rateFileNow(file: string): Promise<{ scores: Record<WdRati
   }
   // 你在等结果：用当前已加载的线程数，不为一张图重新加载模型
   const res = await rateFile(file, modelDirOf(cfg.modelsRoot), threads)
-  if (idleTimer) {
-    clearTimeout(idleTimer)
-  }
-  idleTimer = setTimeout(killWorker, IDLE_EXIT_MS)
   return res.ok ? { scores: res.scores, r18: isObviousR18(res.scores, cfg.threshold) } : null
 }
 
@@ -288,6 +331,6 @@ export function isRatingBusy(): boolean {
 // 退出前：不再开始新的一张，等手上这张做完，关掉工作进程
 export async function stopRating(): Promise<void> {
   stopping = true
-  await running
+  await Promise.allSettled([running, workerQueue, ...pendingFeatures.values()])
   killWorker()
 }

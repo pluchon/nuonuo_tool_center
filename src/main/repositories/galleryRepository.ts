@@ -3,6 +3,7 @@ import { getDatabase } from '../db/client'
 import { col, likeEscape } from '../db/sqlUtil'
 import { image, imageFile, imageTag, libraryRoot, tag } from '../db/schema'
 import { hasPendingR18Review, hasPendingSuggestion } from './aiResultRepository'
+import { categoryPosition, confirmedForSearch, type AiSearchFilter } from './aiSearchRepository'
 
 // 网格查询的一行：一个文件位置连同它的图片
 export interface GalleryRow {
@@ -158,7 +159,7 @@ export async function findImageRows(imageId: number): Promise<GalleryRow[]> {
 }
 
 // 这些图在磁盘上的全部位置（没进回收站的）
-export async function findRowsOfImages(imageIds: number[]): Promise<GalleryRow[]> {
+export async function findRowsOfImages(imageIds: number[], search?: { includeR18: boolean; dirs?: AiSearchFilter['dirs'] }): Promise<GalleryRow[]> {
   if (imageIds.length === 0) {
     return []
   }
@@ -170,7 +171,10 @@ export async function findRowsOfImages(imageIds: number[]): Promise<GalleryRow[]
     .innerJoin(libraryRoot, eq(libraryRoot.id, imageFile.rootId))
     .where(
       and(
-        inArray(image.id, imageIds),
+        sql`${image.id} = any(${sql.param(imageIds)}::bigint[])`,
+        search ? confirmedForSearch : undefined,
+        search ? categoryPosition(search.dirs) : undefined,
+        search && !search.includeR18 ? eq(image.isR18, false) : undefined,
         eq(image.deleteState, 0),
         eq(imageFile.deleteState, 0),
         ne(imageFile.status, 'DELETED'),
