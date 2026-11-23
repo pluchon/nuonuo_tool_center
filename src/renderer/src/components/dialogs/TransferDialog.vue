@@ -10,6 +10,7 @@
             </button>
           </div>
 
+          <span v-if="!transfer.roots" class="transfer-dlg__empty" role="status">正在读取目录…</span>
           <div v-for="g in groups" :key="g.key" class="transfer-dlg__group">
             <div class="transfer-dlg__group-title"><span class="transfer-dlg__dot" :style="{ background: g.dot }" aria-hidden="true" />{{ g.title }}</div>
             <div class="transfer-dlg__list">
@@ -67,7 +68,7 @@
                 <span class="transfer-dlg__label transfer-dlg__label--path">{{ p }}</span>
                 <span class="transfer-dlg__note">{{ transfer.inLibrary(p) ? '' : '图库外' }}</span>
               </button>
-              <button class="transfer-dlg__pick" type="button" @click="transfer.pickOther()">
+              <button class="transfer-dlg__pick" type="button" :disabled="!transfer.roots || transfer.busy" @click="transfer.pickOther()">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M12 11v5M9.5 13.5h5" /></svg>
                 选择文件夹…
               </button>

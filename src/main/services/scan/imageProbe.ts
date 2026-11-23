@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream, existsSync } from 'node:fs'
 import { readFile, rename, rm } from 'node:fs/promises'
 import sharp from 'sharp'
@@ -111,7 +111,7 @@ export async function analyzeImage(path: string, format: ScanFormat, thumbPath: 
 
 // 写缩略图：按 EXIF 方向转正、缩到 THUMB_BOX 以内（不放大），存成 webp；目标已存在时不覆盖
 async function writeThumbnail(input: SharpImage, thumbPath: string): Promise<boolean> {
-  const tmp = `${thumbPath}.${process.pid}.tmp`
+  const tmp = `${thumbPath}.${randomUUID()}.tmp`
   try {
     await input
       .clone()

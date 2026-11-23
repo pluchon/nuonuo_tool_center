@@ -1,8 +1,9 @@
-import { stat, unlink } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { DeleteResultVO, FileOpDoneVO, GalleryQueryDTO } from '@shared/api'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
+import { pathKey } from '../../common/pathUtil'
 import { getDatabase } from '../../db/client'
 import {
   findBatch,
@@ -17,7 +18,9 @@ import {
   updateOpStatus,
   type FileOpEntity
 } from '../../repositories/fileOpRepository'
+import { findFileLocation } from '../../repositories/galleryRepository'
 import { filesForAction } from '../galleryService'
+import { recoverJournalOp, verifyImageFile } from './fileOpRecovery'
 import { muteWhile } from '../scan/watchService'
 
 const log = getLogger('fileOps')
@@ -176,7 +179,8 @@ async function applyBatch(batchId: number): Promise<void> {
   let firstError: string | null = null
   for (const op of ops) {
     // 移动、复制是当场执行的，只有崩溃时才会留下没做完的步骤：按磁盘现状收尾
-    const result = op.opType === 'DELETE' ? await applyDelete(op) : await settleTransferOp(op)
+    const result = op.opType === 'DELETE' && op.imageFileId !== null
+      ? await applyDelete(op, op.imageFileId) : await recoverJournalOp(op)
     if (result === null) {
       done += 1
     } else {
@@ -189,17 +193,26 @@ async function applyBatch(batchId: number): Promise<void> {
 }
 
 // 删一个文件；成功返回 null，失败返回原因
-async function applyDelete(op: FileOpEntity): Promise<string | null> {
+async function applyDelete(op: FileOpEntity, fileId: number): Promise<string | null> {
   const { db } = getDatabase()
   try {
-    if (await exists(op.fromPath)) {
+    const location = await findFileLocation(fileId)
+    if (!location || pathKey(join(location.rootPath, location.relPath)) !== pathKey(op.fromPath)) {
+      throw new BizError('CONFLICT', '图片位置已经更改，已取消删除')
+    }
+    try {
+      await verifyImageFile(op.fromPath, op.contentHash)
       await deps.trash(op.fromPath)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      // 只有源目录仍在线才能确认图片已消失。断开磁盘时保留原有索引。
+      if (!await stat(location.rootPath).then((info) => info.isDirectory(), () => false)) {
+        throw new BizError('DEPENDENCY_FAILED', '源目录无法访问，已取消删除')
+      }
     }
     await db.transaction(async (tx) => {
       await updateOpStatus(tx, op.id, 'DONE')
-      if (op.imageFileId !== null) {
-        await retireImageFile(tx, op.imageFileId)
-      }
+      await retireImageFile(tx, fileId)
     })
     return null
   } catch (err) {
@@ -207,32 +220,10 @@ async function applyDelete(op: FileOpEntity): Promise<string | null> {
     log.warn(`放进回收站失败：${op.fromPath}`, err)
     await db.transaction(async (tx) => {
       await updateOpStatus(tx, op.id, 'FAILED', message)
-      if (op.imageFileId !== null) {
-        await restoreImageFiles(tx, [op.imageFileId], 'NORMAL')
-      }
+      await restoreImageFiles(tx, [fileId], 'NORMAL')
     })
     return message
   }
-}
-
-// 崩溃后收尾一步移动或复制：目标位置只有占位的空文件（或复制了一半）就删掉，算没做；
-// 目标完整、来源已经不在（移动）或大小一致（复制）就算做完。库里的记录交给随后的扫描对账
-// 日志里没有目标路径说明还没占到位置（或复制没完成），什么都不动
-async function settleTransferOp(op: FileOpEntity): Promise<string | null> {
-  const { db } = getDatabase()
-  if (!op.toPath) {
-    await updateOpStatus(db, op.id, 'REVERTED')
-    return null
-  }
-  const to = await stat(op.toPath).catch(() => null)
-  const from = await stat(op.fromPath).catch(() => null)
-  // 复制看大小是否一致；移动、改名看来源是否已经不在
-  const complete = !!to && (op.opType === 'COPY' ? !!from && from.size === to.size : !from)
-  if (to && to.isFile() && !complete && from) {
-    await unlink(op.toPath).catch((err: unknown) => log.warn(`清理没做完的目标文件失败：${op.toPath}`, err))
-  }
-  await updateOpStatus(db, op.id, complete ? 'DONE' : 'REVERTED')
-  return null
 }
 
 // 退出前：等着进回收站的删除马上执行

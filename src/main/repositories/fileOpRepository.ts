@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, sql } from 'drizzle-orm'
+import { relative } from 'node:path'
 import type { AppDatabase } from '../db/client'
 import { getDatabase } from '../db/client'
 import { fileOp, fileOpBatch, imageFile } from '../db/schema'
@@ -124,6 +125,14 @@ export async function relocateImageFile(dbx: Db, id: number, rootId: number, rel
   await dbx.update(imageFile).set({ rootId, relPath, status: 'NORMAL', deleteState: 0 }).where(eq(imageFile.id, id))
 }
 
+// 正常移动和崩溃恢复按同一规则更新位置。移动到图库外时只移除文件记录。
+export async function recordMovedFile(dbx: Db, id: number, root: { id: number; path: string } | null, path: string): Promise<void> {
+  if (!root) return retireImageFile(dbx, id)
+  const rel = relative(root.path, path)
+  await retireRowsAt(dbx, root.id, rel)
+  await relocateImageFile(dbx, id, root.id, rel)
+}
+
 // 复制出来的新文件：同一张图多一个位置
 export async function insertCopiedFile(dbx: Db, row: { imageId: number; rootId: number; relPath: string; mtime: Date }): Promise<number> {
   const [created] = await dbx
@@ -131,6 +140,14 @@ export async function insertCopiedFile(dbx: Db, row: { imageId: number; rootId: 
     .values({ ...row, status: 'NORMAL' })
     .returning({ id: imageFile.id })
   return created.id
+}
+
+// 图库内的副本关联到同一张图片，导出到图库外不增加位置。
+export async function recordCopiedFile(dbx: Db, imageId: number, root: { id: number; path: string } | null, path: string, mtime: Date): Promise<void> {
+  if (!root) return
+  const rel = relative(root.path, path)
+  await retireRowsAt(dbx, root.id, rel)
+  await insertCopiedFile(dbx, { imageId, rootId: root.id, relPath: rel, mtime })
 }
 
 // 某张图在某个目录下已有的位置（相对路径，不含子目录）：复制时“已有副本”
@@ -163,7 +180,7 @@ function underPrefix(rootId: number, prefix: string) {
 export async function renameRowsUnder(dbx: Db, rootId: number, oldPrefix: string, newPrefix: string): Promise<void> {
   await dbx
     .update(imageFile)
-    .set({ relPath: sql`${newPrefix} || substr(${imageFile.relPath}, ${oldPrefix.length + 1})` })
+    .set({ relPath: sql`${newPrefix} || substr(${imageFile.relPath}, char_length(${oldPrefix}::text) + 1)` })
     .where(underPrefix(rootId, oldPrefix))
 }
 

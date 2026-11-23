@@ -1,5 +1,6 @@
 // 系统原生拖拽（设计 5.2）：按住一会儿再拖，带出原文件，可以拖进 Telegram、资源管理器等别的软件
 import { existsSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, nativeImage, type NativeImage, type WebContents } from 'electron'
 import sharp from 'sharp'
@@ -33,7 +34,7 @@ export async function startNativeDrag(sender: WebContents, thumbsDir: string, ra
   const files: string[] = []
   for (const id of (rawIds as number[]).slice(0, MAX_FILES)) {
     const path = await originalPathOf(id)
-    if (path && existsSync(path)) {
+    if (path && await stat(path).then((info) => info.isFile(), () => false)) {
       files.push(path)
     }
   }

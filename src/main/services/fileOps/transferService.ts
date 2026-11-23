@@ -1,5 +1,5 @@
 import { constants } from 'node:fs'
-import { copyFile, open, rename, stat, unlink } from 'node:fs/promises'
+import { copyFile, link, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, resolve } from 'node:path'
 import type { GalleryQueryDTO, TransferResultVO } from '@shared/api'
 import { BizError } from '../../common/bizError'
@@ -12,9 +12,8 @@ import {
   findImagesInDir,
   findPendingOps,
   insertBatch,
-  insertCopiedFile,
-  relocateImageFile,
-  retireImageFile,
+  recordCopiedFile,
+  recordMovedFile,
   retireRowsAt,
   updateBatchStatus,
   updateOpStatus,
@@ -28,6 +27,7 @@ import { ensureCategoryRoot } from '../categoryHome'
 import { filesForAction } from '../galleryService'
 import { getScanState } from '../scan/scanService'
 import { enqueue, trashPath } from './fileOpsService'
+import { verifyImageFile } from './fileOpRecovery'
 import { recordEvents } from '../ai/eventService'
 
 const log = getLogger('fileOps')
@@ -100,47 +100,31 @@ function candidate(dir: string, name: string, n: number): string {
   return join(dir, `${basename(name, ext)} (${n})${ext}`)
 }
 
-// 占一个不重名的位置：用独占方式建一个空文件，确保不会覆盖已有文件
-async function reserve(dir: string, name: string): Promise<string> {
-  for (let n = 1; n <= MAX_SUFFIX; n++) {
-    const path = candidate(dir, name, n)
-    try {
-      const handle = await open(path, 'wx')
-      await handle.close()
-      return path
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
-        throw err
-      }
-    }
-  }
-  throw new Error('同名文件太多了')
-}
-
-// 把文件挪到已经占好的位置（覆盖的只是自己建的空占位文件）；跨盘时先复制再删原文件
-async function moveInto(from: string, to: string): Promise<void> {
+// 同盘优先创建硬链接，跨盘或不支持硬链接的文件系统使用排他复制。
+// 目标写入成功才移除源文件，已有的同名文件始终保留。
+async function moveExclusive(from: string, to: string): Promise<void> {
   try {
-    await rename(from, to)
+    await link(from, to)
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'EXDEV') {
-      throw err
-    }
-    await copyFile(from, to)
-    await unlink(from)
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') throw err
+    await copyFile(from, to, constants.COPYFILE_EXCL)
   }
+  await unlink(from)
 }
 
-// 复制到一个不重名的位置（排他复制：目标已存在就换下一个编号）
-async function copyInto(from: string, dir: string, name: string): Promise<string> {
+// 在写入磁盘前记录候选路径。遇到同名文件时，先更新日志再尝试下一个名称。
+async function transferInto(op: FileOpEntity, dir: string): Promise<string> {
+  const name = basename(op.fromPath)
+  const { db } = getDatabase()
   for (let n = 1; n <= MAX_SUFFIX; n++) {
-    const path = candidate(dir, name, n)
+    const to = candidate(dir, name, n)
+    await updateOpToPath(db, op.id, to)
     try {
-      await copyFile(from, path, constants.COPYFILE_EXCL)
-      return path
+      if (op.opType === 'MOVE') await moveExclusive(op.fromPath, to)
+      else await copyFile(op.fromPath, to, constants.COPYFILE_EXCL)
+      return to
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
-        throw err
-      }
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
     }
   }
   throw new Error('同名文件太多了')
@@ -189,7 +173,7 @@ export async function moveImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
       opType: 'MOVE',
       imageFileId: r.fileId,
       fromPath: join(r.rootPath, r.relPath),
-      // 目标路径在独占占位成功后才写进日志：崩溃后收尾只会动确定是自己建的文件
+      // 先登记步骤，执行时记录实际候选路径
       toPath: null,
       contentHash: r.contentHash
     }))
@@ -203,35 +187,22 @@ export async function moveImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
     let failed = 0
     let error: string | null = null
     for (const op of planned) {
-      let reserved: string | null = null
+      let to: string
       try {
-        reserved = await reserve(target.abs, basename(op.fromPath))
-        const to = reserved
-        await updateOpToPath(db, op.id, to)
-        await moveInto(op.fromPath, to)
-        reserved = null
-        const root = target.root
-        await db.transaction(async (tx) => {
-          if (root) {
-            const rel = relative(root.path, to)
-            await retireRowsAt(tx, root.id, rel)
-            await relocateImageFile(tx, op.imageFileId!, root.id, rel)
-          } else {
-            // 移到图库外：这个位置从图库里去掉
-            await retireImageFile(tx, op.imageFileId!)
-          }
-          await updateOpStatus(tx, op.id, 'DONE')
-        })
-        done += 1
+        to = await transferInto(op, target.abs)
       } catch (err) {
         failed += 1
         error ??= reason(err)
         log.warn(`移动失败：${op.fromPath}`, err)
-        if (reserved) {
-          await unlink(reserved).catch(() => undefined)
-        }
         await updateOpStatus(db, op.id, 'FAILED', reason(err))
+        continue
       }
+      // 磁盘已经更改。索引写入失败时保留待恢复日志。
+      await db.transaction(async (tx) => {
+        await recordMovedFile(tx, op.imageFileId!, target.root, to)
+        await updateOpStatus(tx, op.id, 'DONE')
+      })
+      done += 1
     }
     await finish(batchId, done, failed)
     // 记进事件流：哪些图被移动到了哪个目录（做梦时整理成“什么图常放哪里”）
@@ -291,11 +262,11 @@ export async function copyImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
       const id = await insertBatch(
         tx,
         `复制 ${sources.length} 张到 ${targets.length} 个目录`,
-        pairs.map(({ row, target }) => ({
+        pairs.map(({ row }) => ({
           opType: 'COPY' as const,
           imageFileId: row.fileId,
           fromPath: join(row.rootPath, row.relPath),
-          // 复制完成后才写目标路径（同一个事务里标成做完）
+          // 执行时在复制前记录实际候选路径
           toPath: null,
           contentHash: row.contentHash
         }))
@@ -309,27 +280,22 @@ export async function copyImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
     let error: string | null = null
     for (const [i, op] of planned.entries()) {
       const { row, target } = pairs[i]
+      let to: string
       try {
-        const to = await copyInto(op.fromPath, target.abs, basename(op.fromPath))
-        const mtime = (await stat(to)).mtime
-        const root = target.root
-        await db.transaction(async (tx) => {
-          await updateOpToPath(tx, op.id, to)
-          // 图库外的副本不登记
-          if (root) {
-            const rel = relative(root.path, to)
-            await retireRowsAt(tx, root.id, rel)
-            await insertCopiedFile(tx, { imageId: row.imageId, rootId: root.id, relPath: rel, mtime })
-          }
-          await updateOpStatus(tx, op.id, 'DONE')
-        })
-        done += 1
+        to = await transferInto(op, target.abs)
       } catch (err) {
         failed += 1
         error ??= reason(err)
         log.warn(`复制失败：${op.fromPath} → ${target.abs}`, err)
         await updateOpStatus(db, op.id, 'FAILED', reason(err))
+        continue
       }
+      const { mtime } = await stat(to)
+      await db.transaction(async (tx) => {
+        await recordCopiedFile(tx, row.imageId, target.root, to, mtime)
+        await updateOpStatus(tx, op.id, 'DONE')
+      })
+      done += 1
     }
     await finish(batchId, done, failed)
     if (done > 0) {
@@ -376,23 +342,15 @@ export async function undoTransfer(rawId: unknown): Promise<TransferResultVO> {
         if (!op.toPath) {
           continue
         }
+        await verifyImageFile(op.toPath, op.contentHash)
         if (op.opType === 'MOVE') {
           const back = locate(op.fromPath)
           if (!back) {
             throw new Error('原来的目录已经不在图库里了')
           }
-          // 原处独占建占位：被别的文件占了就不挪回去
-          const handle = await open(op.fromPath, 'wx')
-          await handle.close()
-          try {
-            await moveInto(op.toPath, op.fromPath)
-          } catch (err) {
-            await unlink(op.fromPath).catch(() => undefined)
-            throw err
-          }
+          await moveExclusive(op.toPath, op.fromPath)
           await db.transaction(async (tx) => {
-            await retireRowsAt(tx, back.root.id, back.rel)
-            await relocateImageFile(tx, op.imageFileId!, back.root.id, back.rel)
+            await recordMovedFile(tx, op.imageFileId!, back.root, op.fromPath)
             await updateOpStatus(tx, op.id, 'REVERTED')
           })
         } else {

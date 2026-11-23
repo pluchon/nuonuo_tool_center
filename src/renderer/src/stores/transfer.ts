@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { markRaw } from 'vue'
 import type { GalleryQueryDTO, TransferResultVO, TransferRootsVO } from '@shared/api'
 import { copyImages, fetchTransferRoots, moveImages, undoTransfer } from '@/api/files'
 import { fetchImageDetail } from '@/api/gallery'
@@ -35,6 +36,8 @@ function lastName(path: string): string {
 export const useTransferStore = defineStore('transfer', {
   state: () => ({
     mode: null as TransferMode | null,
+    // 打开时固定操作对象和来源视图，后台刷新或选中项变化不会改变本次文件操作。
+    source: null as { ids: number[]; query: GalleryQueryDTO } | null,
     roots: null as TransferRootsVO | null,
     // 选中的目标目录（移动只有一个）
     picked: [] as string[],
@@ -45,7 +48,6 @@ export const useTransferStore = defineStore('transfer', {
     copies: [] as string[],
     // 打开时自动展开到这些目录（当前位置、已有副本所在的目录），原样大小写
     expandTo: [] as string[],
-    imageCount: 0,
     busy: false
   }),
   actions: {
@@ -53,35 +55,45 @@ export const useTransferStore = defineStore('transfer', {
     async open(mode: TransferMode): Promise<void> {
       const gallery = useGalleryStore()
       const ids = gallery.targets()
-      if (ids.length === 0) {
+      const query = gallery.query()
+      if (!ids.length || !query || this.mode) {
         return
       }
-      this.imageCount = ids.length
+      const source = markRaw({ ids, query })
+      const fileId = gallery.primaryItem?.fileId
+      this.source = source
+      this.mode = mode
+      this.roots = null
       this.picked = []
       this.others = []
       this.here = ''
       this.copies = []
       this.expandTo = []
       try {
-        if (!gallery.multi && gallery.primary !== null) {
-          // 详情可能还是上一张的（刚点了新图、详情还没读回来）：不一致就现读
-          const detail = gallery.detail?.imageId === gallery.primary ? gallery.detail : await fetchImageDetail(gallery.primary)
-          const fileId = gallery.primaryItem?.fileId
+        const cachedDetail = gallery.detail?.imageId === ids[0] ? gallery.detail : null
+        const [roots, detail] = await Promise.all([
+          fetchTransferRoots(),
+          ids.length === 1 ? cachedDetail ?? fetchImageDetail(ids[0]) : null
+        ])
+        if (this.source !== source) return
+        if (detail) {
           const loc = detail.locations.find((l) => l.fileId === fileId) ?? detail.locations[0]
           this.here = loc ? dirKey(loc.path) : ''
           this.copies = detail.locations.map((l) => dirKey(l.path))
           const dirs = (mode === 'copy' ? detail.locations : loc ? [loc] : []).map((l) => l.path.slice(0, l.path.lastIndexOf('\\')))
           this.expandTo = [...new Set(dirs)]
         }
-        this.roots = await fetchTransferRoots()
-        this.mode = mode
+        this.roots = roots
       } catch (err) {
+        if (this.source !== source) return
+        this.close()
         useToastStore().show(errText(err), 'error')
       }
     },
     close(): void {
       if (!this.busy) {
         this.mode = null
+        this.source = null
       }
     },
     // 这个目录能不能选；不能选时返回行尾的说明
@@ -103,12 +115,13 @@ export const useTransferStore = defineStore('transfer', {
     // “其他位置…”：用 Windows 自己的选文件夹对话框，选好的加进列表并选中
     async pickOther(): Promise<void> {
       const mode = this.mode
-      if (!mode || this.busy) {
+      const source = this.source
+      if (!mode || !this.roots || this.busy) {
         return
       }
       try {
         const path = await pickFolder(mode === 'move' ? '移动到…' : '复制到…')
-        if (!path || this.mode !== mode) {
+        if (!path || this.source !== source) {
           return
         }
         if (!this.others.some((p) => p.toLowerCase() === path.toLowerCase())) {
@@ -134,17 +147,16 @@ export const useTransferStore = defineStore('transfer', {
     },
     // 执行：成功后刷新列表，提示条上可以撤销；有失败的报原因
     async confirm(): Promise<void> {
-      const gallery = useGalleryStore()
-      const query = gallery.query()
+      const source = this.source
       const mode = this.mode
-      if (!query || !mode || this.picked.length === 0 || this.busy) {
+      if (!source || !mode || this.picked.length === 0 || this.busy) {
         return
       }
       this.busy = true
-      const ok = await this.runDirect(mode, query, gallery.targets(), this.picked)
+      const ok = await this.runDirect(mode, source.query, source.ids, this.picked)
       this.busy = false
       if (ok) {
-        this.mode = null
+        this.close()
       }
     },
     // 执行移动 / 复制（对话框确认、拖到侧栏源目录上都走这里）；成功返回 true
@@ -154,7 +166,6 @@ export const useTransferStore = defineStore('transfer', {
       // 都可能是响应式数组，IPC 只能传普通数组
       const ids = [...rawIds]
       const targets = [...rawTargets]
-      this.imageCount = ids.length
       try {
         const res = mode === 'move' ? await moveImages(query, ids, targets[0]) : await copyImages(query, ids, targets)
         await gallery.afterEdit()
@@ -177,7 +188,6 @@ export const useTransferStore = defineStore('transfer', {
         toast.show(mode === 'move' ? '已经在这个目录里了' : '这些目录里已经有了')
         return
       }
-      const where = picked.length === 1 ? `「${lastName(picked[0])}」` : ` ${picked.length} 个目录`
       // 移到图库外：说清楚图离开了图库（撤销可以挪回来）
       const outside = mode === 'move' && !this.inLibrary(picked[0])
       const text =
@@ -185,10 +195,12 @@ export const useTransferStore = defineStore('transfer', {
           ? outside
             ? `已把 ${res.done} 张移出图库，放到「${lastName(picked[0])}」`
             : `已移动 ${res.done} 张到「${lastName(picked[0])}」`
-          : `已复制 ${this.imageCount} 张到${where}`
+          : picked.length === 1
+            ? `已复制 ${res.done} 张到「${lastName(picked[0])}」`
+            : `已生成 ${res.done} 份副本`
       const batchId = res.batchId
       toast.show(
-        text,
+        res.skipped > 0 ? `${text}，跳过 ${res.skipped} 项` : text,
         'ok',
         batchId === null
           ? undefined

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -14,6 +14,7 @@ import {
   undoDelete
 } from '../../src/main/services/fileOps/fileOpsService'
 import { hideImageFiles, insertBatch } from '../../src/main/repositories/fileOpRepository'
+import { hashBuffer } from '../../src/main/services/scan/imageProbe'
 
 let dir: string
 let source: string
@@ -34,15 +35,19 @@ beforeAll(async () => {
   bin = join(dir, 'bin')
   mkdirSync(join(source, 'sub'), { recursive: true })
   mkdirSync(bin)
-  for (const f of ['a.jpg', 'b.jpg', 'c.jpg', 'locked.jpg', 'e.jpg', 'sub\\a-copy.jpg']) {
+  const names = ['a.jpg', 'b.jpg', 'c.jpg', 'locked.jpg', 'e.jpg']
+  for (const f of names) {
     writeFileSync(join(source, f), f)
   }
+  writeFileSync(join(source, 'sub', 'a-copy.jpg'), 'a.jpg')
   await openDatabase(join(dir, 'pgdata'), resolve('drizzle'))
   const { pg } = getDatabase()
   await pg.query(`INSERT INTO library_root (kind, name, path) VALUES ('SOURCE', 'pics', $1)`, [source])
   // 1 号图有两个位置（a.jpg 和 sub\a-copy.jpg）
+  for (const name of names) {
+    await pg.query("INSERT INTO image (content_hash, format, byte_size) VALUES ($1, 'JPG', $2)", [hashBuffer(Buffer.from(name)), name.length])
+  }
   await pg.exec(`
-    INSERT INTO image (content_hash, format, byte_size) VALUES ('h1', 'JPG', 1), ('h2', 'JPG', 1), ('h3', 'JPG', 1), ('h4', 'JPG', 1), ('h5', 'JPG', 1);
     INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES
       (1, 1, 'a.jpg', now()), (2, 1, 'b.jpg', now()), (3, 1, 'c.jpg', now()), (4, 1, 'locked.jpg', now()), (5, 1, 'e.jpg', now()), (1, 1, 'sub\\a-copy.jpg', now());
   `)
@@ -96,10 +101,49 @@ describe('文件操作：删除', () => {
     expect(await sourceIds()).toContain(4)
   })
 
+  it('等待回收时外部程序替换了同名文件或目录，保留替换后的内容', async () => {
+    const path = join(source, 'b.jpg')
+    const bytes = readFileSync(path)
+    try {
+      for (const replacement of ['file', 'directory']) {
+        const res = await deleteImages({ view: 'source', sourceId: 1, sort: 'new' }, [2])
+        if (replacement === 'file') {
+          writeFileSync(path, 'other')
+        } else {
+          rmSync(path)
+          mkdirSync(path)
+          writeFileSync(join(path, '保留.txt'), 'other')
+        }
+        await flushPendingDeletes()
+        expect(done.at(-1)).toMatchObject({ batchId: res.batchId, done: 0, failed: 1 })
+        expect(readFileSync(replacement === 'file' ? path : join(path, '保留.txt'), 'utf8')).toBe('other')
+        rmSync(path, { recursive: true })
+        writeFileSync(path, bytes)
+      }
+    } finally {
+      if (existsSync(path)) rmSync(path, { recursive: true })
+      writeFileSync(path, bytes)
+    }
+  })
+
+  it('等待回收时源目录离线，接回后图片和索引都保留', async () => {
+    const res = await deleteImages({ view: 'source', sourceId: 1, sort: 'new' }, [2])
+    const offline = join(dir, 'offline')
+    renameSync(source, offline)
+    try {
+      await flushPendingDeletes()
+      expect(done.at(-1)).toMatchObject({ batchId: res.batchId, done: 0, failed: 1 })
+    } finally {
+      renameSync(offline, source)
+    }
+    expect(await sourceIds()).toContain(2)
+    expect(existsSync(join(source, 'b.jpg'))).toBe(true)
+  })
+
   it('崩溃后启动：上次没执行的删除按日志补做', async () => {
     // 模拟崩溃：日志写了、文件藏起来了，但定时器随进程没了
     await getDatabase().db.transaction(async (tx) => {
-      await insertBatch(tx, '删除 1 张', [{ opType: 'DELETE', imageFileId: 5, fromPath: join(source, 'e.jpg'), toPath: null, contentHash: 'h5' }])
+      await insertBatch(tx, '删除 1 张', [{ opType: 'DELETE', imageFileId: 5, fromPath: join(source, 'e.jpg'), toPath: null, contentHash: hashBuffer(Buffer.from('e.jpg')) }])
       await hideImageFiles(tx, [5])
     })
     expect(await recoverFileOps()).toBe(1)

@@ -81,7 +81,7 @@ describe('第八阶段：移动和复制', () => {
     await expect(page.locator('.transfer-dlg__confirm').textContent()).resolves.toContain('复制到 2 个目录')
     await shot(page, 'copy-dialog-light')
     await page.click('.transfer-dlg__confirm')
-    await page.waitForSelector('.app-toast:has-text("已复制 1 张到 2 个目录")')
+    await page.waitForSelector('.app-toast:has-text("已生成 2 份副本")')
     expect(existsSync(join(dirs.library, '猫猫', 'pic-1.jpg'))).toBe(true)
     expect(existsSync(join(source, 'sub', 'pic-1.jpg'))).toBe(true)
     expect(existsSync(join(source, 'pic-1.jpg'))).toBe(true)
@@ -100,6 +100,16 @@ describe('第八阶段：移动和复制', () => {
     await expect(row(page, 'pics').locator('.transfer-dlg__note').textContent()).resolves.toBe('当前位置')
     await page.keyboard.press('Escape')
     await page.waitForSelector('.transfer-dlg', { state: 'detached' })
+
+    // 同一批里有一张已经在目标目录，只统计实际新增的副本。
+    await page.click('.tile:has-text("pic-1.jpg")')
+    await page.click('.tile:has-text("pic-3.jpg")', { modifiers: ['Control'] })
+    await page.click('.batch-panel__act:not(.batch-panel__act--main)')
+    await row(page, '猫猫').click()
+    await page.click('.transfer-dlg__confirm')
+    await page.getByText('已复制 1 张到「猫猫」，跳过 1 项', { exact: true }).waitFor()
+    await page.click('.app-toast__btn--undo')
+    await expect.poll(() => readdirSync(join(dirs.library, '猫猫'))).toEqual(['pic-1.jpg'])
 
     // 多选两张移动到类目录“猫猫”
     await page.click('.tile:has-text("pic-2.jpg")')

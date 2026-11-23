@@ -4,7 +4,8 @@ import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
 import { getImageDetail, listGallery } from '../../src/main/services/galleryService'
-import { configureFileOps } from '../../src/main/services/fileOps/fileOpsService'
+import { configureFileOps, recoverFileOps } from '../../src/main/services/fileOps/fileOpsService'
+import { hideRowsUnder, insertBatch, insertCopiedFile, updateBatchStatus } from '../../src/main/repositories/fileOpRepository'
 import {
   configureFolderOps,
   createFolder,
@@ -83,6 +84,9 @@ describe('目录管理', () => {
   })
 
   it('类目录改名：磁盘改名，下面的记录路径跟着换；和兄弟重名拒绝', async () => {
+    await renameCategoryFolder({ kind: 'category', path: '壁纸' }, '🐈壁纸')
+    await renameCategoryFolder({ kind: 'category', path: '🐈壁纸' }, '壁纸')
+    expect((await getImageDetail(5)).locations[0].path).toBe(join(library, '壁纸', '横屏', 'w.jpg'))
     expect(await renameCategoryFolder({ kind: 'category', path: '壁纸' }, '壁纸精选')).toBe('壁纸精选')
     expect(existsSync(join(library, '壁纸精选', '横屏', 'w.jpg'))).toBe(true)
     expect((await getImageDetail(5)).locations[0].path).toBe(join(library, '壁纸精选', '横屏', 'w.jpg'))
@@ -91,10 +95,70 @@ describe('目录管理', () => {
     await expect(renameCategoryFolder({ kind: 'source', id: 1, sub: 'a' }, 'q')).rejects.toThrow('只能给类目录')
   })
 
+  it('类目录改名中断后按磁盘的实际拼写恢复路径，包括只改大小写', async () => {
+    const { db } = getDatabase()
+    for (const [oldName, newName] of [['壁纸精选', 'Photo'], ['Photo', 'PHOTO'], ['PHOTO', '壁纸精选']]) {
+      const fromPath = join(library, oldName)
+      const toPath = join(library, newName)
+      await db.transaction(async (tx) => {
+        const id = await insertBatch(tx, '移动目录中断', [{ opType: 'RENAME', imageFileId: null, fromPath, toPath, contentHash: '' }])
+        await updateBatchStatus(tx, id, 'APPLYING')
+      })
+      renameSync(fromPath, toPath)
+      await recoverFileOps()
+      expect((await getImageDetail(5)).locations[0].path).toBe(join(toPath, '横屏', 'w.jpg'))
+    }
+  })
+
+  it('删除类目录时中断，重新启动不回收同名替换目录，恢复这些位置的索引', async () => {
+    const name = '壁纸精选'
+    const path = join(library, name)
+    const replaced = join(library, '进程退出时的原目录')
+    const { db } = getDatabase()
+    await db.transaction(async (tx) => {
+      const id = await insertBatch(tx, '删除目录中断', [{ opType: 'DELETE', imageFileId: null, fromPath: path, toPath: null, contentHash: '' }])
+      await hideRowsUnder(tx, 2, name)
+      await updateBatchStatus(tx, id, 'APPLYING')
+    })
+    renameSync(path, replaced)
+    mkdirSync(path)
+    writeFileSync(join(path, '新文件.txt'), '保留目录')
+    try {
+      await recoverFileOps()
+      expect(existsSync(join(path, '新文件.txt'))).toBe(true)
+      expect((await getImageDetail(5)).locations[0].path).toBe(join(path, '横屏', 'w.jpg'))
+    } finally {
+      rmSync(path, { recursive: true, force: true })
+      renameSync(replaced, path)
+    }
+  })
+
+  it('类目录已进回收站才中断，重启后可以在原路径登记还原的文件', async () => {
+    const name = '回收站还原'
+    const path = join(library, name)
+    mkdirSync(path)
+    writeFileSync(join(path, 'w.jpg'), 'w')
+    const { db } = getDatabase()
+    const row = { imageId: 5, rootId: 2, relPath: join(name, 'w.jpg'), mtime: new Date() }
+    await db.transaction(async (tx) => {
+      await insertCopiedFile(tx, row)
+      const id = await insertBatch(tx, '已回收目录', [{ opType: 'DELETE', imageFileId: null, fromPath: path, toPath: null, contentHash: '' }])
+      await hideRowsUnder(tx, 2, name)
+      await updateBatchStatus(tx, id, 'APPLYING')
+    })
+    renameSync(path, join(bin, name))
+    await recoverFileOps()
+    renameSync(join(bin, name), path)
+    await insertCopiedFile(db, row)
+    expect(await ids({ view: 'category', category: name, sort: 'new' })).toEqual([5])
+    await deleteCategoryFolder({ kind: 'category', path: name })
+  })
+
   it('删除类目录：整个文件夹进回收站，里面的副本记录去掉', async () => {
+    const previousCount = readdirSync(bin).length
     expect(await deleteCategoryFolder({ kind: 'category', path: '壁纸精选' })).toBe(1)
     expect(existsSync(join(library, '壁纸精选'))).toBe(false)
-    expect(readdirSync(bin)).toHaveLength(1)
+    expect(readdirSync(bin)).toHaveLength(previousCount + 1)
     expect(await ids({ view: 'recent', sort: 'new' })).not.toContain(5)
   })
 
