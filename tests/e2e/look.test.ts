@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { copyFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
@@ -52,6 +52,17 @@ describe('诺诺看图和 AI 建议', () => {
     const embeddings = async () => (await bailianRequests(app)).filter((route) => route === 'multimodal-embedding').length
     expect(await embeddings()).toBe(0)
     await page.getByRole('button', { name: '全部采用' }).click()
+    await page.locator('.gallery__empty').waitFor()
+    const category = join(dirs.library, '已归档')
+    mkdirSync(category, { recursive: true })
+    for (const filename of ['a.jpg', 'b.jpg']) {
+      copyFileSync(join(source, filename), join(category, filename))
+    }
+    expect((await page.evaluate(() => window.api.scan.start(null))).ok).toBe(true)
+    const policy = () => page.evaluate(() => window.api.ai.policy())
+    await expect.poll(policy).toMatchObject({ ok: true, data: { dailyLimit: 0, pendingImages: 1 } })
+    expect(await embeddings()).toBe(0)
+    expect((await page.evaluate(() => window.api.ai.embeddingLimit(2))).ok).toBe(true)
     await expect.poll(embeddings, { timeout: 10_000 }).toBe(1)
     await page.waitForTimeout(700)
     expect(await embeddings()).toBe(1)

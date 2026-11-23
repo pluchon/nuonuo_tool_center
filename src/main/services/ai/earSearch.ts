@@ -33,7 +33,7 @@ export function earWords(group: EarType[]): string[] {
 }
 
 // 只复核已进入候选的普通图。文字能够确定耳形时优先采用，剩余候选逐张在本机复核。
-export async function verifyEarTypes(ids: number[], groups: EarType[][]): Promise<number[]> {
+export async function verifyEarTypes(ids: number[], groups: EarType[][], onUnavailable?: () => void): Promise<number[]> {
   if (!ids.length || !groups.length) return ids
   const confirmed = await Promise.all(groups.map(async (group) => {
     const hit = await searchImages({ ids, tagGroups: [], keywordGroups: [earWords(group)], r18: 'exclude' })
@@ -44,6 +44,7 @@ export async function verifyEarTypes(ids: number[], groups: EarType[][]): Promis
     const missing = groups.filter((_, index) => !confirmed[index].has(id))
     if (missing.length) {
       const visualTags = await getVisualTagsForSearch(id)
+      if (!visualTags) onUnavailable?.()
       if (!visualTags || !missing.every((group) => group.some((type) => visualTags.includes(type.tag)))) continue
     }
     matches.push(id)

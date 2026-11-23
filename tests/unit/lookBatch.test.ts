@@ -21,6 +21,7 @@ const cancelBatch = vi.fn(async (_id: string, _options: unknown) => ({ status: '
 const listedBatches: Array<{ id: string; input_file_id: string; created_at: number }> = []
 let canRun = true
 let testImageUrl = ''
+const reclassified = new Set([4, 140])
 let openGate: () => void = () => undefined
 let gate = new Promise<void>((r) => (openGate = r))
 vi.mock('../../src/main/services/ai/bailianClient', () => ({
@@ -61,7 +62,12 @@ vi.mock('../../src/main/services/ai/bailianClient', () => ({
   chatCall: vi.fn()
 }))
 vi.mock('electron', () => ({ clipboard: {}, ClipboardItem: class {}, nativeImage: {}, shell: {} }))
-vi.mock('../../src/main/services/ai/imagePrep', () => ({ prepareImage: async () => testImageUrl }))
+vi.mock('../../src/main/services/ai/imagePrep', () => ({
+  prepareImage: async (info: { id: number }) => {
+    if (reclassified.has(info.id)) await getDatabase().pg.query('update image set is_r18=true where id=$1', [info.id])
+    return testImageUrl
+  }
+}))
 
 const look = await import('../../src/main/services/ai/lookService')
 const { listSuggestions } = await import('../../src/main/services/ai/suggestionService')
@@ -128,19 +134,24 @@ describe('一次排进很多图', () => {
       { timeout: 60_000, interval: 200 }
     )
     const batched = uploaded.flat()
-    // 每张只交了一次，交批量的和实时看的不重叠，加起来正好是全部
+    // 编码期间改为 R-18 的图片须从上传内容中移除，其他图片仍各自完成。
     expect(new Set(batched).size).toBe(batched.length)
     expect(new Set(looked).size).toBe(looked.length)
     const realtimeJobs = (await pg.query<{ id: number }>(`SELECT id FROM ai_job WHERE status = 'DONE'`)).rows.map((r) => String(r.id))
     expect(realtimeJobs.filter((id) => batched.includes(id))).toEqual([])
-    expect(batched.length + looked.length).toBe(N)
+    const withdrawn = await pg.query<{id:number}>(`select id from ai_job where image_id = any($1::bigint[]) and status='CANCELLED'`, [[...reclassified]])
+    expect(withdrawn.rows).toHaveLength(reclassified.size)
+    expect(withdrawn.rows.some(row => batched.includes(String(row.id)))).toBe(false)
+    expect(looked.some(id => reclassified.has(id))).toBe(false)
+    expect(batched.length + looked.length).toBe(N - reclassified.size)
     expect([...realtimePrefixes]).toEqual([expect.stringContaining('用于验证的完整词表')])
     expect([...batchPrefixes]).toEqual([expect.stringContaining('使用常见译名')])
     expect([...batchPrefixes][0]).not.toContain('用于验证的完整词表')
     // 前 50 张左右实时看，超出的走批量
-    expect(batched.length).toBeGreaterThanOrEqual(N - 52)
+    expect(batched.length).toBeGreaterThanOrEqual(N - 52 - reclassified.size)
     const counts = (await pg.query<{ status: string; n: number }>(`SELECT status, count(*)::int AS n FROM ai_job GROUP BY status ORDER BY status::text`)).rows
     expect(counts).toEqual([
+      { status: 'CANCELLED', n: reclassified.size },
       { status: 'DONE', n: looked.length },
       { status: 'RUNNING', n: batched.length }
     ])
@@ -154,6 +165,7 @@ describe('一次排进很多图', () => {
 
   it('一个批次查询失败仍处理后面的批次，下一轮继续取回结果', async () => {
     const before = await look.getLookState()
+    expect(before.activity).toBe('working')
     expect(before.canCancel).toBe(false)
     expect(before.rows.every((row) => row.state === 'BATCH')).toBe(true)
 

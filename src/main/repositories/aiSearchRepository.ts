@@ -69,7 +69,19 @@ export async function hasSearchableImage(dirs: AiSearchFilter['dirs'], includeR1
   return rows.length > 0
 }
 
-// 带其中任一标签
+type CandidateFilter = Omit<AiSearchFilter, 'r18' | 'vector' | 'preferredTagGroups'>
+
+export async function missingSearchVector(model: string, filter: CandidateFilter): Promise<boolean> {
+  if (filter.ids?.length === 0 || filter.untagged) return false
+  const rows = await getDatabase().db.select({ id: image.id }).from(image).where(and(
+    ...candidateConditions(filter, false),
+    sql`not exists (select 1 from ${imageEmbedding} where ${col(imageEmbedding.imageId)} = ${col(image.id)}
+      and ${col(imageEmbedding.model)} = ${model} and ${col(imageEmbedding.deleteState)} = 0)`
+  )).limit(1)
+  return rows.length > 0
+}
+
+// 当前图片至少有一个已确认的指定标签。
 function hasAnyTag(ids: number[]): SQL {
   return sql`exists (select 1 from ${imageTag} join ${tag} on ${col(tag.id)} = ${col(imageTag.tagId)}
     where ${col(imageTag.imageId)} = ${col(image.id)} and ${acceptedTag} and ${col(tag.deleteState)} = 0 and ${inArray(imageTag.tagId, ids)})`
@@ -147,11 +159,9 @@ export async function saveSearchVisualFeatures(imageId: number, revision: string
   return rows.length > 0
 }
 
-// 按条件检索已确认的图片。
-export async function searchImages(f: AiSearchFilter): Promise<AiSearchHit> {
-  if (f.ids?.length === 0 || f.untagged || (f.vector && f.r18 === 'only')) return { ids: [], total: 0 }
-  const { db } = getDatabase()
-  const conds: Array<SQL | undefined> = [eq(image.deleteState, 0), confirmedForSearch, aliveIn(f.dirs), eq(image.isR18, f.r18 === 'only')]
+// 判断缺少向量时也要使用相同的硬性条件，避免无关图片影响本轮检索的完整性。
+function candidateConditions(f: CandidateFilter, r18: boolean): Array<SQL | undefined> {
+  const conds: Array<SQL | undefined> = [eq(image.deleteState, 0), confirmedForSearch, aliveIn(f.dirs), eq(image.isR18, r18)]
   if (f.ids) conds.push(sql`${image.id} = any(${sql.param(f.ids)}::bigint[])`)
   for (const group of f.tagGroups) {
     conds.push(group.length > 0 ? hasAnyTag(group) : sql`false`)
@@ -165,6 +175,13 @@ export async function searchImages(f: AiSearchFilter): Promise<AiSearchHit> {
   if (f.recentDays !== undefined) {
     conds.push(sql`${image.createTime} >= now() - make_interval(days => ${f.recentDays})`)
   }
+  return conds
+}
+
+export async function searchImages(f: AiSearchFilter): Promise<AiSearchHit> {
+  if (f.ids?.length === 0 || f.untagged || (f.vector && f.r18 === 'only')) return { ids: [], total: 0 }
+  const { db } = getDatabase()
+  const conds = candidateConditions(f, f.r18 === 'only')
   if (f.vector) {
     const distanceTo = (values: number[]): SQL<number> =>
       sql<number>`(${imageEmbedding.embedding} <=> ${`[${values.join(',')}]`}::vector)`
@@ -201,17 +218,11 @@ export async function searchImages(f: AiSearchFilter): Promise<AiSearchHit> {
 }
 
 // 还没有向量、又过了上云闸门的图（本地模型判过且不是明显 R-18，或你手动关过 R-18），先导入的先做
-export async function findEmbedCandidates(model: string, limit: number, imageId?: number): Promise<number[]> {
-  const { db } = getDatabase()
+function pendingEmbedding(model: string) {
   const hasVec = sql`exists (select 1 from ${imageEmbedding} where ${col(imageEmbedding.imageId)} = ${col(image.id)} and ${col(imageEmbedding.model)} = ${model} and ${col(imageEmbedding.deleteState)} = 0)`
   const awaitingLook = sql`exists (select 1 from ${aiJob} where ${col(aiJob.imageId)} = ${col(image.id)}
     and ${col(aiJob.kind)} = 'LOOK' and ${col(aiJob.status)} in ('QUEUED', 'RUNNING') and ${col(aiJob.deleteState)} = 0)`
-  const rows = await db
-    .select({ id: image.id })
-    .from(image)
-    .where(
-      and(
-        imageId === undefined ? undefined : eq(image.id, imageId),
+  return and(
         confirmedForSearch,
         aliveIn(undefined),
         eq(image.deleteState, 0),
@@ -220,11 +231,28 @@ export async function findEmbedCandidates(model: string, limit: number, imageId?
         sql`not ${hasVec}`,
         // 看图可能将图片转入 R-18 复核，等看图结果落库后再决定是否生成向量。
         sql`not ${awaitingLook}`
-      )
-    )
+  )
+}
+
+export function countPendingEmbeddings(model: string): PromiseLike<number> {
+  return getDatabase().db.$count(image, pendingEmbedding(model))
+}
+
+export async function findEmbedCandidates(model: string, limit: number, imageId?: number): Promise<number[]> {
+  const rows = await getDatabase().db.select({ id: image.id }).from(image)
+    .where(and(pendingEmbedding(model), imageId === undefined ? undefined : eq(image.id, imageId)))
     .orderBy(image.id)
     .limit(limit)
   return rows.map((r) => r.id)
+}
+
+// 上传原文件的哈希由主进程计算。仅复用当前检索范围内普通图片的同模型索引。
+export async function findIndexedUpload(hash: string, model: string, dirs: AiSearchFilter['dirs']): Promise<number[] | undefined> {
+  const [row] = await getDatabase().db.select({ vector: imageEmbedding.embedding }).from(image)
+    .innerJoin(imageEmbedding, and(eq(imageEmbedding.imageId, image.id), eq(imageEmbedding.model, model), eq(imageEmbedding.deleteState, 0)))
+    .where(and(eq(image.contentHash, hash), ...candidateConditions({ dirs, tagGroups: [], keywordGroups: [] }, false)))
+    .limit(1)
+  return row?.vector
 }
 
 // 存一张图的向量（同一模型只留一份）

@@ -1,33 +1,40 @@
 import { createHash } from 'node:crypto'
 import { and, desc, eq, gt, inArray, lt } from 'drizzle-orm'
-import { getDatabase } from '../db/client'
+import { getDatabase, type DatabaseHandle } from '../db/client'
 import { aiSearchCache } from '../db/schema'
 import { getLogger } from '../common/logger'
 
 export const SEARCH_CACHE_TTL = 24 * 60 * 60 * 1000
+export async function recordLocalReuse(owner = getDatabase()): Promise<void> {
+  if (owner.pg.closed) return
+  await owner.pg.query(`insert into app_setting(key,value) values ('ai.localHits','1'::jsonb)
+    on conflict (key) where delete_state=0 do update set value=to_jsonb((app_setting.value #>> '{}')::bigint+1)`)
+    .catch((err:unknown) => log.warn('本地缓存计数更新失败', err))
+}
 const MAX_ENTRIES = 1000
 const log = getLogger('search-cache')
-const pending = new WeakMap<object, Map<string, Promise<unknown>>>()
+const pending = new WeakMap<DatabaseHandle, Map<string, Promise<unknown>>>()
 
 export function searchCacheKey(kind: string, input: unknown): string {
   return kind + ':' + createHash('sha256').update(JSON.stringify(input)).digest('hex')
 }
 
-export async function readSearchCache<T>(key: string): Promise<T | undefined> {
+async function readSearchCache(owner: DatabaseHandle, key: string): Promise<unknown> {
   try {
-    const [row] = await getDatabase().db.select({ value: aiSearchCache.value }).from(aiSearchCache)
+    const [row] = await owner.db.select({ value: aiSearchCache.value }).from(aiSearchCache)
       .where(and(eq(aiSearchCache.key, key), gt(aiSearchCache.expiresAt, new Date())))
-    return row?.value as T | undefined
+    return row?.value
   } catch (error) {
     log.warn('读取检索缓存失败', error)
     return undefined
   }
 }
 
-export async function writeSearchCache(key: string, value: unknown): Promise<void> {
+async function writeSearchCache(owner: DatabaseHandle, key: string, value: unknown): Promise<void> {
+  if (owner.pg.closed) return
   const now = new Date()
   const expiresAt = new Date(now.getTime() + SEARCH_CACHE_TTL)
-  await getDatabase().db.transaction(async (tx) => {
+  await owner.db.transaction(async (tx) => {
     await tx.delete(aiSearchCache).where(lt(aiSearchCache.expiresAt, now))
     await tx.insert(aiSearchCache).values({ key, value, expiresAt })
       .onConflictDoUpdate({ target: aiSearchCache.key, set: { value, expiresAt } })
@@ -43,12 +50,20 @@ export function cachedSearchValue<T>(key: string, validate: (value: unknown) => 
   const active = pending.get(db) ?? new Map<string, Promise<unknown>>()
   pending.set(db, active)
   const existing = active.get(key)
-  if (existing) return existing as Promise<T | undefined>
+  if (existing) return existing.then(async (value) => {
+    if (!validate(value)) return undefined
+    await recordLocalReuse(db)
+    return value
+  })
   const task = (async () => {
-    const cached = await readSearchCache(key)
-    if (validate(cached)) return cached
+    const cached = await readSearchCache(db, key)
+    if (validate(cached)) {
+      await recordLocalReuse(db)
+      return cached
+    }
     const value = await load()
-    if (value !== undefined) await writeSearchCache(key, value)
+    if (value === undefined || !validate(value)) return undefined
+    await writeSearchCache(db, key, value)
     return value
   })().finally(() => active.delete(key))
   active.set(key, task)

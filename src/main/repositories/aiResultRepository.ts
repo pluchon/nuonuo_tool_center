@@ -226,7 +226,7 @@ export async function findOrganizeTerms(): Promise<OrganizeTerms[]> {
 }
 
 // 存一批“放进类目录”的建议；同一张图建议过同一个目录的（还没处理、采用过、你说过不要的）不再重复建议；返回实际存了几条
-export async function insertOrganizeResults(rows: Array<{ imageId: number; dir: string }>, model: string): Promise<number> {
+export async function insertOrganizeResults(rows: Array<{ imageId: number; dir: string; existing?: boolean }>, model: string): Promise<number> {
   if (rows.length === 0) {
     return 0
   }
@@ -245,7 +245,7 @@ export async function insertOrganizeResults(rows: Array<{ imageId: number; dir: 
         kind: 'ORGANIZE' as const,
         origin: 'NONO' as const,
         model,
-        result: { dir: r.dir },
+        result: { dir: r.dir, ...(r.existing ? { existing: true } : {}) },
         fieldStatus: { dir: 'PENDING' }
       }))
     )
@@ -254,18 +254,18 @@ export async function insertOrganizeResults(rows: Array<{ imageId: number; dir: 
 }
 
 // “AI 建议”视图里每张图的排序依据（最早一条待确认建议的 id，后来的排在后面）和建议放进的类目录
-export async function findPendingSummary(): Promise<Map<number, { firstId: number; dir: string | null }>> {
+export async function findPendingSummary(): Promise<Map<number, { firstId: number; dir: string | null; existing: boolean }>> {
   const { pg } = getDatabase()
-  const res = await pg.query<{ image_id: number; first_id: number; dir: string | null }>(
+  const res = await pg.query<{ image_id: number; first_id: number; target: { dir?: string; existing?: boolean } | null }>(
     `SELECT a.image_id, min(a.id) AS first_id,
-            max(CASE WHEN NOT i.is_r18 AND a.kind = 'ORGANIZE' AND a.field_status->>'dir' = 'PENDING' THEN a.result->>'dir' END) AS dir
+            (array_agg(a.result order by a.id) filter (where not i.is_r18 and a.kind = 'ORGANIZE' and a.field_status->>'dir' = 'PENDING'))[1] as target
        FROM image_ai_result a JOIN image i ON i.id = a.image_id
       WHERE a.delete_state = 0
         AND EXISTS (SELECT 1 FROM jsonb_each_text(coalesce(a.field_status, '{}'::jsonb)) f
                      WHERE f.value = 'PENDING' AND (NOT i.is_r18 OR f.key <> 'dir'))
       GROUP BY a.image_id`
   )
-  return new Map(res.rows.map((r) => [Number(r.image_id), { firstId: Number(r.first_id), dir: r.dir }]))
+  return new Map(res.rows.map((r) => [Number(r.image_id), { firstId: Number(r.first_id), dir: r.target?.dir ?? null, existing: r.target?.existing === true }]))
 }
 
 // 手动看图：同一张图已有活动任务时复用它。
@@ -391,6 +391,15 @@ export async function requeueRunningLookJobs(): Promise<void> {
     .where(and(eq(aiJob.kind, 'LOOK'), eq(aiJob.status, 'RUNNING'), isNull(aiJob.remoteId), sql`(${aiJob.payload}->>'lookBatchFileId') IS NULL`))
 }
 
+const cloudAllowed = "NOT i.is_r18 AND (i.rating_source = 'MANUAL' OR (i.rating_source = 'MODEL' AND i.rating IN ('GENERAL', 'SENSITIVE')))"
+
+// 编码和批量打包期间用户仍可修改分级。发送前按当前分级核对整批内容。
+export async function allowedLookImages(ids: number[]): Promise<Set<number>> {
+  const { rows } = await getDatabase().pg.query<{ id: number }>(
+    `SELECT i.id FROM image i WHERE i.id = ANY($1::bigint[]) AND i.delete_state = 0 AND ${cloudAllowed}`, [ids])
+  return new Set(rows.map(row => Number(row.id)))
+}
+
 // 一张图看图要用的信息：代表文件的位置、名字、元信息、分级状态
 export async function findLookInfo(imageId: number, categoryOnly = false): Promise<
   | {
@@ -423,7 +432,7 @@ export async function findLookInfo(imageId: number, categoryOnly = false): Promi
     height: number | null
     byte_size: number
   }>(
-    `SELECT i.id, i.content_hash, i.display_name, i.exif, i.is_r18, (NOT i.is_r18 AND (i.rating_source = 'MANUAL' OR (i.rating_source = 'MODEL' AND i.rating IN ('GENERAL', 'SENSITIVE')))) AS cloud_allowed, i.width, i.height, i.byte_size, f.rel_path, r.path AS root_path
+    `SELECT i.id, i.content_hash, i.display_name, i.exif, i.is_r18, (${cloudAllowed}) AS cloud_allowed, i.width, i.height, i.byte_size, f.rel_path, r.path AS root_path
      FROM image i
      LEFT JOIN LATERAL (SELECT p.rel_path, p.root_id FROM image_file p JOIN library_root loc ON loc.id = p.root_id
        WHERE p.image_id = i.id AND p.delete_state = 0 AND p.status = 'NORMAL' AND loc.delete_state = 0

@@ -1,7 +1,8 @@
 // 把百炼两种接口返回的用量统一成一种结构，字段名以实测返回为准（2026-11-22）
+import type { AiReplyCacheUsage } from '@shared/api'
 
 // 调用类型：chat 对话、look 看图、dream 做梦、translate 翻译词表、identify 以图搜图、embed 语义向量、organize 一键整理出方案
-export type ApiKind = 'chat' | 'look' | 'dream' | 'translate' | 'identify' | 'embed' | 'organize'
+export type ApiKind = 'chat' | 'compact' | 'look' | 'dream' | 'translate' | 'identify' | 'embed' | 'organize' | 'predict'
 
 // 计入缓存命中率目标的调用类型
 export const HIT_RATE_KINDS: ApiKind[] = ['chat', 'look']
@@ -24,6 +25,16 @@ function num(v: unknown): number {
 // 取对象字段，不是对象时返回空对象
 function obj(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+}
+
+// 缺少缓存字段与实际零命中含义不同，回复只展示服务端明确返回的数值。
+export function reportedChatCache(usage: unknown): AiReplyCacheUsage | undefined {
+  const u = obj(usage)
+  const inputTokens = u.prompt_tokens
+  const cachedTokens = obj(u.prompt_tokens_details).cached_tokens
+  if (typeof inputTokens !== 'number' || !Number.isSafeInteger(inputTokens) || inputTokens <= 0 ||
+      typeof cachedTokens !== 'number' || !Number.isSafeInteger(cachedTokens) || cachedTokens < 0 || cachedTokens > inputTokens) return
+  return { inputTokens, cachedTokens }
 }
 
 // Chat Completions：prompt_tokens 含命中部分；写入数在 prompt_tokens_details.cache_creation_input_tokens

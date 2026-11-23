@@ -1,7 +1,5 @@
 import { defineStore } from 'pinia'
-import type { LookStateVO } from '@shared/api'
-import { LOOK_KEY_HINT } from '@shared/api'
-import { TOKEN_PLAN_LOCAL_HINT } from '@shared/settings'
+import { LOOK_KEY_HINT, type LookStateVO } from '@shared/api'
 import { cancelAllLooks, fetchLookState, lookNow, onLookState, retryLook } from '@/api/look'
 import { useToastStore } from './toast'
 
@@ -16,16 +14,15 @@ let unsubscribe: (() => void) | null = null
 export const useLookStore = defineStore('look', {
   state: () => ({
     count: 0,
+    activity: 'idle' as LookStateVO['activity'],
     rows: [] as LookStateVO['rows'],
     canCancel: false,
     needsApiKey: false,
-    localOnly: false,
     open: false
   }),
   getters: {
-    keyHint: (s): string => s.localOnly ? TOKEN_PLAN_LOCAL_HINT : LOOK_KEY_HINT,
-    busy: (s): boolean => !s.needsApiKey && s.rows.some((r) => r.state !== 'FAILED'),
-    waitingForKey: (s): boolean => s.needsApiKey && s.rows.some((r) => r.state !== 'FAILED')
+    busy: (s): boolean => !s.needsApiKey && s.activity === 'working',
+    waitingForKey: (s): boolean => s.needsApiKey && s.activity !== 'idle'
   },
   actions: {
     // 读一次状态并订阅之后的变化
@@ -40,10 +37,10 @@ export const useLookStore = defineStore('look', {
     },
     apply(state: LookStateVO): void {
       this.count = state.count
+      this.activity = state.activity
       this.rows = state.rows
       this.canCancel = state.canCancel
       this.needsApiKey = state.needsApiKey
-      this.localOnly = state.localOnly === true
     },
     toggle(): void {
       this.open = !this.open
@@ -62,7 +59,7 @@ export const useLookStore = defineStore('look', {
     async now(imageId: number): Promise<void> {
       try {
         await lookNow(imageId)
-        useToastStore().show(this.needsApiKey ? this.keyHint : '已加入看图队列')
+        useToastStore().show(this.needsApiKey ? LOOK_KEY_HINT : '已加入看图队列')
       } catch (err) {
         useToastStore().show(errText(err), 'error')
       }

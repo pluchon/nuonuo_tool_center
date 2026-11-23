@@ -1,18 +1,20 @@
 // 语义向量（设计 6.7）：过了上云闸门的图在空闲时逐张补向量（R-18 图不生成）；查询文本的向量按原文缓存；
 // 上传的图先过本地分级闸门再上云。
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { EMBEDDING_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { findLookInfo } from '../../repositories/aiResultRepository'
-import { findEmbedCandidates, saveEmbedding, type AiSearchFilter } from '../../repositories/aiSearchRepository'
+import { findEmbedCandidates, findIndexedUpload, saveEmbedding, type AiSearchFilter } from '../../repositories/aiSearchRepository'
 import { findImageByHash } from '../../repositories/imageRepository'
-import { cachedSearchValue, searchCacheKey } from '../../repositories/aiSearchCacheRepository'
+import { cachedSearchValue, recordLocalReuse, searchCacheKey } from '../../repositories/aiSearchCacheRepository'
 import { rateFileNow } from '../rating/ratingService'
 import { embed } from './embeddingClient'
+import { isEmbeddingVector } from './embeddingVector'
 import { prepareImage } from './imagePrep'
+import { embeddingBudget, reserveEmbedding } from './aiPolicy'
 
 const log = getLogger('embed')
 
@@ -37,6 +39,14 @@ let config: EmbedConfig | null = null
 let running: Promise<void> | null = null
 let stopping = false
 let reschedule = false
+let wake: ReturnType<typeof setTimeout> | null = null
+function wakeAtMidnight(): void {
+  if (wake || stopping) return
+  const midnight = new Date()
+  midnight.setHours(24, 0, 0, 0)
+  wake = setTimeout(() => { wake = null; scheduleEmbedding() }, Math.max(1000, midnight.getTime() - Date.now()))
+  wake.unref()
+}
 const backgroundAbort = new AbortController()
 
 // 配置（启动时调一次）
@@ -66,6 +76,11 @@ export function scheduleEmbedding(): void {
       if (stopping || !cfg.canRun()) {
         break
       }
+      const budget = await embeddingBudget()
+      if (budget !== 'available') {
+        if (budget === 'exhausted') wakeAtMidnight()
+        break
+      }
       const ids = (await findEmbedCandidates(EMBEDDING_CONFIG.model, BATCH + failed.size)).filter((id) => !failed.has(id)).slice(0, BATCH)
       if (ids.length === 0) {
         break
@@ -84,6 +99,7 @@ export function scheduleEmbedding(): void {
           // 缩图期间可能发生复核、标签或分级变动，发送前重新检查检索资格。
           if (!(await findEmbedCandidates(EMBEDDING_CONFIG.model, 1, id)).length) continue
           if (stopping || !cfg.canRun()) break
+          if (!await reserveEmbedding()) { wakeAtMidnight(); return }
           await saveEmbedding(id, EMBEDDING_CONFIG.model, await embed({ image: url }, id, backgroundAbort.signal))
           done++
         } catch (err) {
@@ -115,7 +131,7 @@ async function queryVector(text: string): Promise<number[] | null> {
   try {
     const vector = await cachedSearchValue(
       searchCacheKey('text-vector-v1', [EMBEDDING_CONFIG.model, EMBEDDING_CONFIG.dimension, key]),
-      (value): value is number[] => Array.isArray(value) && value.length === EMBEDDING_CONFIG.dimension && value.every(Number.isFinite),
+      isEmbeddingVector,
       async () => cloudReady() ? embed({ text: key }) : undefined
     )
     return vector ?? null
@@ -180,13 +196,27 @@ export async function prepareRatedUpload(dataUrl: string, originalHash?: string)
   }
 }
 
-export async function uploadVector(dataUrl: string, originalHash?: string): Promise<number[]> {
-  return embed({ image: await prepareRatedUpload(dataUrl, originalHash) })
+export async function uploadVector(dataUrl: string, originalHash?: string, dirs?: AiSearchFilter['dirs']): Promise<number[]> {
+  const safe = await prepareRatedUpload(dataUrl, originalHash)
+  if (originalHash) {
+    const indexed = await findIndexedUpload(originalHash, EMBEDDING_CONFIG.model, dirs)
+    if (isEmbeddingVector(indexed)) {
+      await recordLocalReuse()
+      return indexed
+    }
+  }
+  const bytes = Buffer.from(safe.slice(safe.indexOf(',') + 1), 'base64')
+  const key = searchCacheKey('upload-vector-v1', [EMBEDDING_CONFIG.model, EMBEDDING_CONFIG.dimension, 'jpeg-512-v1', createHash('sha256').update(bytes).digest('hex')])
+  const vector = await cachedSearchValue(key, isEmbeddingVector, () => embed({ image: safe }))
+  if (!vector) throw new BizError('DEPENDENCY_FAILED', '图片向量暂不可用')
+  return vector
 }
 
 // 退出前停掉
 export async function stopEmbedding(): Promise<void> {
   stopping = true
+  if (wake) clearTimeout(wake)
+  wake = null
   backgroundAbort.abort()
   await running
 }

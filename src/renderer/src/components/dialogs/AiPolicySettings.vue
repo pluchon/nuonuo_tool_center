@@ -1,0 +1,114 @@
+<template>
+  <template v-if="data">
+    <section class="set-dlg__group" aria-label="后台画面索引">
+      <h3 class="set-dlg__group-title">后台画面索引</h3>
+      <div class="set-dlg__row">
+        <span class="set-dlg__label">云端处理</span>
+        <div class="set-dlg__seg" role="group" aria-label="云端处理">
+          <button v-for="option in modes" :key="option.id" type="button" class="set-dlg__seg-btn"
+            :class="{ 'set-dlg__seg-btn--on': mode === option.id }" :aria-pressed="mode === option.id"
+            :disabled="busy" @click="choose(option.id)">{{ option.label }}</button>
+        </div>
+      </div>
+      <div v-if="mode === 'limited'" class="set-dlg__row set-dlg__row--sep">
+        <label for="ai-embed-limit" class="set-dlg__label">每日限量</label>
+        <input id="ai-embed-limit" class="set-dlg__credential policy-limit" type="number" min="1" max="10000" placeholder="张数"
+          aria-label="后台向量每日上限" :value="data.dailyLimit > 0 ? data.dailyLimit : ''" :disabled="busy" @change="limit" />
+        <span class="set-dlg__value">张</span>
+      </div>
+      <div class="set-dlg__row set-dlg__row--sep"><span class="set-dlg__label">待建立索引</span><strong class="policy-number">{{ data.pendingImages.toLocaleString() }} 张</strong></div>
+      <div class="set-dlg__row set-dlg__row--sep"><span class="set-dlg__label">今日已请求</span><span class="set-dlg__value">{{ data.dailyUsed.toLocaleString() }} 张</span></div>
+    </section>
+    <section class="set-dlg__group" aria-label="缓存用量">
+      <h3 class="set-dlg__group-title">缓存用量</h3>
+      <div class="set-dlg__row"><span class="set-dlg__label">本地缓存命中</span><strong class="policy-number">{{ data.localHits.toLocaleString() }} 次</strong></div>
+      <div class="set-dlg__row set-dlg__row--sep"><span class="set-dlg__label">云端前缀缓存命中</span><strong class="policy-number">{{ data.cloudCachedTokens.toLocaleString() }} token</strong></div>
+    </section>
+    <section class="set-dlg__group" aria-label="长期记忆">
+      <h3 class="set-dlg__group-title">长期记忆</h3>
+      <div v-if="data.confirmedFolders" class="set-dlg__row"><span class="set-dlg__label">已确认的分类规则</span><button class="set-dlg__btn" :disabled="busy" @click="resetRules">下次重新规划</button></div>
+      <div v-if="!data.preferences.length" class="set-dlg__row"><span class="set-dlg__value">暂无记忆</span></div>
+      <div v-for="(p, i) in data.preferences" :key="p.id" class="set-dlg__row policy-pref" :class="{ 'set-dlg__row--sep': i || data.confirmedFolders }">
+        <span class="policy-origin">{{ p.explicit ? '用户明说' : '诺诺推断' }}</span>
+        <template v-if="editing === p.id">
+          <input v-model="draft" class="set-dlg__credential" maxlength="300" aria-label="偏好内容" @keydown.enter="confirmPreference($event, p.id)" />
+          <button class="set-dlg__btn" :disabled="busy || !draft.trim()" @click="change(p.id,draft)">确认</button>
+          <button class="set-dlg__btn" :disabled="busy" @click="editing = null">取消</button>
+        </template>
+        <template v-else>
+          <span class="set-dlg__label">{{ p.content }}</span>
+          <button class="set-dlg__btn" :disabled="busy" @click="editing = p.id; draft = p.content">纠正</button>
+          <button class="set-dlg__btn" :disabled="busy" @click="change(p.id,null)">忘记</button>
+        </template>
+      </div>
+    </section>
+  </template>
+  <p v-if="error" role="alert">{{ error }}</p>
+</template>
+<script setup lang="ts">
+import { computed, nextTick, onMounted, ref } from 'vue'
+import type { AiPolicyVO, ApiResponse } from '@shared/api'
+const data = ref<AiPolicyVO | null>(null)
+const busy = ref(false)
+const editing = ref<number | null>(null)
+const draft = ref('')
+const error = ref('')
+const modes = [{ id: 'paused', label: '暂停' }, { id: 'limited', label: '每日限量' }, { id: 'all', label: '不限量' }] as const
+type Mode = (typeof modes)[number]['id']
+const choosingLimit = ref(false)
+const mode = computed<Mode>(() => choosingLimit.value || (data.value?.dailyLimit ?? 0) > 0 ? 'limited' : data.value?.dailyLimit === -1 ? 'all' : 'paused')
+async function refresh() {
+  const response = await window.api.ai.policy()
+  if (!response.ok) throw new Error(response.message)
+  data.value = response.data
+}
+async function save(operation: () => Promise<ApiResponse<void>>) {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const response = await operation()
+    if (!response.ok) throw new Error(response.message)
+    editing.value = null
+    await refresh()
+    error.value = ''
+  } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
+  finally { busy.value = false }
+}
+async function choose(value: Mode) {
+  if (mode.value === value) return
+  if (value === 'limited') {
+    // 从不限量切换时先停止请求，避免填写限额期间仍持续计费。
+    if (data.value?.dailyLimit === -1) {
+      await save(() => window.api.ai.embeddingLimit(0))
+      if (data.value?.dailyLimit === -1) return
+    }
+    choosingLimit.value = true
+    await nextTick()
+    document.getElementById('ai-embed-limit')?.focus()
+  } else {
+    choosingLimit.value = false
+    await save(() => window.api.ai.embeddingLimit(value === 'all' ? -1 : 0))
+  }
+}
+async function limit(event: Event) {
+  const input = event.target as HTMLInputElement
+  if (input.value && input.validity.valid) await save(() => window.api.ai.embeddingLimit(input.valueAsNumber))
+  choosingLimit.value = false
+  if (data.value) input.value = String(data.value.dailyLimit)
+}
+const change = (id: number, text: string | null) => save(() => window.api.ai.changePreference(id, text))
+function confirmPreference(event: KeyboardEvent, id: number) {
+  if (event.isComposing || event.keyCode === 229) return
+  event.preventDefault()
+  if (draft.value.trim()) void change(id, draft.value)
+}
+const resetRules = () => save(() => window.api.ai.resetRules())
+onMounted(() => refresh().catch((e: Error) => { error.value = e.message }))
+</script>
+<style scoped>
+.policy-number { color:var(--a-ink); font-size:13px; font-variant-numeric:tabular-nums; }
+.policy-limit { width:6em; }
+.policy-pref { flex-wrap:wrap; gap:6px; }
+.policy-pref .set-dlg__label,.policy-pref input { flex:1; min-width:4em; overflow-wrap:anywhere; }
+.policy-origin { border-radius:6px; padding:3px 6px; background:var(--a-soft); color:var(--a-ink); font-size:11px; }
+</style>

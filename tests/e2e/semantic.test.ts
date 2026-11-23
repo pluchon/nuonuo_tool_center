@@ -1,10 +1,11 @@
-import { copyFileSync, mkdirSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, setAppearance, shot } from './support/app'
 import { importFolder } from './support/picker'
 import { bailianRequests, launchWithMockBailian } from './support/mockBailian'
+import { bmp24 } from '../support/bmp'
 
 sharp.cache(false)
 
@@ -12,9 +13,8 @@ afterEach(async () => {
   await closeLeftoverApps()
 })
 
-// 晴天草地和星空夜景两种画面（不用任何真实图片）
+// 使用合成草地图和蓝色位图，避免接触正式图库。
 const SUNNY = '<rect width="100%" height="100%" fill="#87CEEB"/><circle cx="700" cy="140" r="80" fill="#FFD23F"/><rect y="420" width="900" height="180" fill="#4CAF50"/>'
-const NIGHT = '<rect width="100%" height="100%" fill="#0B1340"/><circle cx="700" cy="140" r="60" fill="#F5F3CE"/><circle cx="120" cy="80" r="3" fill="#fff"/><circle cx="300" cy="120" r="2" fill="#fff"/><rect y="460" width="900" height="140" fill="#1B1B2F"/>'
 async function makeImage(file: string, body: string): Promise<void> {
   await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="900" height="600">${body}</svg>`)).jpeg({ quality: 88 }).toFile(file)
 }
@@ -25,11 +25,12 @@ describe('语义向量和按图找相似', () => {
     const source = join(dirs.root, 'pics')
     mkdirSync(source, { recursive: true })
     await makeImage(join(source, 'sunny.jpg'), SUNNY)
-    await makeImage(join(source, 'night.jpg'), NIGHT)
+    writeFileSync(join(source, 'blue.bmp'), bmp24(80, 60))
     const upload = join(dirs.root, 'query-sunny.jpg')
     await makeImage(upload, SUNNY.replace('#4CAF50', '#5DBB63'))
 
     const { app, page } = await launchWithMockBailian(dirs)
+    expect((await page.evaluate(() => window.api.ai.embeddingLimit(2))).ok).toBe(true)
     const errors: string[] = []
     page.on('pageerror', (e) => errors.push(e.message))
     await importFolder(app, page, source)
@@ -44,7 +45,7 @@ describe('语义向量和按图找相似', () => {
     // 助手只在类目录检索；保留源图，验证归档副本继承同一张图片的标签。
     const category = join(dirs.library, '测试归档')
     mkdirSync(category, { recursive: true })
-    for (const filename of ['sunny.jpg', 'night.jpg']) {
+    for (const filename of ['sunny.jpg', 'blue.bmp']) {
       copyFileSync(join(source, filename), join(category, filename))
     }
     const scan = await page.evaluate(() => window.api.scan.start(null))
@@ -78,7 +79,7 @@ describe('语义向量和按图找相似', () => {
     expect(await page.locator('.assistant__user .attachment-card__name').textContent()).toBe('query-sunny.jpg')
     expect(await page.locator('.assistant__user .attachment-card__type').textContent()).toBe('JPEG')
     const names = await page.locator('.assistant__reply').last().locator('.assistant__pic-name').allTextContents()
-    // 模拟向量按合成图的亮暗区分晴天和夜景，检索应只返回晴天图。
+    // 模拟向量按绿色通道区分样本，检索应只返回草地图。
     expect(names).toEqual(['sunny.jpg'])
     await expect(page.locator('.assistant__how').last().textContent()).resolves.toContain('按你传的图找了相似的')
     await page.waitForTimeout(400)
@@ -92,8 +93,18 @@ describe('语义向量和按图找相似', () => {
     expect(await page.locator('.assistant__user .attachment-card__name').textContent()).toBe('query-sunny.jpg')
     await page.waitForTimeout(400)
     await shot(page, 'semantic-dark-similar')
-    expect(errors).toEqual([])
     expect((await bailianRequests(app)).filter((route) => route === 'multimodal-embedding')).toHaveLength(3)
+    // 改名后上传同一份 BMP，应复用已归档的向量。上一张查询图的结果不能混入。
+    await page.locator('.assistant__file').setInputFiles({
+      name: '改过名字.bmp', mimeType: 'image/bmp', buffer: readFileSync(join(source, 'blue.bmp'))
+    })
+    await page.waitForSelector('.assistant__attach')
+    await page.click('.assistant__send')
+    await expect.poll(() => page.locator('.assistant__reply').last().locator('.assistant__pic-name').allTextContents(),
+      { timeout: 30_000 }).toEqual(['blue.bmp'])
+    await shot(page, 'semantic-bmp-reuse-dark')
+    expect((await bailianRequests(app)).filter((route) => route === 'multimodal-embedding')).toHaveLength(3)
+    expect(errors).toEqual([])
     await app.close()
   }, 400_000)
 })

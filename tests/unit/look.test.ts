@@ -6,6 +6,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { countAssistFields, parseAssistJson } from '../../src/shared/assistJson'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
 import { localClues } from '../../src/main/services/ai/localClues'
+import { hashFile } from '../../src/main/services/scan/imageProbe'
+import { prepareImage, toDataUrl } from '../../src/main/services/ai/imagePrep'
 import { normalizeFields, pendingStatus } from '../../src/main/services/ai/suggestion'
 
 // 模型调用换成脚本：看图时返回预设的回复，记下请求
@@ -99,18 +101,21 @@ describe('看图队列和 AI 建议', () => {
     mkdirSync(source)
     process.env.DASHSCOPE_API_KEY = 'test-key-not-real'
     // 四张测试图：普通图、Pixiv 文件名、R-18、本地模型判过但分数不明（UNKNOWN，不放行）
-    for (const name of ['a.jpg', '12345678_p0.jpg', 'c.jpg', 'd.jpg']) {
-      await sharp({ create: { width: 1600, height: 900, channels: 3, background: '#BBD5EE' } }).jpeg().toFile(join(source, name))
+    const hashes: string[] = []
+    for (const [i, name] of ['a.jpg', '12345678_p0.jpg', 'c.jpg', 'd.jpg'].entries()) {
+      const file = join(source, name)
+      await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 80 + i * 35, g: 160, b: 180 } } }).jpeg().toFile(file)
+      hashes.push(await hashFile(file))
     }
     await openDatabase(join(dir, 'pgdata'), resolve('drizzle'))
     const { pg } = getDatabase()
     await pg.query(`INSERT INTO library_root (kind, name, path) VALUES ('SOURCE', 'pics', $1)`, [source])
     await pg.exec(`
       INSERT INTO image (content_hash, format, byte_size, width, height, thumb_ready, rating, rating_source, is_r18) VALUES
-        ('h1', 'JPG', 1, 1600, 900, 1, 'GENERAL', 'MODEL', false),
-        ('h2', 'JPG', 1, 1600, 900, 1, 'SENSITIVE', 'MODEL', false),
-        ('h3', 'JPG', 1, 1600, 900, 1, 'EXPLICIT', 'MODEL', true),
-        ('h4', 'JPG', 1, 1600, 900, 1, 'UNKNOWN', 'MODEL', false),
+        ('${hashes[0]}', 'JPG', 1, 1600, 900, 1, 'GENERAL', 'MODEL', false),
+        ('${hashes[1]}', 'JPG', 1, 1600, 900, 1, 'SENSITIVE', 'MODEL', false),
+        ('${hashes[2]}', 'JPG', 1, 1600, 900, 1, 'EXPLICIT', 'MODEL', true),
+        ('${hashes[3]}', 'JPG', 1, 1600, 900, 1, 'UNKNOWN', 'MODEL', false),
         ('h5', 'JPG', 1, 1600, 900, 1, 'UNKNOWN', NULL, false);
       INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES
         (1, 1, 'a.jpg', now()), (2, 1, '12345678_p0.jpg', now()), (3, 1, 'c.jpg', now()), (4, 1, 'd.jpg', now()), (5, 1, 'e.jpg', now());
@@ -133,6 +138,17 @@ describe('看图队列和 AI 建议', () => {
     await closeDatabase()
     rmSync(dir, { recursive: true, force: true })
     delete process.env.DASHSCOPE_API_KEY
+  })
+
+  it('原图已更换时仅使用原内容对应的缩略图，缺少缩略图时停止准备云端输入', async () => {
+    const cached = join(dir, 'verified-thumbs')
+    mkdirSync(cached)
+    const contentHash = await hashFile(join(source, 'a.jpg'))
+    const info = { rootPath: source, relPath: 'c.jpg', contentHash }
+    expect(await prepareImage(info, cached, 512)).toBeNull()
+    const thumb = join(cached, contentHash + '.webp')
+    await sharp(join(source, 'a.jpg')).resize(100).webp().toFile(thumb)
+    expect(await prepareImage(info, cached, 512)).toBe(await toDataUrl(thumb, 512))
   })
 
   // 等队列里没有进行中的
@@ -162,7 +178,7 @@ describe('看图队列和 AI 建议', () => {
       vi.unstubAllEnvs()
     }
     await look.initLook()
-    expect(await look.getLookState()).toMatchObject({ needsApiKey: true, count: 2 })
+    expect(await look.getLookState()).toMatchObject({ needsApiKey: true, count: 2, activity: 'queued' })
     expect(calls).toHaveLength(0)
     // 通过实际保存入口添加密钥，无须再次排队或重启应用。
     try {
@@ -241,7 +257,7 @@ describe('看图队列和 AI 建议', () => {
     vi.mocked(searchCall).mockRejectedValueOnce(inputRejected)
     await look.lookNow(1)
     await idle()
-    expect(await look.getLookState()).toEqual({ count: 0, rows: [], canCancel: false, needsApiKey: false })
+    expect(await look.getLookState()).toEqual({ count: 0, activity: 'idle', rows: [], canCancel: false, needsApiKey: false })
     expect(await sugg.listSuggestions(1)).toEqual([
       { key: 'r18Review', kind: 'r18Review', value: '云端内容审核未通过', origin: 'NONO' }
     ])
@@ -287,6 +303,7 @@ describe('看图队列和 AI 建议', () => {
     await look.lookNow(4)
     await idle()
     let s = await look.getLookState()
+    expect(s.activity).toBe('idle')
     expect(s.rows).toMatchObject([{ imageId: 4, state: 'FAILED', error: '超时' }])
     const truncated = { text: '{"name":', sources: [], usage: { inputTokens: 5, outputTokens: 1, cachedTokens: 0, cacheWriteTokens: 0, imageTokens: 0, searchCount: 0 } }
     vi.mocked(searchCall).mockResolvedValueOnce(truncated)

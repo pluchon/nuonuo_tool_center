@@ -24,7 +24,6 @@ const dir = mkdtempSync(join(tmpdir(), 'ltm-cache-'))
 const dbPath = join(dir, 'pgdata')
 const start = () => openDatabase(dbPath, resolve('drizzle'))
 const savedKey = process.env.DASHSCOPE_API_KEY
-const savedPlan = process.env.ALIYUN_TOKEN_PLAN_KEY
 const search = async (text: string, conversationId: number | null = null) => {
   const q = await ask({ text, conversationId, scope: null, includeR18: false })
   const reply = await answer(q.conversation.id)
@@ -32,7 +31,6 @@ const search = async (text: string, conversationId: number | null = null) => {
 }
 beforeAll(async () => {
   process.env.DASHSCOPE_API_KEY = 'unit-test'
-  process.env.ALIYUN_TOKEN_PLAN_KEY = ' '
   mkdirSync(join(dir, 'pics'))
   await start()
   const { pg } = getDatabase()
@@ -51,8 +49,6 @@ afterAll(async () => {
   await closeDatabase()
   if (savedKey === undefined) delete process.env.DASHSCOPE_API_KEY
   else process.env.DASHSCOPE_API_KEY = savedKey
-  if (savedPlan === undefined) delete process.env.ALIYUN_TOKEN_PLAN_KEY
-  else process.env.ALIYUN_TOKEN_PLAN_KEY = savedPlan
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -70,6 +66,62 @@ it('跨进程复用一天内的计算，并发只执行一次，过期后重新�
   expect(load).toHaveBeenCalledTimes(2)
 })
 
+it('并发失败可重试，无效结果不写入，损坏的旧缓存可由新结果替换', async () => {
+  const key = searchCacheKey('test', '异常重试')
+  const valid = (v: unknown): v is string => typeof v === 'string' && v.length > 0
+  const load = vi.fn<() => Promise<string>>().mockRejectedValueOnce(new Error('断网')).mockResolvedValueOnce('').mockResolvedValue('恢复')
+  const calls = await Promise.allSettled(Array.from({ length: 12 }, () => cachedSearchValue(key, valid, load)))
+  expect(calls.every(r => r.status === 'rejected')).toBe(true)
+  expect(load).toHaveBeenCalledTimes(1)
+  expect(await cachedSearchValue(key, valid, load)).toBeUndefined()
+  const { pg } = getDatabase()
+  expect((await pg.query('select key from ai_search_cache where key=$1', [key])).rows).toHaveLength(0)
+  await pg.query("insert into ai_search_cache(key,value,expires_at) values($1,'{}',now()+interval '1 day')", [key])
+  expect(await cachedSearchValue(key, valid, load)).toBe('恢复')
+  expect(await cachedSearchValue(key, valid, load)).toBe('恢复')
+  expect(load).toHaveBeenCalledTimes(3)
+})
+
+it('关闭旧图库后才返回的请求，不会把结果写到新图库', async () => {
+  const key = searchCacheKey('test', '延迟响应')
+  const valid = (v: unknown): v is string => typeof v === 'string'
+  let started!: () => void
+  let finish!: (s: string) => void
+  const entered = new Promise<void>(resolve => { started = resolve })
+  const late = new Promise<string>(resolve => { finish = resolve })
+  const old = cachedSearchValue(key, valid, async () => { started(); return late })
+  await entered
+  await closeDatabase()
+  try {
+    await openDatabase(join(dir, '另一个图库'), resolve('drizzle'))
+    finish('旧图库结果')
+    expect(await old).toBe('旧图库结果')
+    expect(await cachedSearchValue(key, valid, async () => '新图库结果')).toBe('新图库结果')
+  } finally {
+    finish('旧图库结果')
+    await closeDatabase()
+    await start()
+  }
+})
+
+it('缓存达到容量上限时清理过期条目，保留新写入的结果', async () => {
+  const { pg } = getDatabase()
+  await pg.exec(`insert into ai_search_cache(key,value,expires_at)
+    select 'capacity-test:' || n, '1', now() + n * interval '1 second' from generate_series(-2,1005) n`)
+  try {
+    const key = 'capacity-test:new'
+    const valid = (v: unknown): v is number => typeof v === 'number'
+    const load = vi.fn(async () => 2)
+    await cachedSearchValue(key, valid, load)
+    expect((await pg.query('select count(*)::int as n from ai_search_cache')).rows).toEqual([{ n: 1000 }])
+    expect((await pg.query('select key from ai_search_cache where expires_at <= now()')).rows).toEqual([])
+    expect(await cachedSearchValue(key, valid, load)).toBe(2)
+    expect(load).toHaveBeenCalledTimes(1)
+  } finally {
+    await pg.exec("delete from ai_search_cache where key like 'capacity-test:%'")
+  }
+})
+
 it('重新搜索使用当天的计划，结果随当前分级和文字变化，过期后才重新调用', async () => {
   vi.mocked(chatCall).mockClear()
   const text = '想看山间流淌的河谷'
@@ -78,18 +130,18 @@ it('重新搜索使用当天的计划，结果随当前分级和文字变化，�
   await closeDatabase()
   await start()
   await getDatabase().pg.exec("UPDATE image SET is_r18=true WHERE id=4; UPDATE image SET description='河谷' WHERE id=3")
-  process.env.ALIYUN_TOKEN_PLAN_KEY = 'local-plan-mode'
+  process.env.DASHSCOPE_API_KEY = ' '
   expect((await search(text)).names).toEqual(['水边的少女'])
   expect(chatCall).toHaveBeenCalledTimes(1)
-  process.env.ALIYUN_TOKEN_PLAN_KEY = ' '
+  process.env.DASHSCOPE_API_KEY = 'unit-test'
   await getDatabase().pg.exec("UPDATE ai_search_cache SET expires_at=now()-interval '1 second'")
   await search(text)
   expect(chatCall).toHaveBeenCalledTimes(2)
 })
 
-it('个人套餐本地模式首次搜索发色和文字均不调用云端', async () => {
+it('缺少百炼密钥时首次搜索发色和文字均不调用云端', async () => {
   vi.mocked(chatCall).mockClear()
-  process.env.ALIYUN_TOKEN_PLAN_KEY = 'local-plan-mode'
+  process.env.DASHSCOPE_API_KEY = ' '
   try {
     expect((await search('蓝色头发女孩')).names).toEqual(['水边的少女','蓝发琪露诺'])
     expect((await search('找水边的少女')).names).toEqual(['水边的少女'])
@@ -97,11 +149,11 @@ it('个人套餐本地模式首次搜索发色和文字均不调用云端', asyn
     expect(chatCall).not.toHaveBeenCalled()
     expect(embed).not.toHaveBeenCalled()
   } finally {
-    process.env.ALIYUN_TOKEN_PLAN_KEY = ' '
+    process.env.DASHSCOPE_API_KEY = 'unit-test'
   }
 })
 
-it('重启并切换到个人套餐后，仍可读取已生成的文本向量。缺少向量时不使用按量凭证', async () => {
+it('重启后即使缺少百炼密钥，仍可读取已生成的文本向量。缺少向量时不发起请求', async () => {
   const { semanticVector } = await import('../../src/main/services/ai/embeddingService')
   const vector = Array.from({ length: 1024 }, (_, i) => i === 0 ? 1 : 0)
   vi.mocked(embed).mockResolvedValue(vector)
@@ -110,12 +162,12 @@ it('重启并切换到个人套餐后，仍可读取已生成的文本向量。�
     expect(embed).toHaveBeenCalledTimes(2)
     await closeDatabase()
     await start()
-    process.env.ALIYUN_TOKEN_PLAN_KEY = 'local-plan-mode'
+    process.env.DASHSCOPE_API_KEY = ' '
     expect(await semanticVector('黄昏纸鸢', ['清晨纸鸢'])).toBeDefined()
     expect(await semanticVector('从未检索的纸鸢', ['清晨纸鸢'])).toBeUndefined()
     expect(embed).toHaveBeenCalledTimes(2)
   } finally {
-    process.env.ALIYUN_TOKEN_PLAN_KEY = ' '
+    process.env.DASHSCOPE_API_KEY = 'unit-test'
     vi.mocked(embed).mockReset()
   }
 })

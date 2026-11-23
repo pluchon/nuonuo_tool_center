@@ -5,13 +5,13 @@ import { createReadStream } from 'node:fs'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { LookStateVO } from '@shared/api'
-import { BAILIAN_CONFIG, ORGANIZE_COST, isTokenPlanLocalMode, readCloudCredentials } from '../../config/cloudConfig'
-import { TOKEN_PLAN_LOCAL_HINT } from '@shared/settings'
+import { BAILIAN_CONFIG, ORGANIZE_COST, readCloudCredentials } from '../../config/cloudConfig'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isDatabaseOpen } from '../../db/client'
 import { findActiveSettings, upsertSettings } from '../../repositories/appSettingRepository'
 import {
+  allowedLookImages,
   archiveReviewedLookFailures,
   attachLookBatch,
   cancelOpenLookJobs,
@@ -154,7 +154,10 @@ export async function getLookState(): Promise<LookStateVO> {
     })
   }
   const canCancel = jobs.some((j) => (j.status === 'QUEUED' || j.status === 'FAILED') && !j.remoteId && !runningIds.has(j.id) && !packingIds.has(j.id))
-  return { count: jobs.length, rows, canCancel, needsApiKey: !cloudReady(), ...(isTokenPlanLocalMode() ? { localOnly: true } : {}) }
+  // 队列预览只取前几行，底栏状态要包含后面的任务。
+  const working = jobs.some(j => j.status !== 'FAILED' && (runningIds.has(j.id) || packingIds.has(j.id) || j.remoteId || lookBatchFileId(j)))
+  const activity = working ? 'working' : jobs.some(j => j.status !== 'FAILED') ? 'queued' : 'idle'
+  return { count: jobs.length, activity, rows, canCancel, needsApiKey: !cloudReady() }
 }
 
 // 密钥恢复后继续处理原队列，包括已经提交、等待查询结果的批次。
@@ -180,7 +183,6 @@ async function pushState(): Promise<void> {
 
 // 启动：上次退出时没做完的放回排队，接着查批量任务，再排新图
 export async function initLook(): Promise<void> {
-  if (isTokenPlanLocalMode()) return
   await archiveReviewedLookFailures()
   await requeueRunningLookJobs()
   await lookSince()
@@ -190,7 +192,7 @@ export async function initLook(): Promise<void> {
 
 // 把符合条件的新图排进队列，然后开始看
 export async function enqueueNewImages(): Promise<void> {
-  if (!config || stopping || isTokenPlanLocalMode()) {
+  if (!config || stopping) {
     return
   }
   const count = await enqueueNewLookJobs(await lookSince(), 1000)
@@ -274,6 +276,10 @@ async function lookOne(job: AiJobEntity): Promise<void> {
   }
   const clues = cluesOf(info)
   const instructions = await realtimeLookInstructions()
+  if (!(await allowedLookImages([info.id])).has(info.id)) {
+    await updateJob(job.id, { status: 'CANCELLED', finishedAt: new Date() })
+    return
+  }
   if (stopping) return
   try {
     const res = await searchCall({
@@ -413,7 +419,6 @@ async function pumpOne(): Promise<boolean> {
 
 // 重试一张出错的
 export async function retryLook(jobId: number): Promise<void> {
-  if (isTokenPlanLocalMode()) throw new BizError('DEPENDENCY_FAILED', TOKEN_PLAN_LOCAL_HINT)
   await requeueLookJob(jobId)
   await pushState()
   scheduleLook()
@@ -421,7 +426,6 @@ export async function retryLook(jobId: number): Promise<void> {
 
 // 让某张图现在就看：排到最前面（已经在队列里就提优先级）
 export async function lookNow(imageId: number): Promise<void> {
-  if (isTokenPlanLocalMode()) throw new BizError('DEPENDENCY_FAILED', TOKEN_PLAN_LOCAL_HINT)
   const open = (await findOpenLookJobs()).find((j) => j.imageId === imageId)
   if (open) {
     if (!packingIds.has(open.id)) {
@@ -502,31 +506,36 @@ async function submitChunks(jobs: AiJobEntity[]): Promise<void> {
   const instructions = `${LOOK_RULES}\n\n${await profileOfConversation(null, false)}`
   for (let i = 0; i < jobs.length && !stopping; i += BATCH_SIZE) {
     const chunk = jobs.slice(i, i + BATCH_SIZE)
-    const lines: string[] = []
-    const prepared: AiJobEntity[] = []
+    let prepared: Array<{ job: AiJobEntity; line: string }> = []
     for (const j of chunk) {
       if (stopping) {
         return
       }
       const line = await batchLine(j, instructions)
       if (line) {
-        lines.push(line)
-        prepared.push(j)
+        prepared.push({ job: j, line })
       }
     }
-    if (lines.length === 0) {
+    if (!prepared.length) {
       continue
     }
     const file = join(cfg.tempDir, `look-batch-${Date.now()}.jsonl`)
-    const ids = prepared.map((job) => job.id)
     try {
       await mkdir(cfg.tempDir, { recursive: true })
-      await writeFile(file, lines.join('\n'))
-      if (stopping) return
+      // 只有打包期间分级有变才重写本地文件；其余图片仍在本批提交。
+      while (prepared.length && !stopping) {
+        await writeFile(file, prepared.map(entry => entry.line).join('\n'))
+        const allowed = await allowedLookImages(prepared.map(entry => entry.job.imageId!))
+        const rejected = prepared.filter(entry => !allowed.has(entry.job.imageId!))
+        if (!rejected.length) break
+        for (const { job } of rejected) await updateJob(job.id, { status: 'CANCELLED', finishedAt: new Date() })
+        prepared = prepared.filter(entry => allowed.has(entry.job.imageId!))
+      }
+      if (stopping || !prepared.length) continue
       const client = getBailianClient()
       const upload = await client.files.create({ file: createReadStream(file), purpose: 'batch' }, { signal: realtimeAbort.signal })
       if (stopping) return
-      const registration = registerLookBatch(client, ids, upload.id)
+      const registration = registerLookBatch(client, prepared.map(entry => entry.job.id), upload.id)
       batchRegistration = registration
       try {
         await registration
@@ -536,7 +545,7 @@ async function submitChunks(jobs: AiJobEntity[]): Promise<void> {
     } catch (err) {
       if (!stopping) {
         log.warn('上传批量看图文件失败', err)
-        await failLookBatch(ids, '批量文件上传失败')
+        await failLookBatch(prepared.map(entry => entry.job.id), '批量文件上传失败')
       }
     } finally {
       await rm(file, { force: true }).catch((err: unknown) => log.warn('清理看图批量临时文件失败', err))

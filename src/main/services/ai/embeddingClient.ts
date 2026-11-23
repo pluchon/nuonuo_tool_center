@@ -1,7 +1,8 @@
 // 语义向量的云端调用（qwen3-vl-embedding，1024 维）：一张图或一句话换成向量，调用后记账；不自动重试
-import { EMBEDDING_CONFIG, bailianUnavailableMessage, readCloudCredentials } from '../../config/cloudConfig'
+import { EMBEDDING_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
 import { getLogger } from '../../common/logger'
 import { insertApiUsage } from '../../repositories/apiUsageRepository'
+import { isEmbeddingVector } from './embeddingVector'
 
 const log = getLogger('embed')
 
@@ -12,7 +13,7 @@ export type EmbedInput = { image: string } | { text: string }
 export async function embed(input: EmbedInput, imageId?: number, signal?: AbortSignal): Promise<number[]> {
   const key = readCloudCredentials().dashscopeApiKey
   if (!key) {
-    throw new Error(bailianUnavailableMessage('未配置百炼 API Key'))
+    throw new Error('未配置百炼 API Key')
   }
   const t0 = Date.now()
   let error: string | null = null
@@ -25,15 +26,15 @@ export async function embed(input: EmbedInput, imageId?: number, signal?: AbortS
       body: JSON.stringify({ model: EMBEDDING_CONFIG.model, input: { contents: [input] }, parameters: { dimension: EMBEDDING_CONFIG.dimension } }),
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout
     })
-    const body = (await res.json().catch(() => ({}))) as {
+    const body = ((await res.json().catch(() => null)) ?? {}) as {
       output?: { embeddings?: Array<{ embedding?: number[] }> }
       usage?: Record<string, number>
       code?: string
     }
     usage = body.usage ?? {}
     const vec = body.output?.embeddings?.[0]?.embedding
-    if (!res.ok || !Array.isArray(vec) || vec.length !== EMBEDDING_CONFIG.dimension) {
-      error = `${res.status} ${body.code ?? ''}`.trim()
+    if (!res.ok || !isEmbeddingVector(vec)) {
+      error = res.ok ? '服务返回了无效向量' : `${res.status} ${body.code ?? ''}`.trim()
       throw new Error(`向量接口出错：${error}`)
     }
     return vec

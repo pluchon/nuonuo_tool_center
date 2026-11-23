@@ -1,5 +1,6 @@
 import OpenAI from 'openai'
-import { BAILIAN_CONFIG, CACHE_HIT_CHECK, bailianUnavailableMessage, readCloudCredentials } from '../../config/cloudConfig'
+import type { AiReplyCacheUsage } from '@shared/api'
+import { BAILIAN_CONFIG, CACHE_HIT_CHECK, readCloudCredentials } from '../../config/cloudConfig'
 import { getLogger } from '../../common/logger'
 import { findRecentUsage, insertApiUsage } from '../../repositories/apiUsageRepository'
 import { assertCacheMarks, type PromptMessage } from './promptPrefix'
@@ -7,6 +8,7 @@ import { collectSearchSources, type SearchSource } from './searchSources'
 import {
   HIT_RATE_KINDS,
   normalizeChatUsage,
+  reportedChatCache,
   normalizeResponsesUsage,
   textHitRate,
   type ApiKind,
@@ -21,7 +23,7 @@ let client: OpenAI | null = null
 export function getBailianClient(): OpenAI {
   const { dashscopeApiKey } = readCloudCredentials()
   if (!dashscopeApiKey) {
-    throw new Error(bailianUnavailableMessage('未配置百炼 API Key'))
+    throw new Error('未配置百炼 API Key')
   }
   if (client?.apiKey === dashscopeApiKey) return client
   client = new OpenAI({
@@ -42,8 +44,10 @@ interface CallMeta {
 
 // 对话调用的参数；tools 必须是固定的一整套，顺序固定
 export interface ChatCallInput extends CallMeta {
+  signal?: AbortSignal
   messages: PromptMessage[]
   tools?: unknown[]
+  requiredTool?: string
   timeoutMs?: number
   maxTokens?: number
 }
@@ -53,6 +57,7 @@ export interface ChatCallResult {
   message: OpenAI.Chat.Completions.ChatCompletionMessage
   finishReason: string | null
   usage: NormalizedUsage
+  cacheUsage?: AiReplyCacheUsage
 }
 
 // 带联网搜索的调用结果：sources 只来自搜索工具
@@ -125,17 +130,19 @@ export async function chatCall(input: ChatCallInput): Promise<ChatCallResult> {
       model: input.model,
       messages: input.messages,
       ...(input.tools && input.tools.length > 0 ? { tools: input.tools } : {}),
+      ...(input.requiredTool ? { tool_choice: { type: 'function', function: { name: input.requiredTool } } } : {}),
       ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
       // 百炼扩展参数放在顶层；思考会让输出 token 翻好几倍，诺诺的任务用不到
       enable_thinking: false
     }
     const res = await getBailianClient().chat.completions.create(body as never, {
-      timeout: input.timeoutMs ?? BAILIAN_CONFIG.chatTimeoutMs
+      timeout: input.timeoutMs ?? BAILIAN_CONFIG.chatTimeoutMs,
+      signal: input.signal
     })
     const usage = normalizeChatUsage(res.usage)
     await record(input, usage, Date.now() - t0)
     const choice = res.choices[0]
-    return { message: choice.message, finishReason: choice.finish_reason, usage }
+    return { message: choice.message, finishReason: choice.finish_reason, usage, cacheUsage: reportedChatCache(res.usage) }
   } catch (err) {
     await record(input, EMPTY_USAGE, Date.now() - t0, errorText(err))
     throw err

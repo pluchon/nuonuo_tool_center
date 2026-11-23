@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -43,7 +43,7 @@ vi.mock('../../src/main/services/ai/bailianClient', () => ({
 vi.mock('electron', () => ({ clipboard: {}, ClipboardItem: class {}, nativeImage: {}, shell: {} }))
 
 const emb = await import('../../src/main/services/ai/embeddingService')
-const { saveEmbedding } = await import('../../src/main/repositories/aiSearchRepository')
+const { findIndexedUpload, saveEmbedding } = await import('../../src/main/repositories/aiSearchRepository')
 const { ask, answer, listMessages } = await import('../../src/main/services/ai/assistantService')
 
 describe('语义检索和按图找相似', () => {
@@ -84,6 +84,16 @@ describe('语义检索和按图找相似', () => {
     rmSync(dir, { recursive: true, force: true })
     delete process.env.DASHSCOPE_API_KEY
   })
+
+  it('上传原件只复用当前类目录内已确认普通图的同模型向量', async () => {
+    const model = 'qwen3-vl-embedding'
+    expect(await findIndexedUpload('h1', model, [{ rootId: 1, prefix: 'pics' }])).toEqual(vec(1, 0))
+    expect(await findIndexedUpload('h1', model, [{ rootId: 1, prefix: '其他' }])).toBeUndefined()
+    expect(await findIndexedUpload('h1', '另一个模型', undefined)).toBeUndefined()
+    for (const hash of ['h3', 'h4', 'h5', 'h6']) {
+      expect(await findIndexedUpload(hash, model, undefined)).toBeUndefined()
+    }
+  })
   beforeEach(() => {
     embedCalls.length = 0
     rating = { scores: {}, r18: false }
@@ -95,7 +105,7 @@ describe('语义检索和按图找相似', () => {
     const q = await ask({ conversationId: null, text: '有没有夜里拍天上的', scope: null, includeR18: false })
     const r = await answer(q.conversation.id)
     expect(r.images.map((i) => i.name)).toEqual(['星空'])
-    expect(r.how).toBe('搜索了图库：画面「夜晚的星空」，找到 1 张')
+    expect(r.how).toBe('搜索了图库：画面「夜晚的星空」。目前显示 1 张，部分图片尚无画面向量。')
     script.push(call)
     await ask({ conversationId: q.conversation.id, text: '再来一次', scope: null, includeR18: false })
     await answer(q.conversation.id)
@@ -155,7 +165,7 @@ describe('语义检索和按图找相似', () => {
     })
     const r = await answer(q.conversation.id)
     expect(r.images.map((i) => i.name)).toEqual(['晴天草地'])
-    expect(r.how).toBe('按你传的图找了相似的，找到 1 张')
+    expect(r.how).toBe('按你传的图找了相似的。目前显示 1 张，部分图片尚无画面向量。')
 
     rating = { scores: {}, r18: true }
     const uploaded = await ask({ conversationId: q.conversation.id, text: '', scope: null, includeR18: false,
@@ -236,7 +246,8 @@ describe('语义检索和按图找相似', () => {
     const q = await ask({ conversationId: null, text: '按这一句描述搜索', scope: null, includeR18: true })
     const reply = await answer(q.conversation.id)
     expect(reply.images.map((item) => item.imageId)).toEqual([4])
-    expect(reply.how).not.toContain('画面')
+    expect(reply.how).not.toContain('画面「')
+    expect(reply.how).toContain('目前显示 1 张，画面相似度检索暂不可用')
     expect(chat).toHaveBeenCalledTimes(2)
     expect(embedCalls).toEqual([])
   })
@@ -301,6 +312,9 @@ describe('语义检索和按图找相似', () => {
       } }] })
       const q = await ask({ conversationId: null, text: '想看猫娘', scope, includeR18: true })
       const result = await answer(q.conversation.id)
+      expect(vi.mocked(chatCall).mock.calls[0][0].tools).toEqual([expect.objectContaining({
+        function: expect.objectContaining({ name: 'search_images' })
+      })])
       expect(result.images.map((item) => item.imageId)).toEqual([ids[6], ids[2], ids[3]])
       expect(traits).not.toHaveBeenCalledWith(ids[2])
       expect(traits).not.toHaveBeenCalledWith(ids[5])
@@ -385,20 +399,23 @@ describe('语义检索和按图找相似', () => {
       const result = await answer(q.conversation.id)
       expect(result.images).toHaveLength(27)
       expect(new Set(result.images.map((image) => image.imageId)).size).toBe(27)
-      expect(result.how).toContain('找到 27 张')
+      expect(result.how).toContain('目前显示 27 张')
     } finally {
       await pg.exec("UPDATE image SET delete_state = 1 WHERE content_hash LIKE 'union-%'")
     }
   })
 
   it('退出时中断正在进行的后台向量请求，并等待任务结束', async () => {
-    await sharp(Buffer.from(pngUrl.split(',')[1], 'base64')).jpeg().toFile(join(dir, 'pics', '3.jpg'))
+    const jpeg = await sharp(Buffer.from(pngUrl.split(',')[1], 'base64')).jpeg().toBuffer()
+    writeFileSync(join(dir, 'pics', '3.jpg'), jpeg)
+    await getDatabase().pg.query('update image set content_hash=$1 where id=3', [createHash('sha256').update(jpeg).digest('hex')])
     const { embed } = await import('../../src/main/services/ai/embeddingClient')
     let activeSignal: AbortSignal | undefined
     vi.mocked(embed).mockImplementationOnce(async (_input, _id, signal) => {
       activeSignal = signal
       return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason), { once: true }))
     })
+    await (await import('../../src/main/services/ai/aiPolicy')).setEmbeddingLimit(1)
     emb.scheduleEmbedding()
     try {
       await vi.waitFor(() => expect(activeSignal).toBeDefined())
