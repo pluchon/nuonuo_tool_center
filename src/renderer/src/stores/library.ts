@@ -10,8 +10,8 @@ export const useLibraryStore = defineStore('library', {
     error: ''
   }),
   getters: {
-    // 还没有任何源目录：主区显示“第一次打开”
-    firstRun: (s): boolean => s.overview !== null && s.overview.sources.length === 0,
+    // 类目录可以单独使用，已有索引时无需再导入源目录。
+    firstRun: (s): boolean => s.overview !== null && s.overview.sources.length === 0 && s.overview.counts.total === 0,
     // 按 id 找源目录
     sourceById:
       (s) =>

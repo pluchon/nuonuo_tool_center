@@ -40,7 +40,7 @@ export default defineComponent({
     onBeforeUnmount(() => clearInterval(timer))
 
     const countText = computed(() => `${(library.overview?.counts.total ?? 0).toLocaleString('zh-CN')} 张`)
-    // 扫描中 → 这次会话里刚停下 → 源目录最近一次扫描完成的时间 → 还没扫描过
+    // 优先显示当前扫描状态，空闲时显示最近完成时间。
     const scanText = computed(() => {
       if (scan.running) {
         return '正在扫描…'

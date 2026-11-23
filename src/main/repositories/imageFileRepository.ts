@@ -1,8 +1,14 @@
-import { and, eq, inArray, ne } from 'drizzle-orm'
+import { and, eq, inArray, ne, sql } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { image, imageFile } from '../db/schema'
 
 export type ImageFileEntity = typeof imageFile.$inferSelect
+
+// 文件编号单调递增，用于区分一次扫描开始前后登记的文件位置。
+export async function latestFileId(): Promise<number> {
+  const [row] = await getDatabase().db.select({ id: sql<number>`coalesce(max(${imageFile.id}), 0)`.mapWith(Number) }).from(imageFile)
+  return row.id
+}
 
 // 扫描对账用的一条文件记录：带上图片的字节数和缩略图状态，用来判断文件有没有变
 export interface ScanFileRow {
@@ -18,7 +24,7 @@ export interface ScanFileRow {
 }
 
 // 某个目录下全部未删除的文件记录（含 MISSING；DELETED 是用户自己删进回收站的，不参与对账）
-export async function findScanRowsByRoot(rootId: number): Promise<ScanFileRow[]> {
+export async function findScanRowsByRoot(rootId: number, relativePaths?: string[]): Promise<ScanFileRow[]> {
   const { db } = getDatabase()
   return db
     .select({
@@ -33,7 +39,17 @@ export async function findScanRowsByRoot(rootId: number): Promise<ScanFileRow[]>
     })
     .from(imageFile)
     .innerJoin(image, eq(image.id, imageFile.imageId))
-    .where(and(eq(imageFile.rootId, rootId), eq(imageFile.deleteState, 0), ne(imageFile.status, 'DELETED')))
+    .where(and(eq(imageFile.rootId, rootId), eq(imageFile.deleteState, 0), ne(imageFile.status, 'DELETED'),
+      relativePaths && inArray(sql`lower(${imageFile.relPath})`, relativePaths)))
+}
+
+// 文件夹移走后，确认图库内有受影响的文件才需要对账。
+export async function hasNormalFilesUnder(rootId: number, prefix: string): Promise<boolean> {
+  const [row] = await getDatabase().db.select({ id: imageFile.id }).from(imageFile)
+    .where(and(eq(imageFile.rootId, rootId), eq(imageFile.deleteState, 0), eq(imageFile.status, 'NORMAL'),
+      sql`starts_with(lower(${imageFile.relPath}), ${prefix})`))
+    .limit(1)
+  return row !== undefined
 }
 
 // 新增文件记录

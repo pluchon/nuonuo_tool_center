@@ -77,7 +77,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   confirmDelete: true,
   r18Blur: true,
   defaultSort: 'new',
-  autoScan: true,
+  autoScan: false,
   watchChanges: true,
   scanFormats: [...SCAN_FORMATS],
   skipSmall: 'none',

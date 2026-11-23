@@ -99,7 +99,9 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
     requireDatabase()
     const next = await updateSettings(patch)
     applySystemSettings(next, patch as Record<string, unknown>)
-    await syncWatching()
+    if (Object.hasOwn(patch as object, 'watchChanges') || Object.hasOwn(patch as object, 'categoryHome')) {
+      await syncWatching()
+    }
     return next
   })
   // 更改类目录保存的位置：系统的选文件夹对话框，取消返回 null

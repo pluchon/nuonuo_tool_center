@@ -13,14 +13,19 @@ let lastRefresh = 0
 
 // 扫描完成后的提示文字
 function resultText(r: ScanResultVO): { text: string; error: boolean } {
+  if (r.error) return { text: r.error, error: true }
   if (r.stopped) {
     return { text: `已停止扫描，找到的 ${r.found.toLocaleString('zh-CN')} 张图都保留了`, error: false }
   }
-  if (r.failed > 0) {
-    return { text: `扫描完成，有 ${r.failed.toLocaleString('zh-CN')} 个文件读不了`, error: true }
+  const added = r.added.toLocaleString('zh-CN')
+  if (r.failed || r.unreadableDirs) {
+    const skipped = [
+      r.failed && `${r.failed.toLocaleString('zh-CN')} 个文件`,
+      r.unreadableDirs && `${r.unreadableDirs.toLocaleString('zh-CN')} 个目录`
+    ].filter(Boolean).join('、')
+    return { text: `扫描未完成，${skipped}无法读取${r.added ? `，新增 ${added} 个文件` : ''}`, error: true }
   }
-  const where = r.rootName ? `「${r.rootName}」` : ''
-  return { text: `${where}扫描完成，共 ${r.total.toLocaleString('zh-CN')} 个文件`, error: false }
+  return { text: r.added ? `扫描完成，新增 ${added} 个文件` : '扫描完成，无新增文件', error: false }
 }
 
 // 扫描状态：进度来自主进程推送；结束时刷新侧栏并弹提示

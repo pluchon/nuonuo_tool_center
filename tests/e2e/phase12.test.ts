@@ -1,10 +1,11 @@
-import { copyFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs'
+import { copyFileSync, mkdirSync, renameSync, rmdirSync, unlinkSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp } from './support/app'
 import { importFolder } from './support/picker'
+import { WATCH_SETTLE_MS } from '../../src/main/services/scan/watchService'
 
 sharp.cache(false)
 
@@ -35,6 +36,8 @@ describe('第十二阶段：实时监听', () => {
     mkdirSync(dirs.library, { recursive: true })
     await makeImage(join(source, 'a.jpg'), 0)
     await makeImage(join(source, 'b.jpg'), 1)
+    const originalTime = new Date('2026-01-01T00:00:00Z')
+    utimesSync(join(source, 'a.jpg'), originalTime, originalTime)
     for (let i = 2; i < 5; i++) {
       await makeImage(join(outside, `n${i}.jpg`), i)
     }
@@ -44,6 +47,32 @@ describe('第十二阶段：实时监听', () => {
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 90_000 })
     await page.click('.side-nav__label:text-is("pics")')
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 2)
+
+    // 浏览原图及只修改访问时间，不能改变最近一次扫描结果。
+    const getScan = () => page.evaluate(() => window.api.scan.getState())
+    const beforeViewing = await getScan()
+    await page.dblclick('.tile:has-text("a.jpg")')
+    await page.waitForFunction(() => {
+      const pic = document.querySelector<HTMLImageElement>('.viewer__pic')
+      return pic?.src.startsWith('ltm://file/') && pic.complete && pic.naturalWidth > 0
+    })
+    await page.click('.viewer__round[aria-label="放大"]')
+    await page.keyboard.press('Escape')
+    await page.waitForSelector('.viewer', { state: 'detached' })
+    utimesSync(join(source, 'a.jpg'), new Date(), originalTime)
+    await page.waitForTimeout(WATCH_SETTLE_MS + 600)
+    await expect(getScan()).resolves.toEqual(beforeViewing)
+
+    // 真正的修改时间变化仍会触发一次扫描。
+    utimesSync(join(source, 'a.jpg'), new Date(), new Date('2026-02-01T00:00:00Z'))
+    await expect.poll(async () => {
+      const result = await getScan()
+      const previous = beforeViewing.ok ? beforeViewing.data.last?.finishedAt : undefined
+      return result.ok && result.data.last?.finishedAt !== previous && result.data.last?.auto === true
+    }, { timeout: 20_000 }).toBe(true)
+
+    renameSync(join(source, 'a.jpg'), join(source, 'A.jpg'))
+    await page.waitForSelector('.tile[aria-label="A.jpg"]')
 
     // 给 b 打个标签，改名后标签还在
     await page.click('.tile:has-text("b.jpg")')
@@ -55,10 +84,10 @@ describe('第十二阶段：实时监听', () => {
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { state: 'detached', timeout: 15_000 })
     // 外部复制进来一张（含子文件夹里一张）：不用点任何东西，网格自己多出来
     copyFileSync(join(outside, 'n2.jpg'), join(source, 'n2.jpg'))
-    mkdirSync(join(source, 'sub'))
-    copyFileSync(join(outside, 'n3.jpg'), join(source, 'sub', 'n3.jpg'))
+    mkdirSync(join(source, 'sub.album'))
+    copyFileSync(join(outside, 'n3.jpg'), join(source, 'sub.album', 'n3.jpg'))
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 4, undefined, { timeout: 20_000 })
-    await expect(tileNames(page)).resolves.toEqual(['a.jpg', 'b.jpg', 'n2.jpg', 'n3.jpg'])
+    await expect(tileNames(page)).resolves.toEqual(['A.jpg', 'b.jpg', 'n2.jpg', 'n3.jpg'])
     // 自动扫描不弹“扫描完成”
     await expect(page.locator('.app-toast:has-text("扫描完成")').count()).resolves.toBe(0)
 
@@ -68,9 +97,22 @@ describe('第十二阶段：实时监听', () => {
     await page.click('.tile:has-text("b-renamed.jpg")')
     await page.waitForSelector('.tag-editor__tag:has-text("猫猫")')
 
+    renameSync(join(source, 'sub.album'), join(source, 'new.album'))
+    const overview = await page.evaluate(() => window.api.library.getOverview())
+    if (!overview.ok) throw new Error(overview.message)
+    await expect.poll(async () => {
+      const result = await page.evaluate((sourceId) => window.api.gallery.list({
+        view: 'source', sourceId, sub: 'new.album', sort: 'new'
+      }), overview.data.sources[0].id)
+      return result.ok && result.data.items.some((item) => item.name === 'n3.jpg')
+    }, { timeout: 20_000 }).toBe(true)
+    unlinkSync(join(source, 'new.album', 'n3.jpg'))
+    rmdirSync(join(source, 'new.album'))
+    await page.waitForFunction(() => !document.querySelector('.tile[aria-label="n3.jpg"]'), undefined, { timeout: 20_000 })
+
     // 外部删除：从网格里去掉
-    unlinkSync(join(source, 'a.jpg'))
-    await page.waitForFunction(() => !document.querySelector('.tile[aria-label="a.jpg"]'), undefined, { timeout: 20_000 })
+    unlinkSync(join(source, 'A.jpg'))
+    await page.waitForFunction(() => !document.querySelector('.tile[aria-label="A.jpg"]'), undefined, { timeout: 20_000 })
 
     // 关掉“实时监听文件变化”：再放进来的图不会自动出现
     await page.click('.title-bar__gear')
@@ -100,5 +142,16 @@ describe('第十二阶段：实时监听', () => {
     renameSync(join(source, 'n4.jpg'), join(source, 'n4-new.jpg'))
     await page.waitForFunction(() => !!document.querySelector('.tile[aria-label="n4-new.jpg"]'), undefined, { timeout: 20_000 })
     await app.close()
+
+    // 退出期间新增文件，重开时默认先显示现有索引，手动重新扫描时才补上。
+    copyFileSync(join(outside, 'n2.jpg'), join(source, 'after-exit.jpg'))
+    const resumed = await launchApp(dirs)
+    await resumed.page.click('.side-nav__label:text-is("pics")')
+    await resumed.page.waitForSelector('.tile[aria-label="n4-new.jpg"]')
+    expect(await resumed.page.evaluate(() => window.api.scan.getState())).toEqual({ ok: true, data: { progress: null, last: null } })
+    expect(await tileNames(resumed.page)).toEqual(['b-renamed.jpg', 'n4-new.jpg'])
+    await resumed.page.click('.status-footer__scan')
+    await resumed.page.waitForSelector('.tile[aria-label="after-exit.jpg"]')
+    await resumed.app.close()
   })
 })

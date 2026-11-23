@@ -8,8 +8,8 @@ export async function stubFolderPick(app: ElectronApplication, path: string | nu
   }, path)
 }
 
-// 导入一个源目录：先换掉对话框，再点导入按钮（默认是第一次打开时主区的“选择图片文件夹”）
-export async function importFolder(app: ElectronApplication, page: Page, path: string, trigger = '.gallery__pick'): Promise<void> {
+// 侧栏入口在首次启动及已有类目录的图库中都可用。
+export async function importFolder(app: ElectronApplication, page: Page, path: string, trigger = '.side-nav__add[aria-label="导入源目录"]'): Promise<void> {
   await stubFolderPick(app, path)
   await page.click(trigger)
 }

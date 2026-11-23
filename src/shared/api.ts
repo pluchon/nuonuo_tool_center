@@ -214,9 +214,13 @@ export interface ScanResultVO {
   rootName: string | null
   total: number
   found: number
+  // 本次首次登记的文件位置数；恢复同一任务后沿用原来的计数基准。
+  added: number
   stopped: boolean
   // 读失败的文件数（被占用、没权限），这些文件保持原来的状态
   failed: number
+  unreadableDirs: number
+  error?: string
   // 启动时自动发起的扫描：完成时不弹提示（有读失败的除外）
   auto: boolean
   finishedAt: string

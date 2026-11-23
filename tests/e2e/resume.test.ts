@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
@@ -22,6 +22,41 @@ async function pillNumbers(page: Page): Promise<[number, number]> {
 }
 
 describe('退出再进来，进度接着上次', () => {
+  it('主进程在目录扫描中异常退出后，恢复进度并完成剩余图片', async () => {
+    const dirs = freshCase('resume-scan-crash')
+    const source = join(dirs.root, 'pics')
+    const count = 144
+    mkdirSync(source, { recursive: true })
+    for (let i = 0; i < count; i++) {
+      await sharp({ create: { width: 720, height: 540, channels: 3, background: { r: i, g: 180, b: 205 } } })
+        .png().toFile(join(source, `image-${i}.png`))
+    }
+
+    const first = await launchApp(dirs)
+    await importFolder(first.app, first.page, source)
+    await expect.poll(async () => {
+      const state = await first.page.evaluate(() => window.api.scan.getState())
+      return state.ok ? state.data.progress?.done ?? 0 : 0
+    }, { timeout: 15_000, interval: 50 }).toBeGreaterThanOrEqual(40)
+    const exitCode = new Promise<number | null>((done) => first.app.process().once('exit', done))
+    void first.app.evaluate(() => process.exit(86)).catch(() => undefined)
+    expect(await exitCode).toBe(86)
+
+    const second = await launchApp(dirs)
+    const recoveredProgress = () => /恢复扫描断点 (\d+)\/(\d+)/.exec(readFileSync(join(dirs.data, 'logs', 'main.log'), 'utf8'))
+    await expect.poll(recoveredProgress, { timeout: 10_000 }).not.toBeNull()
+    const recovered = recoveredProgress()
+    expect(Number(recovered?.[2])).toBe(count)
+    expect(Number(recovered?.[1])).toBeGreaterThanOrEqual(32)
+    expect(Number(recovered?.[1])).toBeLessThan(count)
+    await second.page.locator('.side-nav__label:text-is("pics")').click()
+    await second.page.waitForFunction((n) => document.querySelectorAll('.tile').length === n, count)
+    await expect.poll(() => second.page.evaluate(() => window.api.scan.getState())).toMatchObject({
+      ok: true, data: { progress: null, last: { total: count, failed: 0, stopped: false } }
+    })
+    await second.app.close()
+  })
+
   it('分级中一键整理只弹提示；本地分级判到一半退出：再打开从“已判/总数”接着走，不从 0 开始，判过的不重判', async () => {
     const dirs = freshCase('resume')
     const src = join(dirs.root, 'pics')

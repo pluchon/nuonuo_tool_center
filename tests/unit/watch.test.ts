@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isIgnoredChange, isRootGoneSignal, isSelfChange, muteWhile, rootOf, SELF_CHANGE_GRACE_MS } from '../../src/main/services/scan/watchService'
+import { isIgnoredChange, isRootGoneSignal, isSelfChange, muteWhile, SELF_CHANGE_GRACE_MS } from '../../src/main/services/scan/watchService'
 
 describe('实时监听', () => {
   it('被监听的目录自己被删时报的是带 \\?\ 前缀的绝对路径，普通变化是相对路径', () => {
@@ -9,30 +9,17 @@ describe('实时监听', () => {
     expect(isRootGoneSignal('')).toBe(false)
   })
 
-  it('只关心图片文件和普通文件夹', () => {
-    expect(isIgnoredChange('a.JPG')).toBe(false)
-    expect(isIgnoredChange('sub\\deep\\b.webp')).toBe(false)
-    expect(isIgnoredChange('note.txt')).toBe(true)
-    // 没有扩展名的当文件夹
-    expect(isIgnoredChange('sub')).toBe(false)
-    expect(isIgnoredChange('新建文件夹')).toBe(false)
-    expect(isIgnoredChange('.git\\index')).toBe(true)
-    expect(isIgnoredChange('.thumbs\\x.jpg')).toBe(true)
-    expect(isIgnoredChange('$RECYCLE.BIN\\x.jpg')).toBe(true)
-    expect(isIgnoredChange('')).toBe(false)
-  })
-
-  it('变化落在哪个目录：不区分大小写，取最长的那个', () => {
-    const roots = new Map([
-      [1, 'D:\\Pics'],
-      [2, 'D:\\Pics\\Nested'],
-      [3, 'E:\\library']
-    ])
-    expect(rootOf('d:\\pics\\a.jpg', roots)).toBe(1)
-    expect(rootOf('D:\\Pics\\Nested\\x\\b.png', roots)).toBe(2)
-    expect(rootOf('E:\\library', roots)).toBe(3)
-    expect(rootOf('D:\\Other\\c.jpg', roots)).toBeNull()
-    expect(rootOf('D:\\Pics2\\c.jpg', roots)).toBeNull()
+  it('只核对图片变更和可能涉及目录的重命名', () => {
+    expect(isIgnoredChange('a.JPG', false)).toBe(false)
+    expect(isIgnoredChange('sub\\deep\\b.webp', false)).toBe(false)
+    expect(isIgnoredChange('note.txt', false)).toBe(true)
+    expect(isIgnoredChange('sub', false)).toBe(true)
+    expect(isIgnoredChange('新建文件夹', true)).toBe(false)
+    expect(isIgnoredChange('2026.11', true)).toBe(false)
+    expect(isIgnoredChange('.git\\index', true)).toBe(true)
+    expect(isIgnoredChange('.thumbs\\x.jpg', false)).toBe(true)
+    expect(isIgnoredChange('$RECYCLE.BIN\\x.jpg', true)).toBe(true)
+    expect(isIgnoredChange('', false)).toBe(true)
   })
 
   it('应用自己改文件时和之后一小段时间不算外部变化', async () => {

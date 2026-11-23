@@ -1,12 +1,16 @@
-import { existsSync, watch, type FSWatcher } from 'node:fs'
-import { basename, isAbsolute, join } from 'node:path'
+import { existsSync, realpath, watch, type FSWatcher } from 'node:fs'
+import { lstat } from 'node:fs/promises'
+import { basename, isAbsolute, join, normalize, relative, sep } from 'node:path'
+import { promisify } from 'node:util'
 import { getLogger } from '../../common/logger'
-import { isSkippedDir, isWithin } from '../../common/pathUtil'
-import { findActiveRoots, type LibraryRootEntity } from '../../repositories/libraryRootRepository'
+import { isSkippedDir, isWithin, pathKey } from '../../common/pathUtil'
+import { findScanRowsByRoot, hasNormalFilesUnder } from '../../repositories/imageFileRepository'
+import { findActiveRoots } from '../../repositories/libraryRootRepository'
 import { getSettings } from '../settingsService'
-import { formatOfFile } from './formats'
+import { formatOfFile, shouldProcess } from './formats'
 
 const log = getLogger('watch')
+const nativeRealpath = promisify(realpath.native)
 
 // 一阵变化（复制一批图、解压）停下来多久后再扫，免得每个文件扫一次
 export const WATCH_SETTLE_MS = 1500
@@ -18,43 +22,31 @@ export type RescanFn = (rootId: number) => void
 export const SELF_CHANGE_GRACE_MS = 2500
 
 let rescan: RescanFn = () => undefined
+let isScanning: (rootId: number) => boolean = () => false
 let selfBusy = 0
 let selfUntil = 0
 // 每个目录一个递归监听（Windows 上只占着目录本身，子文件夹照常能改名、删除；chokidar 会给每个子文件夹各开一个监听，挡住改名）
-let watchers: FSWatcher[] = []
-// 正在监听的目录：id → 路径（用来判断要不要重建）
-let watching = new Map<number, string>()
-const timers = new Map<number, ReturnType<typeof setTimeout>>()
+interface DirectoryWatch {
+  id: number
+  path: string
+  handle: FSWatcher
+  changes: Map<string, boolean>
+  timer?: ReturnType<typeof setTimeout>
+  checking: boolean
+}
+const watchers = new Map<number, DirectoryWatch>()
+let refreshVersion = 0
+const CHECK_BATCH_SIZE = 32
 
-export function configureWatch(fn: RescanFn): void {
+export function configureWatch(fn: RescanFn, scanning: (rootId: number) => boolean): void {
   rescan = fn
+  isScanning = scanning
 }
 
-// 一条变化（相对目录的路径）要不要管：路径里有隐藏文件夹、回收站就不管；最后一段有扩展名的只管图片（没有扩展名的当文件夹）
-export function isIgnoredChange(rel: string): boolean {
+// 普通变更只核对图片。创建、移除和重命名还可能涉及名称带点的目录。
+export function isIgnoredChange(rel: string, renamed: boolean): boolean {
   const parts = rel.split(/[\\/]/).filter(Boolean)
-  if (parts.length === 0) {
-    return false
-  }
-  if (parts.slice(0, -1).some((p) => isSkippedDir(p))) {
-    return true
-  }
-  const last = parts[parts.length - 1]
-  if (isSkippedDir(last)) {
-    return true
-  }
-  return /\.[^.\\/]+$/.test(last) && formatOfFile(basename(last)) === null
-}
-
-// 变化落在哪个目录（取最长匹配，类目录在源目录里不会出现，这里只是稳妥）
-export function rootOf(path: string, roots: ReadonlyMap<number, string>): number | null {
-  let best: { id: number; len: number } | null = null
-  for (const [id, root] of roots) {
-    if (isWithin(root, path) && (!best || root.length > best.len)) {
-      best = { id, len: root.length }
-    }
-  }
-  return best?.id ?? null
+  return parts.length === 0 || parts.some(isSkippedDir) || (!renamed && formatOfFile(basename(rel)) === null)
 }
 
 // 包住应用自己的文件操作：做的时候和做完后一小段时间里，监听到的变化都忽略
@@ -73,100 +65,144 @@ export function isSelfChange(now = Date.now()): boolean {
   return selfBusy > 0 || now < selfUntil
 }
 
-// 一个目录有变化：停下来一阵后重扫这个目录
-function touch(path: string): void {
-  if (isSelfChange()) {
-    return
-  }
-  const id = rootOf(path, watching)
-  if (id !== null) {
-    schedule(id)
-  }
-}
-
 // 被监听的目录本身被删掉（或移走）时，Windows 上的递归监听会不停地报带 \\?\ 前缀的绝对路径，一秒几万次，把主进程占满。
 // 回调里给的是绝对路径就看看目录还在不在：不在了马上关掉这个监听，重扫一次（扫描会把它标成“找不到”）
 export function isRootGoneSignal(rel: string): boolean {
   return rel.startsWith('\\\\?\\') || isAbsolute(rel)
 }
 
-// 排一次重扫（同一个目录在停下来之前的变化合成一次）
-function schedule(id: number): void {
-  const old = timers.get(id)
-  if (old) {
-    clearTimeout(old)
+// 只读取通知涉及的文件元数据。访问时间和普通目录属性变化与图库内容无关。
+async function hasLibraryChange(entry: DirectoryWatch, changes: Map<string, boolean>): Promise<boolean> {
+  const { scanFormats, skipSmall } = await getSettings()
+  const paths = [...changes.keys()]
+  for (let offset = 0; offset < paths.length; offset += CHECK_BATCH_SIZE) {
+    const batch = paths.slice(offset, offset + CHECK_BATCH_SIZE)
+    const rows = await findScanRowsByRoot(entry.id, batch.map(pathKey))
+    const indexed = new Map(rows.map((file) => [pathKey(file.relPath), file]))
+    const results = await Promise.all(batch.map(async (rel) => {
+      const key = pathKey(rel)
+      const previous = indexed.get(key)
+      const renamed = changes.get(rel)
+      const absolute = join(entry.path, rel)
+      const info = await lstat(absolute).catch((err: NodeJS.ErrnoException) => {
+        if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return null
+        throw err
+      })
+      if (!info) {
+        return previous?.status === 'NORMAL' || (renamed && await hasNormalFilesUnder(entry.id, `${key}${sep}`))
+      }
+      if (info.isDirectory()) return renamed
+      const format = formatOfFile(rel)
+      if (!info.isFile() || !format || !shouldProcess(format, info.size, scanFormats, skipSmall)) return false
+      if (previous?.status !== 'NORMAL' || info.size !== previous.byteSize || info.mtime.getTime() !== previous.mtime.getTime()) return true
+      if (!renamed || previous.relPath === rel) return false
+      // Windows 会同时报告旧名称和新名称。以磁盘上的实际拼写为准，避免旧通知再次触发。
+      const [actualRoot, actualFile] = await Promise.all([nativeRealpath(entry.path), nativeRealpath(absolute)])
+      const actual = relative(actualRoot, actualFile)
+      return pathKey(actual) === key && previous.relPath !== actual
+    }).map((result) => result.catch((err: unknown) => {
+      log.debug(`无法核对目录 ${entry.id} 的文件变更`, err)
+      return false
+    })))
+    if (results.some(Boolean)) return true
   }
-  timers.set(
-    id,
-    setTimeout(() => {
-      timers.delete(id)
-      log.info(`目录 ${id} 有文件变化，重新扫描`)
-      rescan(id)
-    }, WATCH_SETTLE_MS)
-  )
+  return false
 }
 
-// 停止监听
+function schedule(entry: DirectoryWatch): void {
+  if (entry.timer) clearTimeout(entry.timer)
+  entry.timer = setTimeout(() => {
+    entry.timer = undefined
+    void checkChanges(entry).catch((err: unknown) => log.warn(`核对目录 ${entry.id} 的变化失败`, err))
+  }, WATCH_SETTLE_MS)
+}
+
+async function checkChanges(entry: DirectoryWatch): Promise<void> {
+  if (watchers.get(entry.id) !== entry || entry.checking || entry.changes.size === 0) return
+  // 等当前扫描把结果写入数据库后再核对，避免同一批变化触发两次扫描。
+  if (isScanning(entry.id)) {
+    schedule(entry)
+    return
+  }
+  entry.checking = true
+  const changes = entry.changes
+  entry.changes = new Map()
+  try {
+    const changed = await hasLibraryChange(entry, changes)
+    if (watchers.get(entry.id) !== entry) return
+    if (isScanning(entry.id)) {
+      for (const [rel, renamed] of changes) entry.changes.set(rel, renamed || entry.changes.get(rel) === true)
+    } else if (changed) {
+      log.info(`目录 ${entry.id} 有文件变化，重新扫描`)
+      rescan(entry.id)
+    }
+  } finally {
+    entry.checking = false
+    if (watchers.get(entry.id) === entry && entry.changes.size > 0 && !entry.timer) schedule(entry)
+  }
+}
+
+function closeWatch(entry: DirectoryWatch): void {
+  if (entry.timer) clearTimeout(entry.timer)
+  entry.handle.close()
+  watchers.delete(entry.id)
+}
+
 export async function stopWatching(): Promise<void> {
-  for (const t of timers.values()) {
-    clearTimeout(t)
-  }
-  timers.clear()
-  const list = watchers
-  watchers = []
-  watching = new Map()
-  for (const w of list) {
-    w.close()
-  }
+  refreshVersion++
+  for (const entry of watchers.values()) closeWatch(entry)
 }
 
-// 按当前设置和目录列表开始 / 重建 / 停止监听；目录没变就什么都不做
+function reportMissingRoot(entry: DirectoryWatch): void {
+  log.warn(`目录 ${entry.id} 不见了，停止监听：${entry.path}`)
+  closeWatch(entry)
+  rescan(entry.id)
+}
+
+// 保留没变的监听及其待核对通知。关闭设置时使尚未返回的刷新失效。
 export async function refreshWatching(enabled: boolean): Promise<void> {
   if (!enabled) {
-    if (watchers.length > 0) {
-      log.info('关闭实时监听')
-      await stopWatching()
-    }
+    await stopWatching()
     return
   }
-  const roots: LibraryRootEntity[] = await findActiveRoots()
-  const next = new Map(roots.map((r) => [r.id, r.path]))
-  // 有目录上次没监听上（移动硬盘没接）时 watchers 会少，借这次重试
-  const same = watchers.length === next.size && next.size === watching.size && [...next].every(([id, p]) => watching.get(id) === p)
-  if (same) {
-    return
+  const version = ++refreshVersion
+  const next = new Map((await findActiveRoots()).map((r) => [r.id, r.path]))
+  if (version !== refreshVersion) return
+  for (const [id, entry] of watchers) {
+    if (next.get(id) !== entry.path) closeWatch(entry)
   }
-  await stopWatching()
-  if (next.size === 0) {
-    return
-  }
-  watching = next
   for (const [id, root] of next) {
+    if (watchers.has(id)) continue
     try {
-      const w = watch(root, { recursive: true }, (_event, file) => {
-        const rel = file ? String(file) : ''
-        if (isRootGoneSignal(rel)) {
-          if (!existsSync(root)) {
-            log.warn(`目录 ${id} 不见了，停止监听：${root}`)
-            w.close()
-            watchers = watchers.filter((x) => x !== w)
-            schedule(id)
-          }
+      const handle = watch(root, { recursive: true }, (event, file) => {
+        if (watchers.get(id) !== entry) return
+        if (!file || isRootGoneSignal(file)) {
+          if (!existsSync(root)) reportMissingRoot(entry)
           return
         }
-        if (!isIgnoredChange(rel)) {
-          touch(rel ? join(root, rel) : root)
+        const rel = normalize(file)
+        const renamed = event === 'rename'
+        if (isSelfChange() || isIgnoredChange(rel, renamed) || !isWithin(root, join(root, rel))) return
+        entry.changes.set(rel, renamed || entry.changes.get(rel) === true)
+        schedule(entry)
+      })
+      const entry: DirectoryWatch = { id, path: root, handle, changes: new Map(), checking: false }
+      watchers.set(id, entry)
+      handle.on('error', (err: unknown) => {
+        if (watchers.get(id) !== entry) return
+        if (!existsSync(root)) {
+          reportMissingRoot(entry)
+        } else {
+          log.warn(`目录 ${id} 的文件监听出错`, err)
+          closeWatch(entry)
         }
       })
-      // 目录被拔掉、删掉时监听会出错：记一下，下次扫描做完后重建
-      w.on('error', (err: unknown) => log.warn(`目录 ${id} 的文件监听出错`, err))
-      watchers.push(w)
+      log.info(`开始实时监听目录 ${id}`)
     } catch (err) {
       // 目录不在（移动硬盘没接）：先不监听，接回来扫描后重建
       log.warn(`目录 ${id} 暂时监听不了：${root}`, err)
     }
   }
-  log.info(`开始实时监听 ${watchers.length} 个目录`)
 }
 
 // 按设置里“实时监听文件变化”同步一次（目录有增删、扫描做完、设置改了以后调）；出错只记日志

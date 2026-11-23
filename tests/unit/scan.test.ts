@@ -172,7 +172,9 @@ describe('扫描', () => {
     const ov = await getOverview(home)
     expect(ov.counts.total).toBe(6)
     expect(ov.lastScanAt).not.toBeNull()
-    expect(getScanState().last).toMatchObject({ rootName: 'pics', total: 7, found: 7, stopped: false, failed: 0 })
+    expect(getScanState().last).toMatchObject({ rootName: 'pics', total: 7, found: 7, added: 7, stopped: false, failed: 0 })
+    await scanAndWait(rootId)
+    expect(getScanState().last?.added).toBe(0)
   })
 
   it('扫描全部：类目录也登记进来，计数到对应的顶层类目录', async () => {
@@ -180,6 +182,7 @@ describe('扫描', () => {
     const ov = await getOverview(home)
     expect(ov.categories).toEqual([{ name: '猫猫', count: 1, hasChildren: false }])
     expect(ov.counts.total).toBe(7)
+    expect(getScanState().last?.added).toBe(1)
   })
 
   it('文件被外部删掉就从图库里去掉；被挪到别处的按哈希接上，旧记录去掉；放回来按内容认回原来的图', async () => {
@@ -218,6 +221,7 @@ describe('扫描', () => {
     renameSync(source, moved)
     await scanAndWait(null)
     expect(await filesOf(rootId)).toEqual(before)
+    expect(getScanState().last).toMatchObject({ unreadableDirs: 1, added: 0 })
     expect((await getOverview(home)).sources[0]).toMatchObject({ offline: true, hasChildren: false })
 
     await relocateRoot(rootId, moved, home)

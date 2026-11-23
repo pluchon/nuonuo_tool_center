@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import sharp from 'sharp'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot, shotPrototype, SHOT_DIR } from './support/app'
 import { compareShots } from './support/compare'
@@ -20,6 +21,37 @@ afterAll(() => {
 })
 
 describe('第二阶段：按画布换主界面', () => {
+  it('仅有类目录时可以从首页及侧栏浏览已索引的图片，底栏显示上次扫描时间', async () => {
+    const dirs = freshCase('phase2-category-only')
+    const folder = join(dirs.library, '海边')
+    mkdirSync(folder, { recursive: true })
+    await sharp({ create: { width: 80, height: 60, channels: 3, background: '#BBD5EE' } })
+      .jpeg().toFile(join(folder, '沙滩.jpg'))
+    const { app, page } = await launchApp(dirs)
+    await page.getByRole('button', { name: '查看未打标签的图片' }).click()
+    await page.getByRole('button', { name: '沙滩.jpg', exact: true }).waitFor()
+    await page.locator('.side-nav__label:text-is("海边")').click()
+    await page.getByRole('button', { name: '沙滩.jpg', exact: true }).waitFor()
+    await page.locator('.status-footer').getByText('刚刚扫描完成').waitFor()
+    await app.close()
+  })
+
+  it('返回首页时，只有未打标签的图片会显示可点击的入口', async () => {
+    const dirs = freshCase('phase2-untagged-entry')
+    const source = join(dirs.root, 'pics')
+    mkdirSync(source)
+    await sharp({ create: { width: 240, height: 160, channels: 3, background: '#BBD5EE' } })
+      .jpeg().toFile(join(source, '未打标签.jpg'))
+    const { app, page } = await launchApp(dirs)
+    await importFolder(app, page, source)
+    await page.getByRole('button', { name: '未打标签.jpg', exact: true }).waitFor()
+    await page.locator('.side-nav__label:text-is("全部图片")').click()
+    await page.getByText('还没有已打标签的图片', { exact: true }).waitFor()
+    await page.getByRole('button', { name: '查看未打标签的图片' }).click()
+    await page.getByRole('button', { name: '未打标签.jpg', exact: true }).waitFor()
+    await app.close()
+  })
+
   it('第一次打开：和画布“第一次打开”画板一致（浅色、深色）', async () => {
     const dirs = freshCase('phase2-first')
     const { app, page } = await launchApp(dirs)

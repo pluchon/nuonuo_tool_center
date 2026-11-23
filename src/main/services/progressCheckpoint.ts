@@ -3,6 +3,7 @@ import { findActiveSettings, upsertSettings } from '../repositories/appSettingRe
 
 // 扫描和本地分级各自的断点
 export const SCAN_CHECKPOINT = 'progress.scan'
+export const PENDING_AUTO_SCANS = 'progress.pendingAutoScans'
 export const RATING_CHECKPOINT = 'progress.rating'
 
 // 读一个断点；没有或已清掉（存的是空对象）时返回 null

@@ -3,12 +3,14 @@ import { readdir, readFile } from 'node:fs/promises'
 import { cpus } from 'node:os'
 import { join } from 'node:path'
 import type { ScanProgressVO, ScanResultVO, ScanStateVO } from '@shared/api'
+import type { AppSettings } from '@shared/settings'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isWithin, pathKey } from '../../common/pathUtil'
 import {
   findScanRowsByRoot,
   insertImageFile,
+  latestFileId,
   softDeleteImageFiles,
   updateImageFileContent,
   updateImageFileStatus,
@@ -30,7 +32,7 @@ import {
   type LibraryRootEntity
 } from '../../repositories/libraryRootRepository'
 import { ensureCategoryRoot } from '../categoryHome'
-import { loadCheckpoint, saveCheckpoint, SCAN_CHECKPOINT } from '../progressCheckpoint'
+import { loadCheckpoint, PENDING_AUTO_SCANS, saveCheckpoint, SCAN_CHECKPOINT } from '../progressCheckpoint'
 import { getSettings } from '../settingsService'
 import { shouldProcess } from './formats'
 import { analyzeImage, hashBuffer, hashFile, READ_ONCE_LIMIT } from './imageProbe'
@@ -45,23 +47,33 @@ export const WORKERS = Math.min(4, Math.max(2, Math.floor(cpus().length / 4)))
 const PUSH_INTERVAL = 150
 // 批量更新时一次最多带多少个 id
 const ID_CHUNK = 500
+const CHECKPOINT_FILES = 32
+const CHECKPOINT_MS = 2000
 
 // 扫描需要的位置
 export interface ScanConfig {
   thumbsDir: string
   categoryHomeOverride: string | null
+  canRunAuto?: () => boolean
 }
 
 // 一个排队的扫描任务：rootId 为空表示扫描全部（含类目录）；auto 表示启动时自动发起的（完成时不弹提示）
 interface ScanJob {
   rootId: number | null
   auto: boolean
+  resume?: ScanCheckpoint
 }
 
-// 退出时还在扫的任务记下的断点：下次启动接着扫，进度从这里往下走
-interface ScanCheckpoint extends ScanJob {
+type ScanFilters = Pick<AppSettings, 'scanFormats' | 'skipSmall'>
+
+// 任务启动即落盘，处理中分批更新；记录发起时的筛选条件。
+interface ScanCheckpoint {
+  rootId: number | null
+  auto: boolean
   done: number
   total: number
+  filters?: ScanFilters
+  startFileId?: number
 }
 
 // 一个目录这次要处理的内容
@@ -102,6 +114,10 @@ export function getScanState(): ScanStateVO {
   return { progress: progress ? { ...progress } : null, last }
 }
 
+export function isScanningRoot(rootId: number): boolean {
+  return current !== null && (current.rootId === null || current.rootId === rootId)
+}
+
 // 推送状态；进度更新按间隔节流，开始和结束总是推
 function push(force: boolean): void {
   const now = Date.now()
@@ -114,7 +130,12 @@ function push(force: boolean): void {
 
 // 排一个扫描任务：rootId 为空扫全部。已经排着或正在扫的任务覆盖了它就不重复排；用户手动要求的会把自动任务改成手动（完成时弹提示）
 export function startScan(rootId: number | null, auto = false): ScanStateVO {
-  const queued = queue.find((j) => j.rootId === null || j.rootId === rootId)
+  return enqueueScan({ rootId, auto })
+}
+
+function enqueueScan(job: ScanJob): ScanStateVO {
+  const { rootId, auto } = job
+  const queued = queue.find((j) => j.rootId === rootId || (j.rootId === null && (auto || !j.auto)))
   const inCurrent =
     current !== null &&
     !stopRequested &&
@@ -122,14 +143,16 @@ export function startScan(rootId: number | null, auto = false): ScanStateVO {
   const covering = queued ?? (inCurrent ? current : null)
   if (covering) {
     covering.auto = covering.auto && auto
+    if (job.resume) covering.resume = job.resume
   } else {
-    queue.push({ rootId, auto })
+    if (rootId === null) {
+      for (let i = queue.length - 1; i >= 0; i--) {
+        if (queue[i].auto && !queue[i].resume) queue.splice(i, 1)
+      }
+    }
+    queue.push(job)
   }
-  if (!running) {
-    running = drain().finally(() => {
-      running = null
-    })
-  }
+  runQueuedScans()
   return getScanState()
 }
 
@@ -139,16 +162,28 @@ export function requeueScan(rootId: number): void {
     return
   }
   queue.push({ rootId, auto: true })
-  if (!running) {
-    running = drain().finally(() => {
+  runQueuedScans()
+}
+
+function canRun(job: ScanJob): boolean {
+  return !job.auto || config?.canRunAuto?.() !== false
+}
+
+export function runQueuedScans(): void {
+  if (!quitting && !running && queue.some(canRun)) {
+    running = drain().catch((err: unknown) => {
+      log.error('扫描队列处理失败', err)
+      return false
+    }).then((drained) => {
       running = null
+      if (drained) runQueuedScans()
     })
   }
 }
 
 // 停止扫描：当前任务处理完手上的文件就结束，排队的任务一并取消；已经找到的图都保留
 export function stopScan(): ScanStateVO {
-  if (progress) {
+  if (current) {
     stopRequested = true
   }
   queue.length = 0
@@ -158,22 +193,30 @@ export function stopScan(): ScanStateVO {
 // 等扫描结束（退出应用前用）：先要求停止，再等手上的文件写完；还没扫完的记下断点，下次启动接着扫
 export async function stopScanAndWait(): Promise<void> {
   quitting = true
-  const snap: ScanCheckpoint | null = current && progress ? { rootId: current.rootId, auto: current.auto, done: progress.done, total: progress.total } : null
+  const pending = queue.filter((job) => job.auto).map((job) => job.rootId)
   stopScan()
   await running
-  if (snap) {
-    await saveCheckpoint(SCAN_CHECKPOINT, snap)
+  if (pending.length > 0) {
+    await saveCheckpoint(PENDING_AUTO_SCANS, { roots: pending })
   }
 }
 
 // 启动时：上次退出时没扫完的接着扫（不管“启动时自动扫描”开没开）；返回有没有接着扫
 export async function resumeScan(): Promise<boolean> {
   const cp = await loadCheckpoint<ScanCheckpoint>(SCAN_CHECKPOINT)
-  if (!cp) {
-    return false
+  if (cp) {
+    log.info(`恢复扫描断点 ${cp.done}/${cp.total}`)
+    enqueueScan({ rootId: cp.rootId ?? null, auto: cp.auto !== false, resume: cp })
   }
-  startScan(cp.rootId ?? null, cp.auto !== false)
-  return true
+  const pending = await loadCheckpoint<{ roots?: Array<number | null> }>(PENDING_AUTO_SCANS)
+  const roots = Array.isArray(pending?.roots) ? pending.roots : []
+  if (roots.length > 0) {
+    await saveCheckpoint(PENDING_AUTO_SCANS, null)
+    for (const id of roots) {
+      if (id === null || Number.isInteger(id)) startScan(id, true)
+    }
+  }
+  return !!cp || roots.includes(null)
 }
 
 // 等排队的扫描全部做完（不打断）
@@ -184,26 +227,32 @@ export async function whenScanIdle(): Promise<void> {
 }
 
 // 依次执行排队的任务
-async function drain(): Promise<void> {
-  while (queue.length > 0) {
-    const job = queue.shift() as ScanJob
+async function drain(): Promise<boolean> {
+  for (let index = queue.findIndex(canRun); !quitting && index >= 0; index = queue.findIndex(canRun)) {
+    const [job] = queue.splice(index, 1)
     current = job
     stopRequested = false
+    let completed = false
     try {
       last = { ...(await runJob(job)), auto: job.auto }
+      completed = !last.stopped || !quitting
     } catch (err) {
       log.error('扫描失败', err)
-      last = { rootName: null, total: 0, found: 0, stopped: true, failed: 0, auto: job.auto, finishedAt: new Date().toISOString() }
+      completed = err instanceof BizError && err.code === 'NOT_FOUND'
+      last = { rootName: null, total: 0, found: 0, added: 0, stopped: false, failed: 0, unreadableDirs: 0,
+        error: err instanceof BizError ? err.message : '扫描失败，请重新扫描', auto: job.auto, finishedAt: new Date().toISOString() }
     } finally {
       current = null
       progress = null
-      // 扫完、你手动停了或出错：断点清掉；退出时打断的由 stopScanAndWait 记
-      if (!quitting) {
+      // 成功或主动停止才清断点。异常退出或处理失败时，留给下次启动恢复。
+      if (completed) {
         await saveCheckpoint(SCAN_CHECKPOINT, null).catch((err: unknown) => log.warn('清扫描断点失败', err))
       }
       push(true)
     }
+    if (!completed) return false
   }
+  return true
 }
 
 // 这次要扫的目录：扫全部时先确保类目录登记过
@@ -224,30 +273,42 @@ async function rootsOf(job: ScanJob): Promise<LibraryRootEntity[]> {
 
 // 执行一个任务：先遍历所有目录得到总数，再逐个文件处理，最后对账
 async function runJob(job: ScanJob): Promise<Omit<ScanResultVO, 'auto'>> {
-  const settings = await getSettings()
+  const checkpoint = job.resume
+  let { done, total } = checkpoint ?? { done: 0, total: 0 }
+  let filters = checkpoint?.filters
+  const startFileId = checkpoint?.startFileId ?? await latestFileId()
+  const persist = (): Promise<void> => saveCheckpoint(SCAN_CHECKPOINT, { rootId: job.rootId, auto: job.auto, done, total, filters, startFileId })
+  await persist()
+  if (!filters) {
+    const { scanFormats, skipSmall } = await getSettings()
+    filters = { scanFormats, skipSmall }
+    await persist()
+  }
   const roots = await rootsOf(job)
   const single = job.rootId !== null ? roots[0] : null
   // 上次退出时同一个任务扫到哪了（之前扫过的文件这次会很快跳过，进度直接从那里显示）
-  const cp = await loadCheckpoint<ScanCheckpoint>(SCAN_CHECKPOINT)
   processed = 0
-  floor = cp && (cp.rootId ?? null) === job.rootId ? Number(cp.done) || 0 : 0
+  floor = Number(done) || 0
   progress = { rootName: single?.name ?? null, rootIds: roots.map((r) => r.id), done: 0, total: 0, found: 0 }
   push(true)
 
   const plans: RootPlan[] = []
+  let unreadableDirs = 0
   for (const root of roots) {
     if (stopRequested) {
       break
     }
     try {
       const walk = await walkRoot(root.path, () => stopRequested)
-      const todo = walk.files.filter((f) => shouldProcess(f.format, f.size, settings.scanFormats, settings.skipSmall))
+      unreadableDirs += walk.unreadableDirs.length
+      const todo = walk.files.filter((f) => shouldProcess(f.format, f.size, filters.scanFormats, filters.skipSmall))
       plans.push({ root, walk, todo })
       progress.total += todo.length
       push(false)
     } catch (err) {
       // 目录找不到（移动硬盘没接）：这个目录的记录一条都不动，侧栏显示“找不到”
       if (err instanceof RootUnavailableError) {
+        unreadableDirs++
         log.warn(`跳过找不到的目录：${root.path}`)
         continue
       }
@@ -257,15 +318,27 @@ async function runJob(job: ScanJob): Promise<Omit<ScanResultVO, 'auto'>> {
 
   // 数完文件、开始处理前就显示上次扫到的位置
   progress.done = Math.min(progress.total, floor)
+  if (!stopRequested) {
+    total = progress.total
+    done = progress.done
+    await persist()
+  }
   push(true)
-  let failed = 0
+  let checkpointAt = Date.now()
+  let checkpointProcessed = 0
+  const saveProgress = async (): Promise<void> => {
+    if (processed - checkpointProcessed < CHECKPOINT_FILES && Date.now() - checkpointAt < CHECKPOINT_MS) return
+    checkpointProcessed = processed
+    checkpointAt = Date.now()
+    done = progress!.done
+    await persist()
+  }
   const outcomes: RootOutcome[] = []
   for (const plan of plans) {
     if (stopRequested) {
       break
     }
-    const outcome = await scanRoot(plan)
-    failed += outcome.failed
+    const outcome = await scanRoot(plan, saveProgress, startFileId)
     outcomes.push(outcome)
   }
   // 所有目录都处理完再对账：文件从一个源目录挪到另一个时，先扫到的那边不会被误标成“不见了”
@@ -276,13 +349,19 @@ async function runJob(job: ScanJob): Promise<Omit<ScanResultVO, 'auto'>> {
       await updateRootLastScan(outcome.plan.root.id, new Date())
     }
   }
+  if (quitting && stopRequested) {
+    done = Math.max(done, progress.done)
+    await persist()
+  }
   const finishedAt = new Date()
   return {
     rootName: progress.rootName,
     total: progress.total,
     found: progress.found,
+    added: outcomes.reduce((sum, root) => sum + root.added, 0),
     stopped: stopRequested,
-    failed,
+    failed: outcomes.reduce((sum, root) => sum + root.failed, 0),
+    unreadableDirs,
     finishedAt: finishedAt.toISOString()
   }
 }
@@ -293,10 +372,11 @@ interface RootOutcome {
   rows: ScanFileRow[]
   present: Set<string>
   failed: number
+  added: number
 }
 
 // 扫一个目录：逐个处理要处理的文件（新文件、变了的文件登记，重新出现的改回正常）
-async function scanRoot(plan: RootPlan): Promise<RootOutcome> {
+async function scanRoot(plan: RootPlan, saveProgress: () => Promise<void>, startFileId: number): Promise<RootOutcome> {
   const { root, walk, todo } = plan
   const rows = await findScanRowsByRoot(root.id)
   const byKey = new Map(rows.map((r) => [pathKey(r.relPath), r]))
@@ -307,7 +387,8 @@ async function scanRoot(plan: RootPlan): Promise<RootOutcome> {
   // 磁盘上还在的文件（含这次按设置不处理的、读不了的）：它们的记录不能当成“不见了”
   const present = new Set([...walk.files.map((f) => pathKey(f.relPath)), ...walk.unreadableFiles.map(pathKey)])
   const reappeared: number[] = []
-  let failed = 0
+  let failed = walk.unreadableFiles.length
+  let added = 0
   let next = 0
 
   const worker = async (): Promise<void> => {
@@ -315,16 +396,20 @@ async function scanRoot(plan: RootPlan): Promise<RootOutcome> {
       const file = todo[next++]
       const row = byKey.get(pathKey(file.relPath))
       try {
-        if (!row && hidden.has(pathKey(file.relPath))) {
-          // 等着进回收站的文件：不登记，计入已处理
-        } else if (row && isUnchanged(row, file) && (row.thumbReady !== THUMB_READY || thumbs.has(`${row.hash}.webp`))) {
-          if (row.status !== 'NORMAL') {
-            reappeared.push(row.id)
+        if (row || !hidden.has(pathKey(file.relPath))) {
+          if (row && isUnchanged(row, file) && (row.thumbReady !== THUMB_READY || thumbs.has(`${row.hash}.webp`))) {
+            if (row.relPath !== file.relPath) {
+              // Windows 文件名可以只改大小写，更新显示路径并保留已有图片和标签。
+              await updateImageFileContent(row.id, { imageId: row.imageId, relPath: file.relPath, mtime: file.mtime })
+            } else if (row.status !== 'NORMAL') {
+              reappeared.push(row.id)
+            }
+          } else {
+            await registerFile(root, file, row)
           }
-        } else {
-          await registerFile(root, file, row)
+          if (!row || row.id > startFileId) added++
+          progress!.found += 1
         }
-        progress!.found += 1
       } catch (err) {
         // 读失败（被占用、没权限）：保持原状态，下次扫描再试
         failed += 1
@@ -333,12 +418,13 @@ async function scanRoot(plan: RootPlan): Promise<RootOutcome> {
       }
       processed += 1
       progress!.done = Math.min(progress!.total, Math.max(floor, processed))
+      await saveProgress().catch((err: unknown) => log.warn('保存扫描断点失败', err))
       push(false)
     }
   }
   await Promise.all(Array.from({ length: WORKERS }, worker))
   await chunked(reappeared, (ids) => updateImageFileStatus(ids, 'NORMAL'))
-  return { plan, rows, present, failed }
+  return { plan, rows, present, failed, added }
 }
 
 // 文件没变：修改时间和大小都和记录一致，且缩略图已经处理过（成功或确定失败）

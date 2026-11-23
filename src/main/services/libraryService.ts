@@ -90,13 +90,12 @@ export async function getOverview(categoryHomeOverride: string | null): Promise<
       return toSourceRootVO(root, byRoot.get(root.id) ?? 0, reachable && (await hasChildDirs(root.path)), !reachable)
     })
   )
-  // 底栏的扫描时间只看源目录：还没有源目录时显示“还没有扫描过”
-  const scanTimes = sources.map((r) => r.lastScanAt?.getTime() ?? 0).filter((t) => t > 0)
+  const lastScan = roots.reduce((latest, root) => Math.max(latest, root.lastScanAt?.getTime() ?? 0), 0)
   return {
     counts: toSidebarCountsVO(counts),
     sources: sourceVOs,
     categories: await listCategoryDirs(home),
-    lastScanAt: scanTimes.length > 0 ? new Date(Math.max(...scanTimes)).toISOString() : null
+    lastScanAt: lastScan ? new Date(lastScan).toISOString() : null
   }
 }
 
