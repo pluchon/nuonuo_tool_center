@@ -92,7 +92,6 @@ flowchart TD
 | 原图 | 留在你导入的文件夹里，应用不会搬动 |
 
 - 在「设置 → AI」中填写云端密钥。默认读取 `DASHSCOPE_API_KEY`（百炼）、`ALIYUN_ACCESS_KEY_ID` 和 `ALIYUN_ACCESS_KEY_SECRET`（阿里云 OSS）。离开密钥输入区时自动加密保存填写的值，并优先使用。
-- 检测到用户环境变量 `ALIYUN_TOKEN_PLAN_KEY` 时，图库进入本地模式，保留类目录检索和本地缓存，停用按量模型调用。个人套餐可在受支持的工具中交互使用。[阿里云 Token Plan 使用规范](https://help.aliyun.com/zh/model-studio/token-plan-permissions-and-usage)
 - 发给云端的只有过了本地分级的图，先缩小、去掉 EXIF；需要公网地址时私有上传、用完即删。
 - 云端用不了的图（比如 R-18），可以复制一段提示词给你自己的 AI，把回复贴回来，由本地整理成建议。
 - 设置里可以导出整个图库数据库作备份（不含图片本身）。

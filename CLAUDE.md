@@ -5,7 +5,8 @@
 ## 运行与验证
 
 - 开发：`npm run dev`；类型检查：`npm run typecheck`；构建：`npm run build`；单元测试：`npm test`；端到端测试：先 `npm run build` 再 `npm run test:e2e`（截图和差异图在 `test-output/phase1/`）。改了 `src/main/db/schema.ts` 后执行 `npm run db:generate` 生成新迁移（只往前加，不改历史迁移；要手写数据转换时用 `--custom`，再把快照换成完整结构，`npm run db:generate` 报 “No schema changes” 才算对上）。
-- 模型测试默认使用隔离数据和模拟百炼响应。真实交互测试使用受支持的编程或智能体工具和个人 Token Plan 额度；应用后端及自动化测试脚本不使用套餐密钥，也不自动改用按量密钥。
+- 设置 `LTM_E2E_HIDDEN=1` 可在隐藏窗口运行桌面测试。最大化、最小化和托盘恢复需要在可见窗口验证。在可见窗口设置 `LTM_PERF=1` 可加入 3000 张图片的性能测试。
+- 模型测试默认使用隔离数据和模拟百炼响应。真实模型测试使用普通百炼密钥，按用户授权控制调用数量。
 - 数据目录由环境变量决定：`LTM_DATA_DIR`（数据库、缩略图、模型、日志、锁文件）和 `LTM_CATEGORY_HOME`（类目录）。
   - `npm run dev` 默认用 `D:\ltm-dev\data` 和 `D:\ltm-dev\library`；端到端测试用 `D:\ltm-dev\e2e\<场景>`。
   - 本地分级模型目录由 `LTM_MODEL_DIR` 指定，开发和端到端测试共用 `D:\ltm-dev\models`（约 470 MB，从真实目录只读复制来的）；不设时用数据目录下的 `models`，缺了应用会自动下载。
