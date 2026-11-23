@@ -41,7 +41,7 @@ export async function closeLeftoverApps(): Promise<void> {
 }
 
 // 用构建产物启动应用，数据目录指向场景目录
-export async function launchApp(dirs: CaseDirs): Promise<{ app: ElectronApplication; page: Page }> {
+export async function launchApp(dirs: CaseDirs, overrides: Record<string, string> = {}): Promise<{ app: ElectronApplication; page: Page }> {
   if (!existsSync(join(PROJECT_ROOT, 'out/main/index.js'))) {
     throw new Error('还没有构建产物，先运行 npm run build')
   }
@@ -54,6 +54,12 @@ export async function launchApp(dirs: CaseDirs): Promise<{ app: ElectronApplicat
   // 删除的文件挪进场景目录下的 trash，不进系统回收站
   // 本地分级模型用开发目录里共用的那份，不在每个场景里各下载一次
   Object.assign(env, {
+    // 禁止继承真实云端凭证，显式空白也会阻止回退到 Windows 用户环境变量。
+    DASHSCOPE_API_KEY: ' ',
+    ALIYUN_TOKEN_PLAN_KEY: ' ',
+    ALIYUN_ACCESS_KEY_ID: ' ',
+    ALIYUN_ACCESS_KEY_SECRET: ' ',
+    ...overrides,
     LTM_DATA_DIR: dirs.data,
     LTM_CATEGORY_HOME: dirs.library,
     LTM_LOG_LEVEL: 'info',

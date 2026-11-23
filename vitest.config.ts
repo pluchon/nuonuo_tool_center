@@ -7,6 +7,13 @@ export default defineConfig({
     alias: { '@shared': resolve('src/shared') }
   },
   test: {
+    // 测试只使用用例提供的模拟凭证，避免继承开发机的付费账户。
+    env: {
+      ALIYUN_TOKEN_PLAN_KEY: ' ',
+      DASHSCOPE_API_KEY: ' ',
+      ALIYUN_ACCESS_KEY_ID: ' ',
+      ALIYUN_ACCESS_KEY_SECRET: ' '
+    },
     testTimeout: 60_000,
     hookTimeout: 120_000
   }
