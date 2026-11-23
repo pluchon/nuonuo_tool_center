@@ -1,10 +1,11 @@
 import { constants } from 'node:fs'
-import { copyFile, link, stat, unlink } from 'node:fs/promises'
+import { copyFile, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, resolve } from 'node:path'
 import type { GalleryQueryDTO, TransferResultVO } from '@shared/api'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isWithin } from '../../common/pathUtil'
+import { publishExclusive } from '../../common/publishFile'
 import { getDatabase } from '../../db/client'
 import {
   findBatch,
@@ -100,20 +101,15 @@ function candidate(dir: string, name: string, n: number): string {
   return join(dir, `${basename(name, ext)} (${n})${ext}`)
 }
 
-// 同盘优先创建硬链接，跨盘或不支持硬链接的文件系统使用排他复制。
-// 目标写入成功才移除源文件，已有的同名文件始终保留。
+// 目标写入成功才移除源文件。
 async function moveExclusive(from: string, to: string): Promise<void> {
-  try {
-    await link(from, to)
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') throw err
-    await copyFile(from, to, constants.COPYFILE_EXCL)
-  }
+  await publishExclusive(from, to)
   await unlink(from)
 }
 
 // 在写入磁盘前记录候选路径。遇到同名文件时，先更新日志再尝试下一个名称。
 async function transferInto(op: FileOpEntity, dir: string): Promise<string> {
+  await verifyImageFile(op.fromPath, op.contentHash)
   const name = basename(op.fromPath)
   const { db } = getDatabase()
   for (let n = 1; n <= MAX_SUFFIX; n++) {
@@ -156,18 +152,18 @@ async function finish(batchId: number, done: number, failed: number): Promise<vo
 
 // 移动到一个目录：每张图挑一个位置挪过去（已经在那里的跳过），重名自动加编号，记录跟着改
 export async function moveImages(query: GalleryQueryDTO, rawIds: unknown, rawTarget: unknown): Promise<TransferResultVO> {
-  const ids = checkIds(rawIds)
-  const target = await resolveTarget(rawTarget)
-  const sources = pickSources(await filesForAction(query, ids))
-  if (sources.length === 0) {
-    throw new BizError('DEPENDENCY_FAILED', '原图暂时打不开，没法移动')
-  }
-  const todo = sources.filter((r) => resolve(dirname(join(r.rootPath, r.relPath))).toLowerCase() !== target.abs.toLowerCase())
-  const skipped = sources.length - todo.length
-  if (todo.length === 0) {
-    return { batchId: null, done: 0, skipped, failed: 0, error: null }
-  }
   return enqueue(async () => {
+    const ids = checkIds(rawIds)
+    const target = await resolveTarget(rawTarget)
+    const sources = pickSources(await filesForAction(query, ids))
+    if (sources.length === 0) {
+      throw new BizError('DEPENDENCY_FAILED', '原图暂时打不开，没法移动')
+    }
+    const todo = sources.filter((r) => resolve(dirname(join(r.rootPath, r.relPath))).toLowerCase() !== target.abs.toLowerCase())
+    const skipped = sources.length - todo.length
+    if (todo.length === 0) {
+      return { batchId: null, done: 0, skipped, failed: 0, error: null }
+    }
     const { db } = getDatabase()
     const ops: PlannedOp[] = todo.map((r) => ({
       opType: 'MOVE',
@@ -215,6 +211,11 @@ export async function moveImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
 
 // 复制到一个或多个目录：每张图挑一个位置复制过去（那个目录里已有这张图的跳过），重名自动加编号，记录挂在同一张图上
 export async function copyImages(query: GalleryQueryDTO, rawIds: unknown, rawTargets: unknown): Promise<TransferResultVO> {
+  return enqueue(() => copyImagesInQueue(query, rawIds, rawTargets))
+}
+
+// 调用方已占用文件操作队列，目录核验、复制和索引写入须在同一任务内完成。
+export async function copyImagesInQueue(query: GalleryQueryDTO, rawIds: unknown, rawTargets: unknown): Promise<TransferResultVO> {
   const ids = checkIds(rawIds)
   if (!Array.isArray(rawTargets) || rawTargets.length === 0) {
     throw new BizError('BAD_REQUEST', '先选要复制到的目录')
@@ -233,78 +234,76 @@ export async function copyImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
   if (sources.length === 0) {
     throw new BizError('DEPENDENCY_FAILED', '原图暂时打不开，没法复制')
   }
-  return enqueue(async () => {
-    const { db } = getDatabase()
-    const pairs: Array<{ row: (typeof sources)[number]; target: Target }> = []
-    let skipped = 0
-    for (const target of targets) {
-      // 图库外的目录不知道里面有什么，同名的自动加编号
-      const has = target.root
-        ? await findImagesInDir(
-            db,
-            sources.map((s) => s.imageId),
-            target.root.id,
-            target.relDir
-          )
-        : new Set<number>()
-      for (const row of sources) {
-        if (has.has(row.imageId)) {
-          skipped += 1
-        } else {
-          pairs.push({ row, target })
-        }
+  const { db } = getDatabase()
+  const pairs: Array<{ row: (typeof sources)[number]; target: Target }> = []
+  let skipped = 0
+  for (const target of targets) {
+    // 图库外的目录不知道里面有什么，同名的自动加编号
+    const has = target.root
+      ? await findImagesInDir(
+          db,
+          sources.map((s) => s.imageId),
+          target.root.id,
+          target.relDir
+        )
+      : new Set<number>()
+    for (const row of sources) {
+      if (has.has(row.imageId)) {
+        skipped += 1
+      } else {
+        pairs.push({ row, target })
       }
     }
-    if (pairs.length === 0) {
-      return { batchId: null, done: 0, skipped, failed: 0, error: null }
-    }
-    const batchId = await db.transaction(async (tx) => {
-      const id = await insertBatch(
-        tx,
-        `复制 ${sources.length} 张到 ${targets.length} 个目录`,
-        pairs.map(({ row }) => ({
-          opType: 'COPY' as const,
-          imageFileId: row.fileId,
-          fromPath: join(row.rootPath, row.relPath),
-          // 执行时在复制前记录实际候选路径
-          toPath: null,
-          contentHash: row.contentHash
-        }))
-      )
-      await updateBatchStatus(tx, id, 'APPLYING')
-      return id
-    })
-    const planned = await opsOf(batchId)
-    let done = 0
-    let failed = 0
-    let error: string | null = null
-    for (const [i, op] of planned.entries()) {
-      const { row, target } = pairs[i]
-      let to: string
-      try {
-        to = await transferInto(op, target.abs)
-      } catch (err) {
-        failed += 1
-        error ??= reason(err)
-        log.warn(`复制失败：${op.fromPath} → ${target.abs}`, err)
-        await updateOpStatus(db, op.id, 'FAILED', reason(err))
-        continue
-      }
-      const { mtime } = await stat(to)
-      await db.transaction(async (tx) => {
-        await recordCopiedFile(tx, row.imageId, target.root, to, mtime)
-        await updateOpStatus(tx, op.id, 'DONE')
-      })
-      done += 1
-    }
-    await finish(batchId, done, failed)
-    if (done > 0) {
-      for (const t of targets) {
-        await recordEvents('file.copy', ids.slice(0, 50), { to: basename(t.abs) })
-      }
-    }
-    return { batchId: done > 0 ? batchId : null, done, skipped, failed, error }
+  }
+  if (pairs.length === 0) {
+    return { batchId: null, done: 0, skipped, failed: 0, error: null }
+  }
+  const batchId = await db.transaction(async (tx) => {
+    const id = await insertBatch(
+      tx,
+      `复制 ${sources.length} 张到 ${targets.length} 个目录`,
+      pairs.map(({ row }) => ({
+        opType: 'COPY' as const,
+        imageFileId: row.fileId,
+        fromPath: join(row.rootPath, row.relPath),
+        // 执行时在复制前记录实际候选路径
+        toPath: null,
+        contentHash: row.contentHash
+      }))
+    )
+    await updateBatchStatus(tx, id, 'APPLYING')
+    return id
   })
+  const planned = await opsOf(batchId)
+  let done = 0
+  let failed = 0
+  let error: string | null = null
+  for (const [i, op] of planned.entries()) {
+    const { row, target } = pairs[i]
+    let to: string
+    try {
+      to = await transferInto(op, target.abs)
+    } catch (err) {
+      failed += 1
+      error ??= reason(err)
+      log.warn(`复制失败：${op.fromPath} → ${target.abs}`, err)
+      await updateOpStatus(db, op.id, 'FAILED', reason(err))
+      continue
+    }
+    const { mtime } = await stat(to)
+    await db.transaction(async (tx) => {
+      await recordCopiedFile(tx, row.imageId, target.root, to, mtime)
+      await updateOpStatus(tx, op.id, 'DONE')
+    })
+    done += 1
+  }
+  await finish(batchId, done, failed)
+  if (done > 0) {
+    for (const t of targets) {
+      await recordEvents('file.copy', ids.slice(0, 50), { to: basename(t.abs) })
+    }
+  }
+  return { batchId: done > 0 ? batchId : null, done, skipped, failed, error }
 }
 
 // 批次里全部步骤（按顺序）

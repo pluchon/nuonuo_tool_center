@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
 import { importFolder } from './support/picker'
+import { dragToFolder } from './support/galleryDrag'
 
 afterEach(async () => {
   await closeLeftoverApps()
@@ -44,6 +45,33 @@ async function typeName(page: Page, name: string): Promise<void> {
 }
 
 describe('第九阶段：目录管理', () => {
+  it('从图片定位文件、从目录菜单打开文件夹，并显示系统默认程序返回的错误', async () => {
+    const dirs = freshCase('shell-open')
+    const source = join(dirs.root, '含 空格的目录')
+    const file = join(source, '无法预览.heic')
+    mkdirSync(source)
+    writeFileSync(file, '无效图片')
+    const { app, page } = await launchApp(dirs)
+    // 验证交给 Windows 的路径和错误回传，避免唤起用户自己的外部程序。
+    await app.evaluate(({ shell }, imagePath) => {
+      const calls: string[] = []
+      Object.assign(globalThis, { testShellCalls: calls })
+      shell.showItemInFolder = (path) => { calls.push(path) }
+      shell.openPath = async (path) => {
+        calls.push(path)
+        return path === imagePath ? '没有关联的程序' : ''
+      }
+    }, file)
+    await importFolder(app, page, source)
+    await page.locator('.tile').click()
+    await page.getByRole('button', { name: '打开源目录', exact: true }).click()
+    await navRow(page, '含 空格的目录').click({ button: 'right' })
+    await page.getByText('打开所属源目录', { exact: true }).click()
+    await page.getByRole('button', { name: '用默认程序打开', exact: true }).click()
+    await page.locator('.app-toast').filter({ hasText: '没有关联的程序' }).waitFor()
+    expect(await app.evaluate(() => (globalThis as typeof globalThis & { testShellCalls: string[] }).testShellCalls)).toEqual([file, source, file])
+  })
+
   it('目录树展开、子文件夹视图、新建 / 改名 / 删除类目录、拖到源目录、Ctrl+C、从图库移除', async () => {
     const dirs = freshCase('phase9-folders')
     const source = join(dirs.root, 'pics')
@@ -103,7 +131,7 @@ describe('第九阶段：目录管理', () => {
     // 拖一张图到源目录 b 上：确认后复制过去
     await navRow(page, 'pics').locator('.side-nav__item').click()
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 4)
-    await page.dragAndDrop('.tile:has-text("top.jpg")', '.side-nav__row:has(.side-nav__label:text-is("b"))')
+    await dragToFolder(page, page.locator('.tile:has-text("top.jpg")'), navRow(page, 'b'))
     await page.waitForSelector('.confirm-dlg')
     await expect(page.locator('.confirm-dlg__title').textContent()).resolves.toBe('复制 1 张到「b」？')
     await shot(page, 'drop-confirm-light')

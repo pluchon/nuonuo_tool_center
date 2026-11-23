@@ -8,6 +8,7 @@ import { findFileLocation } from '../../repositories/galleryRepository'
 import { findImageByHash } from '../../repositories/imageRepository'
 import { findActiveRoots, findActiveRootsByKind } from '../../repositories/libraryRootRepository'
 import { hashFile } from '../scan/imageProbe'
+import { categoryDirectory } from './categoryPaths'
 
 function infoAt(path: string) {
   return lstat(path).catch((err: NodeJS.ErrnoException) => {
@@ -75,7 +76,8 @@ async function settleFolderOp(op: FileOpEntity): Promise<string | null> {
   if (!root || !isWithin(root.path, op.fromPath)) throw new Error('类目录位置已经更改')
   const rel = relative(root.path, op.fromPath)
   if (!rel) throw new Error('无效的类目录操作')
-  const entries = await readdir(dirname(op.fromPath), { withFileTypes: true }).catch(async (err: unknown) => {
+  const acrossParents = op.opType === 'RENAME' && !!op.toPath && pathKey(dirname(op.fromPath)) !== pathKey(dirname(op.toPath))
+  const entries = acrossParents ? [] : await readdir(dirname(op.fromPath), { withFileTypes: true }).catch(async (err: unknown) => {
     // 无法读取父目录时不能确认删除。恢复索引，移动硬盘重新连接后仍可浏览图片。
     if (op.opType === 'DELETE') await unhideRowsUnder(db, root.id, rel)
     throw err
@@ -90,14 +92,19 @@ async function settleFolderOp(op: FileOpEntity): Promise<string | null> {
     })
     return present ? '目录删除中断，已保留当前目录' : null
   }
-  if (op.opType !== 'RENAME' || !op.toPath || pathKey(dirname(op.fromPath)) !== pathKey(dirname(op.toPath))) {
+  if (op.opType !== 'RENAME' || !op.toPath || !isWithin(root.path, op.toPath)) {
     throw new Error('无效的类目录改名记录')
   }
   const nextRel = relative(root.path, op.toPath)
+  if (!nextRel) throw new Error('无效的类目录目标')
   const newName = basename(op.toPath)
   // Windows 支持只改大小写。必须取实际拼写，分别查询两个路径会命中同一目录。
-  const renamed = entries.some((e) => e.isDirectory() && e.name === newName)
-  const original = entries.some((e) => e.isDirectory() && e.name === oldName)
+  const destination = acrossParents ? await categoryDirectory(root.path, nextRel) : null
+  const initial = acrossParents ? await categoryDirectory(root.path, rel) : null
+  if (acrossParents && destination && destination.identity !== op.contentHash) throw new Error('迁移目标已被替换')
+  if (acrossParents && initial && initial.identity !== op.contentHash) throw new Error('原目录已被替换')
+  const renamed = acrossParents ? !!destination : entries.some((e) => e.isDirectory() && e.name === newName)
+  const original = acrossParents ? !!initial : entries.some((e) => e.isDirectory() && e.name === oldName)
   if (renamed === original) throw new Error('目录位置已经变化，无法确认改名结果')
   await db.transaction(async (tx) => {
     if (renamed) await renameRowsUnder(tx, root.id, rel, nextRel)

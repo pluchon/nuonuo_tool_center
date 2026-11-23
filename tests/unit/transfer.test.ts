@@ -58,6 +58,26 @@ afterAll(async () => {
 })
 
 describe('文件操作：移动和复制', () => {
+  it('同名源文件已被替换时，移动和复制都保留现场及原索引', async () => {
+    const from = join(source, 'a.jpg')
+    const target = join(library, '猫猫')
+    writeFileSync(from, 'X')
+    try {
+      for (const result of [await copyImages(ALL, [1], [target]), await moveImages(ALL, [1], target)]) {
+        expect(result).toMatchObject({ done: 0, failed: 1, error: expect.stringContaining('文件已经更换') })
+      }
+      expect(await where(1)).toEqual(['pics\\a.jpg'])
+      expect(readFileSync(from, 'utf8')).toBe('X')
+      expect(existsSync(join(target, 'a.jpg'))).toBe(false)
+    } finally { writeFileSync(from, 'A') }
+  })
+
+  it('连续移动同一张图，后一个操作从前一个操作完成的位置读取', async () => {
+    const [first, second] = await Promise.all([moveImages(ALL, [1], join(library, '猫猫')), moveImages(ALL, [1], source)])
+    expect([first.done, second.done]).toEqual([1, 1])
+    expect(await where(1)).toEqual(['pics\\a.jpg'])
+  })
+
   it('移动到子文件夹：文件和记录都过去；重名自动加编号，不覆盖已有文件', async () => {
     const res = await moveImages(ALL, [1, 2], join(source, 'sub'))
     expect(res).toMatchObject({ done: 2, skipped: 0, failed: 0 })

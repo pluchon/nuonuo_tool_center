@@ -3,7 +3,6 @@ import { relative } from 'node:path'
 import type { AppDatabase } from '../db/client'
 import { getDatabase } from '../db/client'
 import { fileOp, fileOpBatch, imageFile } from '../db/schema'
-import { likeEscape } from '../db/sqlUtil'
 
 export type FileOpBatchEntity = typeof fileOpBatch.$inferSelect
 export type FileOpEntity = typeof fileOp.$inferSelect
@@ -173,15 +172,39 @@ export async function findImagesInDir(dbx: Db, imageIds: number[], rootId: numbe
 
 // 某个文件夹下（含子目录）文件的条件：相对路径以 “prefix\” 开头（不区分大小写）
 function underPrefix(rootId: number, prefix: string) {
-  return and(eq(imageFile.rootId, rootId), eq(imageFile.deleteState, 0), sql`lower(${imageFile.relPath}) like ${likeEscape(prefix.toLowerCase()) + '\\\\%'}`)
+  const normalized = prefix.replaceAll('\\', '/').toLowerCase() + '/'
+  return and(eq(imageFile.rootId, rootId), eq(imageFile.deleteState, 0),
+    sql`starts_with(lower(replace(${imageFile.relPath}, chr(92), '/')), ${normalized})`)
 }
 
 // 文件夹改名：下面所有文件记录的相对路径前缀跟着换
 export async function renameRowsUnder(dbx: Db, rootId: number, oldPrefix: string, newPrefix: string): Promise<void> {
   await dbx
     .update(imageFile)
-    .set({ relPath: sql`${newPrefix} || substr(${imageFile.relPath}, char_length(${oldPrefix}::text) + 1)` })
+    .set({ relPath: sql`${newPrefix} || replace(substr(${imageFile.relPath}, char_length(${oldPrefix}::text) + 1), '/', chr(92))` })
     .where(underPrefix(rootId, oldPrefix))
+  // 目录结构和待确认的归档目标在同一事务中迁移，避免继续采用时新建旧目录。
+  await syncOrganizeTarget(dbx, oldPrefix, newPrefix, true)
+}
+
+// 首次采用会将候选目录固定为已存在的路径。迁移或删除整个子树时，子目录也同步失去自动新建资格。
+export async function syncOrganizeTarget(dbx: Db, oldPrefix: string, newPrefix: string, subtree = false): Promise<void> {
+  const oldNorm = oldPrefix.replaceAll('\\', '/').toLowerCase()
+  await dbx.execute(sql`update image_ai_result
+    set result = jsonb_set(jsonb_set(result, '{existing}', 'true'), '{dir}', to_jsonb(${newPrefix}::text || replace(substr(result->>'dir', char_length(${oldPrefix}::text) + 1), '/', chr(92))))
+    where delete_state = 0 and kind = 'ORGANIZE' and field_status->>'dir' = 'PENDING'
+      and (lower(replace(result->>'dir', chr(92), '/')) = ${oldNorm}
+        or (${subtree} and starts_with(lower(replace(result->>'dir', chr(92), '/')), ${oldNorm + '/'})))`)
+  await dbx.execute(sql`update app_setting s set value=(
+    select coalesce(jsonb_agg(case when lower(replace(f->>'name',chr(92),'/'))=${oldNorm}
+      or (${subtree} and starts_with(lower(replace(f->>'name',chr(92),'/')),${oldNorm + '/'}))
+      then jsonb_set(jsonb_set(f,'{isNew}','false'),'{name}',to_jsonb(${newPrefix}::text || replace(substr(f->>'name',char_length(${oldPrefix}::text)+1),'/',chr(92))))
+      else f end order by n),'[]'::jsonb) from jsonb_array_elements(s.value) with ordinality a(f,n))
+    where s.key='ai.organize.rules' and s.delete_state=0`)
+}
+
+export async function observeOrganizeTarget(path: string, actual = path): Promise<void> {
+  await getDatabase().db.transaction((tx) => syncOrganizeTarget(tx, path, actual))
 }
 
 // 整个文件夹要进回收站：下面的文件记录先藏起来，返回它们的 id
@@ -196,6 +219,7 @@ export async function hideRowsUnder(dbx: Db, rootId: number, prefix: string): Pr
 
 // 文件夹已进回收站：下面藏起来的记录逻辑删除
 export async function retireRowsUnder(dbx: Db, rootId: number, prefix: string): Promise<void> {
+  await syncOrganizeTarget(dbx, prefix, prefix, true)
   await dbx
     .update(imageFile)
     .set({ deleteState: 1 })
