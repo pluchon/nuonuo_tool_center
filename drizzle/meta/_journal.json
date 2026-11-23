@@ -50,6 +50,13 @@
       "when": 1795339326915,
       "tag": "0006_organize_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795413863659,
+      "tag": "0007_visual_features",
+      "breakpoints": true
     }
   ]
 }
