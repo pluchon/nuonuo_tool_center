@@ -1,4 +1,4 @@
-import { AI_CREDENTIAL_KEYS, TOKEN_PLAN_LOCAL_HINT, type AiCredentialKey } from '@shared/settings'
+import { AI_CREDENTIAL_KEYS, type AiCredentialKey } from '@shared/settings'
 
 // 非机密的云端参数集中在这里
 export const OSS_CONFIG = {
@@ -55,22 +55,6 @@ export const CLOUD_ENV_NAMES: Record<AiCredentialKey, string> = {
 
 let userEnvironment: CloudCredentials = {}
 let savedCredentials: CloudCredentials = {}
-export const TOKEN_PLAN_ENV = 'ALIYUN_TOKEN_PLAN_KEY'
-let windowsUserHasTokenPlan = false
-
-export function setWindowsUserHasTokenPlan(present: boolean): void {
-  windowsUserHasTokenPlan = present
-}
-
-export function isTokenPlanLocalMode(): boolean {
-  const value = process.env[TOKEN_PLAN_ENV]
-  return value === undefined ? windowsUserHasTokenPlan : !!value.trim()
-}
-
-export function bailianUnavailableMessage(fallback: string): string {
-  return isTokenPlanLocalMode() ? TOKEN_PLAN_LOCAL_HINT : fallback
-}
-
 export function setUserEnvironmentCloudCredentials(credentials: CloudCredentials): void {
   userEnvironment = credentials
 }
@@ -93,8 +77,5 @@ export function readEnvironmentCloudCredentials(env: NodeJS.ProcessEnv = process
 }
 
 export function readCloudCredentials(): CloudCredentials {
-  const credentials = { ...readEnvironmentCloudCredentials(), ...savedCredentials }
-  // 套餐仅限交互式工具。自定义应用保留本地功能，并阻止回退到按量密钥。
-  if (isTokenPlanLocalMode()) delete credentials.dashscopeApiKey
-  return credentials
+  return { ...readEnvironmentCloudCredentials(), ...savedCredentials }
 }
