@@ -521,6 +521,8 @@ export interface AiMessageVO {
   how: string | null
   // 结果图（按回复时的顺序；已经删掉的图不再出现）
   images: GalleryItemVO[]
+  // 原回复是否保存过结果，用于复核或分级变化后重新读取可显示的卡片。
+  hasStoredResults?: boolean
   vote: 'UP' | 'DOWN' | null
   createdAt: string
   // 你发的图（按图找相似时，长边 512 的 data URL）；没有为空
@@ -529,11 +531,13 @@ export interface AiMessageVO {
   attachment?: AiAttachment | null
 }
 
-// 问诺诺：conversationId 为空时新开一段对话；scope 为空表示全部图库
+export type AiSearchScope = Extract<DirKeyDTO, { kind: 'category' }>
+
+// 问诺诺：conversationId 为空时新开一段对话，scope 为空时搜索全部类目录。
 export interface AiAskDTO {
   conversationId: number | null
   text: string
-  scope: DirKeyDTO | null
+  scope: AiSearchScope | null
   includeR18: boolean
   // 同一条消息可以同时携带一张图片和一份 Markdown。
   attachments?: AiAttachment[]

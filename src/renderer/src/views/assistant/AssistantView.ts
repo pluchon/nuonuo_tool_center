@@ -1,13 +1,18 @@
 import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { AI_TEXT_MAX, AI_TITLE_MAX, type AiMessageVO, type DirKeyDTO, type GalleryItemVO } from '@shared/api'
+import { AI_TEXT_MAX, AI_TITLE_MAX, type AiAttachment, type AiMessageVO, type AiSearchScope, type GalleryItemVO } from '@shared/api'
 import { copyImageToClipboard, startNativeDrag } from '@/api/files'
 import { thumbUrl } from '@/api/gallery'
+import { onRatingR18 } from '@/api/rating'
+import SearchResultPages from './SearchResultPages.vue'
+import ContextMeter from './ContextMeter.vue'
 import NonoArt from '@/components/nono/NonoArt.vue'
 import { useAssistantStore } from '@/stores/assistant'
 import { useLibraryStore } from '@/stores/library'
 import { useToastStore } from '@/stores/toast'
 import { useViewerStore } from '@/stores/viewer'
 import { ICON } from '@/theme/icons'
+import AttachmentCard from './AttachmentCard.vue'
+import { isMarkdownFile, readAttachment, readClipboardImage } from './readAttachment'
 
 // 结果图的高度和宽度范围（宽度按原图比例）
 const PIC_H = 132
@@ -17,7 +22,7 @@ const PIC_W_MAX = 240
 // 范围下拉里的一项：分组标题，或一个可选的范围
 type DirOption =
   | { key: string; head: true; label: string }
-  | { key: string; head: false; label: string; icon: string; ink: string; on: boolean; scope: DirKeyDTO | null }
+  | { key: string; head: false; label: string; icon: string; ink: string; on: boolean; scope: AiSearchScope | null }
 
 // 两位数
 const pad = (n: number): string => String(n).padStart(2, '0')
@@ -39,18 +44,10 @@ export function fmtMsg(iso: string, now: Date = new Date()): string {
   return d.toDateString() === now.toDateString() ? hm : `${fmtDay(iso, now)} ${hm}`
 }
 
-// 两个范围是不是同一个
-function sameScope(a: DirKeyDTO | null, b: DirKeyDTO | null): boolean {
-  if (!a || !b) {
-    return a === b
-  }
-  return a.kind === 'source' && b.kind === 'source' ? a.id === b.id : a.kind === 'category' && b.kind === 'category' && a.name === b.name
-}
-
 // 诺诺助手页（照原型 ai:）：顶栏（标题、新对话、对话记录）、消息列表、输入框（范围、R-18 开关、发送）
 export default defineComponent({
   name: 'AssistantView',
-  components: { NonoArt },
+  components: { NonoArt, AttachmentCard, SearchResultPages, ContextMeter },
   setup() {
     const store = useAssistantStore()
     const library = useLibraryStore()
@@ -76,83 +73,83 @@ export default defineComponent({
     const isEmpty = computed(() => store.currentId === null && store.messages.length === 0 && !store.waiting)
     const ctxPinned = computed(() => store.conversations.find((c) => c.id === ctx.value?.id)?.pinned ?? false)
 
-    // 范围下拉：全部图库，然后是源目录、类目录两组
+    // 范围下拉：全部类目录及可单独选择的类目录
     const dirOptions = computed<DirOption[]>(() => {
       const ov = library.overview
-      const out: DirOption[] = [{ key: 'all', head: false, label: '全部图库', icon: ICON.img, ink: 'var(--a)', on: store.scope === null, scope: null }]
-      if (ov?.sources.length) {
-        out.push({ key: 'h-src', head: true, label: '源目录' })
-        for (const s of ov.sources) {
-          const scope: DirKeyDTO = { kind: 'source', id: s.id }
-          out.push({ key: `s${s.id}`, head: false, label: s.name, icon: ICON.folder, ink: 'var(--c-i-3F8F7B)', on: sameScope(store.scope, scope), scope })
-        }
-      }
+      const out: DirOption[] = [{ key: 'all', head: false, label: '全部类目录', icon: ICON.img, ink: 'var(--a)', on: store.scope === null, scope: null }]
       if (ov?.categories.length) {
         out.push({ key: 'h-cat', head: true, label: '类目录' })
         for (const c of ov.categories) {
-          const scope: DirKeyDTO = { kind: 'category', name: c.name }
-          out.push({ key: `c${c.name}`, head: false, label: c.name, icon: ICON.heartFolder, ink: 'var(--c-i-C25B85)', on: sameScope(store.scope, scope), scope })
+          const scope: AiSearchScope = { kind: 'category', name: c.name }
+          out.push({ key: `c${c.name}`, head: false, label: c.name, icon: ICON.heartFolder, ink: 'var(--c-i-C25B85)', on: store.scope?.name === c.name, scope })
         }
       }
       return out
     })
-    const scopeLabel = computed(() => {
-      const s = store.scope
-      if (!s) {
-        return '全部图库'
-      }
-      return s.kind === 'category' ? s.name : (library.overview?.sources.find((x) => x.id === s.id)?.name ?? '全部图库')
-    })
+    const scopeLabel = computed(() => store.scope?.name ?? '全部类目录')
 
-    // 一个图片文件读成 data URL，放进输入框上方等着一起发
-    const attachFile = (file: File | null | undefined, name?: string): void => {
-      if (!file || !file.type.startsWith('image/')) {
-        return
-      }
-      if (file.size > 20 * 1024 * 1024) {
-        toast.show('图片太大了（最多 20 MB）', 'error')
-        return
-      }
-      const reader = new FileReader()
-      reader.onload = () => {
-        store.attach = { dataUrl: String(reader.result), name: name ?? (file.name || '粘贴的图片') }
-        inputRef.value?.focus()
-      }
-      reader.readAsDataURL(file)
+    type FileKind = AiAttachment['kind']
+    const pendingReads = ref(new Map<FileKind, symbol>())
+    const reading = computed(() => pendingReads.value.size > 0)
+    const cancelRead = (): void => {
+      pendingReads.value.clear()
     }
-    // 上传图片：系统的选文件框
+    // 不同类型可以同时读取，同类型只有最后一次选择可以更新草稿。
+    const selectAttachment = async (kind: FileKind, read: () => Promise<AiAttachment>): Promise<void> => {
+      const version = Symbol(kind)
+      pendingReads.value.set(kind, version)
+      try {
+        const attachment = await read()
+        if (pendingReads.value.get(kind) !== version) return
+        const index = store.attachments.findIndex((a) => a.kind === kind)
+        if (index < 0) store.attachments = [...store.attachments, attachment]
+        else store.attachments = store.attachments.map((file) => file.kind === kind ? attachment : file)
+        inputRef.value?.focus()
+      } catch (err) {
+        if (pendingReads.value.get(kind) === version) {
+          const message = err instanceof Error && !(err instanceof DOMException) ? err.message : '无法读取附件'
+          toast.show(message, 'error')
+        }
+      } finally {
+        if (pendingReads.value.get(kind) === version) pendingReads.value.delete(kind)
+      }
+    }
+    const removeAttachment = (kind: FileKind): void => {
+      pendingReads.value.delete(kind)
+      store.attachments = store.attachments.filter((file) => file.kind !== kind)
+    }
+    const selectFiles = (files: FileList): void => {
+      const selected = new Map<FileKind, File>()
+      for (const file of Array.from(files)) {
+        const kind = isMarkdownFile(file.name) ? 'markdown' : 'image'
+        if (kind === 'image' && !file.type.startsWith('image/')) {
+          toast.show('请选择图片或 Markdown 文件', 'error')
+          continue
+        }
+        selected.set(kind, file)
+      }
+      for (const [kind, file] of selected) void selectAttachment(kind, () => readAttachment(file, file.name))
+    }
     const pickFile = (): void => {
       menu.value = null
       fileRef.value?.click()
     }
     const onFilePicked = (e: Event): void => {
       const input = e.target as HTMLInputElement
-      attachFile(input.files?.[0])
+      if (input.files) selectFiles(input.files)
       input.value = ''
     }
     // 粘贴图片：从剪贴板读第一张图
-    const pasteFromClipboard = async (): Promise<void> => {
+    const pasteFromClipboard = (): void => {
       menu.value = null
-      try {
-        for (const item of await navigator.clipboard.read()) {
-          const type = item.types.find((t) => t.startsWith('image/'))
-          if (type) {
-            const blob = await item.getType(type)
-            attachFile(new File([blob], '粘贴的图片', { type }), '粘贴的图片')
-            return
-          }
-        }
-        toast.show('剪贴板里没有图片', 'error')
-      } catch {
-        toast.show('读不到剪贴板', 'error')
-      }
+      void selectAttachment('image', readClipboardImage)
     }
     // 在输入框里 Ctrl + V：剪贴板里是图就当附件，是字照常粘贴
     const onPaste = (e: ClipboardEvent): void => {
-      const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'))
-      if (file) {
+      const files = e.clipboardData?.files
+      if (files?.length) {
         e.preventDefault()
-        attachFile(file, '粘贴的图片')
+        selectFiles(files)
       }
     }
 
@@ -170,18 +167,22 @@ export default defineComponent({
         closeMenus()
       }
     }
-    const pickScope = (scope: DirKeyDTO | null): void => {
+    const pickScope = (scope: AiSearchScope | null): void => {
       store.scope = scope
       menu.value = null
     }
 
     const onNewChat = async (): Promise<void> => {
+      if (store.waiting) return
+      cancelRead()
       closeMenus()
       picked.value = null
       await store.newChat()
       inputRef.value?.focus()
     }
     const openChat = async (id: number): Promise<void> => {
+      if (store.waiting) return
+      if (store.currentId !== id) cancelRead()
       closeMenus()
       picked.value = null
       await store.open(id)
@@ -231,7 +232,7 @@ export default defineComponent({
     const onInputKey = (e: KeyboardEvent): void => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault()
-        void store.send()
+        if (!reading.value) void store.send()
       } else if (e.key === 'Escape') {
         closeMenus()
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'u') {
@@ -245,10 +246,6 @@ export default defineComponent({
       const ratio = p.width && p.height ? p.width / p.height : 1
       return Math.round(Math.min(PIC_W_MAX, Math.max(PIC_W_MIN, PIC_H * ratio)))
     }
-    const picStyle = (p: GalleryItemVO): Record<string, string> => ({
-      width: `${picWidth(p)}px`,
-      backgroundImage: p.thumb === 'READY' ? `url("${thumbUrl(p.hash)}")` : 'none'
-    })
     const pickKey = (messageId: number, imageId: number): string => `${messageId}:${imageId}`
     // 单击选中，再点一次取消
     const pick = (messageId: number, imageId: number): void => {
@@ -259,12 +256,14 @@ export default defineComponent({
     // 按住拖到别的软件：系统原生拖拽带出原文件（这里没有站内的拖放目标）
     const dragOut = (e: DragEvent, messageId: number, p: GalleryItemVO): void => {
       e.preventDefault()
+      if (p.isR18 || p.missing || p.offline) return
       picked.value = pickKey(messageId, p.imageId)
       startNativeDrag([p.fileId], p.hash).catch((err: unknown) => toast.show(err instanceof Error ? err.message : String(err), 'error'))
     }
     // 双击打开大图，只在这次回复的结果里切换
     const openViewer = (images: GalleryItemVO[], imageId: number): void => {
-      viewer.showList(images, imageId)
+      // 查看器会预读相邻原图，只有明确打开的受保护图片才能进入这个列表。
+      viewer.showList(images.filter((p) => !p.isR18 || p.imageId === imageId), imageId)
     }
     // 选中的那张图
     const pickedItem = (): GalleryItemVO | null => {
@@ -289,6 +288,7 @@ export default defineComponent({
         const item = pickedItem()
         if (item) {
           e.preventDefault()
+          if (item.isR18) return
           copyImageToClipboard(item.fileId)
             .then(() => toast.show('已复制图片'))
             .catch((err: unknown) => toast.show(err instanceof Error ? err.message : String(err), 'error'))
@@ -299,7 +299,7 @@ export default defineComponent({
     // 复制回复的文字
     const copyText = async (m: AiMessageVO): Promise<void> => {
       try {
-        await navigator.clipboard.writeText(m.text)
+        await navigator.clipboard.writeText(m.text || m.how || '')
         copied.value = m.id
         if (copiedTimer) {
           clearTimeout(copiedTimer)
@@ -323,12 +323,15 @@ export default defineComponent({
     onMounted(() => {
       document.addEventListener('mousedown', onDocDown)
       window.addEventListener('keydown', onKey)
+      void store.refreshResults()
       void store.enter().then(() => {
         void scrollToEnd()
         inputRef.value?.focus()
       })
     })
+    onBeforeUnmount(onRatingR18(() => store.refreshResults()))
     onBeforeUnmount(() => {
+      cancelRead()
       document.removeEventListener('mousedown', onDocDown)
       window.removeEventListener('keydown', onKey)
       if (copiedTimer) {
@@ -341,6 +344,8 @@ export default defineComponent({
       scroller,
       inputRef,
       fileRef,
+      reading,
+      removeAttachment,
       pickFile,
       onFilePicked,
       pasteFromClipboard,
@@ -379,7 +384,7 @@ export default defineComponent({
       ctxDelete,
       onInputKey,
       picWidth,
-      picStyle,
+      thumbUrl,
       pickKey,
       pick,
       dragOut,

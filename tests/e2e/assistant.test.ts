@@ -1,10 +1,11 @@
-import { mkdirSync } from 'node:fs'
+import { copyFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
 import { importFolder } from './support/picker'
+import { bailianRequests, launchWithMockBailian } from './support/mockBailian'
 
 sharp.cache(false)
 
@@ -55,7 +56,7 @@ describe('诺诺助手', () => {
       await makeImage(join(source, `pic-${i}.jpg`), w, h, a, b)
     }
 
-    const { app, page } = await launchApp(dirs)
+    const { app, page } = await launchWithMockBailian(dirs)
     const errors: string[] = []
     page.on('console', (m) => {
       if (m.type() === 'error') {
@@ -65,7 +66,27 @@ describe('诺诺助手', () => {
     page.on('pageerror', (e) => errors.push(e.message))
     await importFolder(app, page, source)
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 90_000 })
+    await nav(page, 'AI 建议').click()
+    await page.waitForFunction(() => document.querySelectorAll('.tile').length === 4)
+    const reviewed = await page.evaluate(async () => {
+      const list = await window.api.gallery.list({ view: 'ai', sort: 'new' })
+      if (!list.ok) throw new Error(list.message)
+      return window.api.suggestion.decideMany(list.data.items.map((item) => item.imageId), false)
+    })
+    expect(reviewed.ok).toBe(true)
 
+    // 助手只在类目录检索；保留源图，验证归档副本继承同一张图片的标签。
+    const category = join(dirs.library, '测试归档')
+    mkdirSync(category, { recursive: true })
+    for (const i of specs.keys()) {
+      const filename = `pic-${i}.jpg`
+      copyFileSync(join(source, filename), join(category, filename))
+    }
+    const scan = await page.evaluate(() => window.api.scan.start(null))
+    expect(scan.ok).toBe(true)
+    await expect.poll(() => page.evaluate(() => window.api.scan.getState()), { timeout: 60_000 }).toMatchObject({
+      ok: true, data: { progress: null, last: { stopped: false, rootName: null } }
+    })
     await nav(page, 'pics').click()
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 4)
     for (const [n, tags] of [
@@ -88,38 +109,90 @@ describe('诺诺助手', () => {
       const s = (name: string): Promise<string> => shot(page, `assistant-${mode}-${name}`)
       await nav(page, '诺诺助手').click()
       await page.waitForSelector('.assistant__welcome')
-      await expect(page.locator('.assistant__idea').count()).resolves.toBeGreaterThan(0)
+      await page.locator('.assistant__idea').first().waitFor()
       await s('01-new')
 
-      // 本地能完整对上：不调模型
-      await askAndWait(page, '找猫的图')
+      // 明确按标签查询，始终在本地处理。
+      await askAndWait(page, '找标签为猫的图')
       await expect(page.locator('.assistant__how').last().textContent()).resolves.toContain('找到 1 张')
       await expect(page.locator('.assistant__reply').last().locator('.assistant__pic').count()).resolves.toBe(1)
 
-      // 打开 R-18 再问一次：R-18 图出现在后面，带角标
+      // 受保护结果在悬停、单击和历史会话中都保持模糊，双击才加载原图。
       await page.click('.assistant__r18')
-      await askAndWait(page, '猫')
-      await expect(page.locator('.assistant__reply').last().locator('.assistant__pic-r18').count()).resolves.toBe(1)
+      await askAndWait(page, '找标签为猫的图')
+      const results = page.locator('.assistant__reply').last()
+      expect(await results.locator('.assistant__text').count()).toBe(0)
+      const protectedCard = results.locator('.assistant__pic:has(.assistant__pic-r18)')
+      const normalCard = results.locator('.assistant__pic:not(:has(.assistant__pic-r18))')
+      const thumb = protectedCard.locator('.assistant__thumbnail')
+      await expect.poll(() => thumb.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
+      expect(await protectedCard.getAttribute('draggable')).toBe('false')
+      const placement = await protectedCard.evaluate((el) => {
+        const card = el.getBoundingClientRect()
+        const lock = el.querySelector('.assistant__pic-r18')!.getBoundingClientRect()
+        return { right: card.right - lock.right, bottom: card.bottom - lock.bottom }
+      })
+      expect(placement.right).toBeLessThan(12)
+      expect(placement.bottom).toBeLessThan(12)
+      await protectedCard.hover()
+      await protectedCard.click()
+      expect(await thumb.evaluate((img) => getComputedStyle(img).filter)).toContain('blur(')
+      expect(await page.locator('.viewer').count()).toBe(0)
+      const normalName = await normalCard.locator('.assistant__pic-name').textContent()
+      await normalCard.dblclick()
+      await page.locator('.viewer__pic').waitFor()
+      await page.keyboard.press('ArrowRight')
+      expect(await page.locator('.viewer__title').textContent()).toBe(normalName)
+      await page.keyboard.press('Escape')
+      await page.locator('.viewer').waitFor({ state: 'detached' })
+      const protectedName = await protectedCard.locator('.assistant__pic-name').textContent()
+      await protectedCard.dblclick()
+      await page.waitForFunction(() => (document.querySelector('.viewer__pic') as HTMLImageElement | null)?.naturalWidth)
+      expect(await page.locator('.viewer__title').textContent()).toBe(protectedName)
+      expect(await page.locator('.viewer__pic').getAttribute('src')).toMatch(/^ltm:\/\/file\//)
+      await page.keyboard.press('Escape')
+      await page.locator('.viewer').waitFor({ state: 'detached' })
+      await page.click('.assistant__round[aria-label="新对话"]')
+      await page.click('.assistant__round[aria-label="对话记录"]')
+      await page.locator('.assistant__hist-row:not(.assistant__hist-row--pinned)').first().click()
+      await thumb.waitFor()
+      expect(await thumb.evaluate((img) => getComputedStyle(img).filter)).toContain('blur(')
       await page.click('.assistant__r18')
 
-      // 交给模型：真实调用云端
+      if (mode === 'light') {
+        // 第一轮未包含 R-18。唯一结果临时改变分级后应消失，恢复分级后应在同一段会话中重新出现。
+        const first = page.locator('.assistant__reply').first()
+        for (const hide of [true, false]) {
+          await nav(page, 'pics').click()
+          await page.locator(`.tile[aria-label="${normalName}"]`).click()
+          await page.locator('.detail-panel__switch').click()
+          await page.locator('.detail-panel__r18--on').waitFor({ state: hide ? 'visible' : 'detached' })
+          await nav(page, '诺诺助手').click()
+          if (hide) {
+            await first.getByText('这些图片目前不在检索范围内。').waitFor()
+            expect(await first.locator('.assistant__pic').count()).toBe(0)
+          } else {
+            await first.getByText(normalName!, { exact: true }).waitFor()
+          }
+        }
+      }
+
+      // 交给模型，通过模拟百炼响应检索图库。
       await askAndWait(page, '有没有适合当电脑壁纸的风景照，横的那种')
       await s('02-chat')
       await expect(page.locator('.assistant__banner').count()).resolves.toBe(0)
 
       // 单击选中，双击看大图，Esc 关掉
       const pic = page.locator('.assistant__reply').last().locator('.assistant__pic').first()
-      if ((await pic.count()) > 0) {
-        await pic.click()
-        await page.waitForSelector('.assistant__pic--on')
-        await pic.dblclick()
-        await page.waitForSelector('.viewer__pic')
-        await page.waitForFunction(() => (document.querySelector('.viewer__pic') as HTMLImageElement | null)?.complete === true)
-        await page.waitForTimeout(400)
-        await s('03-viewer')
-        await page.keyboard.press('Escape')
-        await page.waitForSelector('.viewer', { state: 'detached' })
-      }
+      await pic.click()
+      await page.waitForSelector('.assistant__pic--on')
+      await pic.dblclick()
+      await page.waitForSelector('.viewer__pic')
+      await page.waitForFunction(() => (document.querySelector('.viewer__pic') as HTMLImageElement | null)?.complete === true)
+      await page.waitForTimeout(400)
+      await s('03-viewer')
+      await page.keyboard.press('Escape')
+      await page.waitForSelector('.viewer', { state: 'detached' })
 
       // 范围下拉、对话记录、右键菜单
       await page.click('.assistant__dir')
@@ -127,8 +200,9 @@ describe('诺诺助手', () => {
       // 等弹出动画放完再截图
       await page.waitForTimeout(300)
       await s('04-dir-menu')
-      await page.click('.assistant__mi:has-text("pics")')
-      await expect(page.locator('.assistant__dir-label').textContent()).resolves.toBe('pics')
+      expect(await page.locator('.assistant__dirs').getByText('pics', { exact: true }).count()).toBe(0)
+      await page.locator('.assistant__dirs').getByText('测试归档', { exact: true }).click()
+      await expect(page.locator('.assistant__dir-label').textContent()).resolves.toBe('测试归档')
       await page.click('.assistant__round[aria-label="对话记录"]')
       await page.waitForSelector('.assistant__hist-row')
       await page.click('.assistant__hist-row >> nth=0', { button: 'right' })
@@ -146,21 +220,14 @@ describe('诺诺助手', () => {
       await page.waitForSelector('.assistant__welcome')
     }
     expect(errors).toEqual([])
+    expect((await bailianRequests(app)).filter((route) => route === 'completions')).toHaveLength(2)
     await app.close()
 
     // 没有凭证：整页显示“诺诺还没连上云端”
-    const saved = process.env.DASHSCOPE_API_KEY
-    delete process.env.DASHSCOPE_API_KEY
-    try {
-      const second = await launchApp(dirs)
-      await nav(second.page, '诺诺助手').click()
-      await second.page.waitForSelector('.assistant__nokey')
-      await shot(second.page, 'assistant-dark-06-nokey')
-      await second.app.close()
-    } finally {
-      if (saved !== undefined) {
-        process.env.DASHSCOPE_API_KEY = saved
-      }
-    }
+    const second = await launchApp(dirs)
+    await nav(second.page, '诺诺助手').click()
+    await second.page.waitForSelector('.assistant__nokey')
+    await shot(second.page, 'assistant-dark-06-nokey')
+    await second.app.close()
   }, 600_000)
 })

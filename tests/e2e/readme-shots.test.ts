@@ -3,10 +3,11 @@ import { join, resolve } from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, it } from 'vitest'
-import { closeLeftoverApps, freshCase, launchApp, setAppearance } from './support/app'
+import { closeLeftoverApps, freshCase, setAppearance } from './support/app'
 import { importFolder } from './support/picker'
+import { launchWithMockBailian } from './support/mockBailian'
 
-// README 里的界面截图：用画出来的风景图建一个示例图库，图库、诺诺助手、AI 建议在浅色和深色下各截一张，存到 test-output/readme-shots/，再手动传 OSS。只在 LTM_SHOTS=1 时跑（会真实调用百炼看图）
+// 使用合成风景图和模拟百炼响应，在 LTM_SHOTS=1 时生成 README 的浅色、深色截图。
 sharp.cache(false)
 const run = process.env.LTM_SHOTS === '1' ? it : it.skip
 const OUT = resolve('test-output/readme-shots')
@@ -71,7 +72,7 @@ describe('README 截图', () => {
         .toFile(join(src, `${s.name}.jpg`))
     }
 
-    const { app, page } = await launchApp(dirs)
+    const { app, page } = await launchWithMockBailian(dirs)
     await importFolder(app, page, src)
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 120_000 })
 
@@ -86,7 +87,7 @@ describe('README 截图', () => {
       }
     }, SAMPLES)
 
-    // 本地分级判完、诺诺看完（真实调用）再截，底栏干净、“AI 建议”里有东西
+    // 等本地分级和模拟看图完成，再截取 AI 建议页面。
     await page.waitForSelector('.rating-pill', { state: 'detached', timeout: 120_000 })
     await page.waitForFunction(
       () => {

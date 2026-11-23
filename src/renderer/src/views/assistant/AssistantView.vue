@@ -14,7 +14,7 @@
         </svg>
         <h2 class="assistant__title">{{ title }}</h2>
         <div v-if="store.ready" class="assistant__head-actions">
-          <button class="assistant__round" type="button" aria-label="新对话" @click="onNewChat">
+          <button class="assistant__round" type="button" aria-label="新对话" :disabled="store.waiting" @click="onNewChat">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
           </button>
           <button
@@ -22,6 +22,7 @@
             :class="{ 'assistant__round--on': menu === 'hist' }"
             type="button"
             aria-label="对话记录"
+            :disabled="store.waiting"
             aria-haspopup="dialog"
             :aria-expanded="menu === 'hist'"
             data-ai-menu
@@ -105,7 +106,9 @@
 
             <template v-for="m in store.messages" :key="m.id">
               <div v-if="m.role === 'user'" class="assistant__user">
-                <img v-if="m.image" class="assistant__sent-img" :src="m.image" alt="发的图片" draggable="false" />
+                <div v-if="m.attachments?.length" class="assistant__attachments">
+                  <AttachmentCard v-for="file in m.attachments" :key="file.kind" :file="file" />
+                </div>
                 <div v-if="m.text" class="assistant__bubble">{{ m.text }}</div>
               </div>
               <article v-else class="assistant__reply">
@@ -113,29 +116,44 @@
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-3.5-3.5" /></svg>
                   <span>{{ m.how }}</span>
                 </div>
-                <p class="assistant__text">{{ m.text }}</p>
-                <div v-if="m.images.length" class="assistant__pics">
-                  <button
-                    v-for="p in m.images"
-                    :key="p.imageId"
-                    class="assistant__pic"
-                    :class="{ 'assistant__pic--on': picked === pickKey(m.id, p.imageId) }"
-                    type="button"
-                    :style="picStyle(p)"
-                    :aria-label="p.name"
-                    :aria-pressed="picked === pickKey(m.id, p.imageId)"
-                    :draggable="!p.missing && !p.offline"
-                    @click="pick(m.id, p.imageId)"
-                    @dblclick="openViewer(m.images, p.imageId)"
-                    @dragstart="dragOut($event, m.id, p)"
-                  >
-                    <span v-if="p.isR18" class="assistant__pic-r18">R-18</span>
-                    <span class="assistant__pic-name" :style="{ maxWidth: `${picWidth(p) - (p.isR18 ? 62 : 14)}px` }">{{ p.name }}</span>
-                    <span v-if="picked === pickKey(m.id, p.imageId)" class="assistant__pic-check" aria-hidden="true">
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
-                    </span>
-                  </button>
-                </div>
+                <p v-if="m.text" class="assistant__text">{{ m.text }}</p>
+                <SearchResultPages v-if="m.images.length" v-slot="{ pageImages }" :images="m.images">
+                  <div class="assistant__pics">
+                    <button
+                      v-for="p in pageImages"
+                      :key="p.imageId"
+                      class="assistant__pic"
+                      :class="{ 'assistant__pic--on': picked === pickKey(m.id, p.imageId) }"
+                      type="button"
+                      :style="{ width: `${picWidth(p)}px` }"
+                      :aria-label="p.isR18 ? `${p.name}，R-18，双击查看` : p.name"
+                      :aria-pressed="picked === pickKey(m.id, p.imageId)"
+                      :draggable="!p.isR18 && !p.missing && !p.offline"
+                      @click="pick(m.id, p.imageId)"
+                      @dblclick="openViewer(m.images, p.imageId)"
+                      @keydown.enter.prevent="openViewer(m.images, p.imageId)"
+                      @dragstart="dragOut($event, m.id, p)"
+                    >
+                      <img
+                        v-if="p.thumb === 'READY'"
+                        class="assistant__thumbnail"
+                        :class="{ 'assistant__thumbnail--masked': p.isR18 }"
+                        :src="thumbUrl(p.hash)"
+                        alt=""
+                        draggable="false"
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <span v-if="p.isR18" class="assistant__pic-r18" aria-hidden="true">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path :d="lockIcon" /></svg>
+                      </span>
+                      <span class="assistant__pic-name">{{ p.name }}</span>
+                      <span v-if="picked === pickKey(m.id, p.imageId)" class="assistant__pic-check" aria-hidden="true">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                      </span>
+                    </button>
+                  </div>
+                </SearchResultPages>
                 <div class="assistant__foot">
                   <button class="assistant__tool" :class="{ 'assistant__tool--ok': copied === m.id }" type="button" :aria-label="copied === m.id ? '已复制' : '复制'" @click="copyText(m)">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="copied === m.id ? checkPath : copyPath" /></svg>
@@ -216,7 +234,7 @@
                 <span class="assistant__caret assistant__caret--down assistant__caret--plus" aria-hidden="true" />
                 <button role="menuitem" class="assistant__mi" type="button" @click="pickFile">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l8-8" /></svg>
-                  <span class="assistant__mi-label">上传图片</span><kbd class="assistant__kbd">Ctrl + U</kbd>
+                  <span class="assistant__mi-label">图片或文件</span><kbd class="assistant__kbd">Ctrl + U</kbd>
                 </button>
                 <button role="menuitem" class="assistant__mi" type="button" @click="pasteFromClipboard">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6v3H9zM8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /></svg>
@@ -224,14 +242,9 @@
                 </button>
               </div>
             </Transition>
-            <input ref="fileRef" class="assistant__file" type="file" accept="image/*" @change="onFilePicked" />
-            <div v-if="store.attach" class="assistant__attach">
-              <span class="assistant__attach-img" :style="{ backgroundImage: `url(&quot;${store.attach.dataUrl}&quot;)` }">
-                <button class="assistant__attach-x" type="button" aria-label="去掉这张图" @click="store.attach = null">
-                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" /></svg>
-                </button>
-              </span>
-              <span class="assistant__attach-name">{{ store.attach.name }}</span>
+            <input ref="fileRef" class="assistant__file" type="file" accept="image/*,.md,.markdown,text/markdown" multiple @change="onFilePicked" />
+            <div v-if="store.attachments.length" class="assistant__attachments">
+              <AttachmentCard v-for="file in store.attachments" :key="file.kind" class="assistant__attach" :file="file" removable @remove="removeAttachment(file.kind)" />
             </div>
             <label class="assistant__input-wrap">
               <span class="assistant__sr">问诺诺</span>
@@ -251,7 +264,7 @@
                 class="assistant__plus"
                 :class="{ 'assistant__plus--on': menu === 'plus' }"
                 type="button"
-                aria-label="添加图片"
+                aria-label="添加附件"
                 aria-haspopup="menu"
                 :aria-expanded="menu === 'plus'"
                 data-ai-menu
@@ -285,7 +298,9 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="lockIcon" /></svg>R-18
                 <span class="assistant__switch" aria-hidden="true"><span class="assistant__knob" /></span>
               </button>
-              <button class="nn-send assistant__send" :class="{ 'assistant__send--on': store.canSend }" type="button" aria-label="发送" :disabled="!store.canSend" @click="store.send()">
+              <span class="assistant__vr" aria-hidden="true" />
+              <ContextMeter :messages="store.messages" />
+              <button class="nn-send assistant__send" :class="{ 'assistant__send--on': store.canSend && !reading }" type="button" aria-label="发送" :disabled="!store.canSend || reading" @click="store.send()">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
               </button>
             </div>
