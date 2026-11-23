@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 import {
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -118,7 +119,20 @@ export const image = pgTable(
   (t) => [uniqueIndex('uk_image_content_hash').on(t.contentHash), index('idx_image_rating').on(t.rating)]
 )
 
-// 图片在磁盘上的位置，同一内容可有多个位置
+// 提案在用户确认前只保存在数据库中；按图片内容编号记录分析进度。
+export const categoryProposal = pgTable('category_proposal', {
+  id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+  status: text('status').$type<'pending' | 'applied' | 'cancelled'>().notNull().default('pending'),
+  home: text('home').notNull(),
+  payload: jsonb('payload').notNull()
+}, (t) => [check('category_proposal_status_check', sql`${t.status} IN ('pending', 'applied', 'cancelled')`)])
+
+export const categoryAnalyzedImage = pgTable('category_analyzed_image', {
+  imageId: bigint('image_id', { mode: 'number' }).primaryKey().references(() => image.id),
+  proposalId: integer('proposal_id').notNull().references(() => categoryProposal.id)
+})
+
+// 同一份图片内容可对应多个磁盘位置。
 export const imageFile = pgTable(
   'image_file',
   {
