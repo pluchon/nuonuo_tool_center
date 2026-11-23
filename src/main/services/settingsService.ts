@@ -93,10 +93,10 @@ export function validateSettingsPatch(patch: unknown): Partial<AppSettings> {
   }
   const result: Record<string, unknown> = {}
   for (const [key, raw] of Object.entries(patch)) {
-    const validator = VALIDATORS[key as SettingKey]
-    if (!validator) {
+    if (!Object.hasOwn(VALIDATORS, key)) {
       throw new BizError('BAD_REQUEST', `没有这项设置：${key}`)
     }
+    const validator = VALIDATORS[key as SettingKey]
     const value = validator(raw)
     if (value === undefined) {
       throw new BizError('BAD_REQUEST', `设置的值不合法：${key}`)
@@ -114,7 +114,7 @@ export function mergeStoredSettings(rows: Array<{ key: string; value: unknown }>
     if (row.key.startsWith('ai.') || row.key.startsWith('progress.')) {
       continue
     }
-    const validator = VALIDATORS[row.key as SettingKey]
+    const validator = Object.hasOwn(VALIDATORS, row.key) ? VALIDATORS[row.key as SettingKey] : undefined
     const value = validator ? validator(row.value) : undefined
     if (value === undefined) {
       log.warn(`忽略库里不合法的设置项：${row.key}`)

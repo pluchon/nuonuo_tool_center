@@ -37,6 +37,8 @@ describe('设置校验', () => {
     [{ scanFormats: ['TIFF'] }],
     [{ categoryHome: 'relative\\dir' }],
     [{ unknownKey: 1 }],
+    [{ constructor: null }],
+    [JSON.parse('{"__proto__":{"glass":false}}')],
     [null],
     [[]]
   ])('拒绝不合法的修改 %j', (patch) => {
@@ -51,6 +53,7 @@ describe('设置校验', () => {
     const merged = mergeStoredSettings([
       { key: 'appearance', value: 'dark' },
       { key: 'glassBlur', value: 999 },
+      { key: '__proto__', value: null },
       { key: 'legacyKey', value: true }
     ])
     expect(merged.appearance).toBe('dark')
