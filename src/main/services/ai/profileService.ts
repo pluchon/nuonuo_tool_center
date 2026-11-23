@@ -30,23 +30,27 @@ export async function currentVocab(): Promise<TagVocab> {
 
 // 拿到最新的档案；还没有就建第 1 版；词表变了且离上一版超过一天就出新版本（正文沿用，做梦以后才会改正文）
 export async function ensureProfile(now: Date = new Date()): Promise<{ version: number }> {
-  const vocab = await currentVocab()
   const latest = await findLatestProfile()
+  if (latest && now.getTime() - latest.createTime.getTime() < MIN_INTERVAL_MS) return latest
+  const vocab = await currentVocab()
   if (!latest) {
     return insertProfile(1, '', vocab)
   }
   const changed = stableStringify(latest.tagVocab) !== stableStringify(vocab)
-  if (changed && now.getTime() - latest.createTime.getTime() >= MIN_INTERVAL_MS) {
+  if (changed) {
     return insertProfile(latest.version + 1, latest.content, vocab)
   }
   return latest
 }
 
 // 对话锁定的那一版档案的文字；老对话没有锁定版本时用最新的
-export async function profileOfConversation(version: number | null): Promise<string> {
+export async function profileOfConversation(version: number | null, includeVocabulary = true, allowedTags?: ReadonlySet<string>): Promise<string> {
   const row = version !== null ? await findProfileByVersion(version) : await findLatestProfile()
   if (!row) {
     return ''
   }
-  return profileText(row.version, row.content, row.tagVocab as TagVocab)
+  const vocab = includeVocabulary ? row.tagVocab as TagVocab : {}
+  if (!allowedTags) return profileText(row.version, row.content, vocab)
+  const current = Object.fromEntries(Object.entries(vocab).map(([category, names]) => [category, names.filter((name) => allowedTags.has(name))]))
+  return profileText(row.version, row.content, current)
 }

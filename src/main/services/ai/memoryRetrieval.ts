@@ -29,9 +29,11 @@ export async function relevantMemories(question: string): Promise<AiMemoryEntity
     const overlap = mb.size > 0 ? hit / mb.size : 0
     return { m, score: (overlap + (m.kind === 'preference' ? 0.2 : 0)) * m.confidence }
   })
-  return scored
-    .filter((s) => s.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, TOP)
-    .map((s) => s.m)
+  // 旧记录可能重复。相同内容只附带一次，取可信度和关联度最高的那条。
+  const selected = new Map<string, AiMemoryEntity>()
+  for (const { m, score } of scored.sort((a, b) => b.score - a.score)) {
+    if (score <= 0 || selected.size >= TOP) break
+    if (!selected.has(m.content)) selected.set(m.content, m)
+  }
+  return [...selected.values()]
 }

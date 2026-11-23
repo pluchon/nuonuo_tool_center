@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { col } from '../db/sqlUtil'
 import { aiConversation, aiMemory, aiMessage } from '../db/schema'
@@ -75,6 +75,13 @@ export async function updateVote(messageId: number, vote: 'UP' | 'DOWN' | null):
 
 // 记下一条对话里明说的偏好
 export async function insertMemory(content: string, kind: string, confidence: number, sourceMessageId: number | null): Promise<void> {
-  const { db } = getDatabase()
-  await db.insert(aiMemory).values({ content, kind, confidence, sourceMessageId })
+  await getDatabase().db.transaction(async (tx) => {
+    const [known] = await tx.select({ id: aiMemory.id, confidence: aiMemory.confidence }).from(aiMemory).where(and(
+      eq(aiMemory.content, content), eq(aiMemory.kind, kind), eq(aiMemory.deleteState, 0), isNull(aiMemory.validTo)
+    )).limit(1)
+    if (!known) await tx.insert(aiMemory).values({ content, kind, confidence, sourceMessageId })
+    else if (known.confidence < confidence) {
+      await tx.update(aiMemory).set({ confidence, sourceMessageId, updateTime: new Date() }).where(eq(aiMemory.id, known.id))
+    }
+  })
 }
