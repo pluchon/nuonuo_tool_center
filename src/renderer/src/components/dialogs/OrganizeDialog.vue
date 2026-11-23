@@ -54,7 +54,7 @@
           <div v-else class="org-dlg__list nn-thin">
             <div v-for="(f, i) in org.draft" :key="i" class="org-dlg__folder">
               <div class="org-dlg__folder-head">
-                <input v-model.trim="f.name" class="org-dlg__name" :maxlength="nameMax" aria-label="目录名" />
+                <input v-model.trim="f.name" class="org-dlg__name" aria-label="目录名" />
                 <span class="org-dlg__tag" :class="{ 'org-dlg__tag--new': isNew(f.name) }">{{ isNew(f.name) ? '新建' : '已有' }}</span>
                 <button class="org-dlg__del" type="button" aria-label="去掉这个目录" @click="org.removeFolder(i)">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" /></svg>

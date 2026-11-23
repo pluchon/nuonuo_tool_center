@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { LOOK_KEY_HINT } from '@shared/api'
 import type { OrganizeEstimateVO, OrganizeFolderVO, OrganizeLookedVO, OrganizePhase, OrganizeStateVO, RatingProgressVO } from '@shared/api'
 import { approveOrganize, cancelOrganize, fetchOrganizeEstimate, fetchOrganizeState, onOrganizeState, startOrganize } from '@/api/organize'
 import { fetchRatingProgress, onRatingProgress } from '@/api/rating'
@@ -85,7 +86,7 @@ export const useOrganizeStore = defineStore('organize', {
         return
       }
       if (useLookStore().needsApiKey) {
-        useToastStore().show(useLookStore().keyHint)
+        useToastStore().show(LOOK_KEY_HINT)
         return
       }
       this.estimate = null

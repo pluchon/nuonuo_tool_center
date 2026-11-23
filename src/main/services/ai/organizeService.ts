@@ -10,11 +10,11 @@ import {
   type OrganizeStateVO
 } from '@shared/api'
 import { parseAssistJson } from '@shared/assistJson'
-import { BAILIAN_CONFIG, ORGANIZE_COST, bailianUnavailableMessage, isTokenPlanLocalMode, readCloudCredentials } from '../../config/cloudConfig'
+import { BAILIAN_CONFIG, ORGANIZE_COST, readCloudCredentials } from '../../config/cloudConfig'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isValidDirName } from '../../common/pathUtil'
-import { findActiveSettings, upsertSettings } from '../../repositories/appSettingRepository'
+import { findActiveSettings, readSetting, upsertSettings } from '../../repositories/appSettingRepository'
 import {
   countLookCandidates,
   countLookProgress,
@@ -28,7 +28,9 @@ import {
   type OrganizeTerms
 } from '../../repositories/aiResultRepository'
 import { countRatingCandidates } from '../../repositories/imageRepository'
-import { categoryTopNames } from '../fileOps/folderOpsService'
+import { categoryPaths } from '../fileOps/folderOpsService'
+import { categoryPathIndex } from '../fileOps/categoryPaths'
+import { recordLocalReuse } from '../../repositories/aiSearchCacheRepository'
 import { isRatingBusy } from '../rating/ratingService'
 import { chatCall } from './bailianClient'
 import { scheduleLook } from './lookService'
@@ -38,6 +40,7 @@ const log = getLogger('organize')
 
 // 状态在设置表里的键（settingsService 跳过 ai. 开头的键）
 const STATE_KEY = 'ai.organize'
+const RULES_KEY = 'ai.organize.rules'
 // 这次整理从什么时候开始排看图（算看图进度用）
 const LOOK_FROM_KEY = 'ai.organizeLookFrom'
 // 新建目录最多几个；交给模型的词每类最多几个
@@ -76,9 +79,9 @@ export function isOrganizing(): boolean {
 }
 
 // 改状态：存库并推给界面
-async function setState(next: OrganizeStateVO): Promise<void> {
+async function setState(next: OrganizeStateVO, rules?: OrganizeFolderVO[]): Promise<void> {
   state = next
-  await upsertSettings([{ key: STATE_KEY, value: next }])
+  await upsertSettings([{ key: STATE_KEY, value: next }, ...(rules ? [{key:RULES_KEY,value:rules}] : [])])
   if (state === next) {
     config?.onState(next)
   }
@@ -102,7 +105,6 @@ export async function restoreOrganize(): Promise<void> {
 
 // 看图队列恢复后继续原来的阶段。
 export async function resumeOrganize(): Promise<void> {
-  if (isTokenPlanLocalMode() && state.phase !== 'ASSIGNING') return
   if (state.phase === 'ASSIGNING') {
     if (state.plan) {
       await applyApprovedPlan(state.plan)
@@ -131,7 +133,7 @@ export async function estimateOrganize(): Promise<OrganizeEstimateVO> {
 // 方案出错后再点一次就是重试
 export async function startOrganize(): Promise<OrganizeStateVO> {
   if (!readCloudCredentials().dashscopeApiKey) {
-    throw new BizError('DEPENDENCY_FAILED', bailianUnavailableMessage(LOOK_KEY_HINT))
+    throw new BizError('DEPENDENCY_FAILED', LOOK_KEY_HINT)
   }
   if (state.phase === 'PLAN_READY' && !state.plan) {
     void makePlan()
@@ -165,7 +167,6 @@ export async function startOrganize(): Promise<OrganizeStateVO> {
 
 // 看图队列变了时调用：整理在等看图、队列里已经没有排队和进行中的（出错的不等），就出方案
 export async function checkLooking(): Promise<void> {
-  if (isTokenPlanLocalMode()) return
   if (state.phase === 'FOLLOWING') {
     await maybeFinish()
     return
@@ -218,7 +219,6 @@ export async function cancelOrganize(): Promise<OrganizeStateVO> {
 
 // 分级每判完一小批：判完、过了闸门、还没看过的老图按半价排进看图（只走批量）
 export async function onRatingBatch(): Promise<void> {
-  if (isTokenPlanLocalMode()) return
   if (state.phase !== 'FOLLOWING') {
     return
   }
@@ -250,7 +250,10 @@ async function assignWithPlan(): Promise<number> {
   if (state.phase !== 'FOLLOWING' || !state.plan) {
     return 0
   }
-  const n = await insertOrganizeResults(assignFolders(await findOrganizeTerms(), state.plan), BAILIAN_CONFIG.chatModel)
+  const persisted = await readSetting<OrganizeFolderVO[]>(RULES_KEY)
+  const index = categoryPathIndex(await categoryPaths())
+  const plan = availableRules(persisted?.length ? persisted : state.plan, index)
+  const n = await insertOrganizeResults(assignFolders(await findOrganizeTerms(), plan), BAILIAN_CONFIG.chatModel)
   if (n > 0) {
     log.info(`一键整理补图：又分了 ${n} 张`)
     config?.onSuggested()
@@ -315,7 +318,7 @@ function planPrompt(existing: string[], total: number, stats: Record<'characters
 // 整理模型给的方案：名字合法、去重；词只留给过它的、每个词只进第一个目录；没有词的目录去掉；新建的最多 12 个
 export function sanitizePlan(raw: unknown, allowed: Set<string>, existing: string[]): OrganizeFolderVO[] {
   const folders = raw && typeof raw === 'object' && Array.isArray((raw as { folders?: unknown }).folders) ? (raw as { folders: unknown[] }).folders : []
-  const existingLow = new Map(existing.map((n) => [n.toLowerCase(), n]))
+  const existingLow = categoryPathIndex(existing)
   const used = new Set<string>()
   const names = new Set<string>()
   const out: OrganizeFolderVO[] = []
@@ -337,12 +340,13 @@ export function sanitizePlan(raw: unknown, allowed: Set<string>, existing: strin
       continue
     }
     const o = f as Record<string, unknown>
-    let name = typeof o.name === 'string' ? Array.from(o.name.trim()).slice(0, DIR_NAME_MAX).join('').trim() : ''
-    name = existingLow.get(name.toLowerCase()) ?? name
-    if (!isValidDirName(name) || names.has(name.toLowerCase())) {
+    const rawName = typeof o.name === 'string' ? o.name.trim() : ''
+    const known = existingLow.get(rawName.replaceAll('/', '\\').toLowerCase())
+    const name = known ?? Array.from(rawName).slice(0, DIR_NAME_MAX).join('').trim()
+    if ((!known && !isValidDirName(name)) || names.has(name.toLowerCase())) {
       continue
     }
-    const isNew = !existingLow.has(name.toLowerCase())
+    const isNew = !known
     if (isNew && created >= NEW_FOLDERS_MAX) {
       continue
     }
@@ -357,7 +361,44 @@ export function sanitizePlan(raw: unknown, allowed: Set<string>, existing: strin
   return out
 }
 
-// 出方案：一次纯文本调用（flash、关思考、只调一次不打缓存标记）；失败时留在“方案待确认”并带上原因，可以重试
+// 已有归档与标签同名时优先采用，只把没有明确归属的词留给模型方案。
+export function reuseOrganizePaths(plan: OrganizeFolderVO[], stats: Record<'characters' | 'works' | 'tags', Array<[string, number]>>, paths: string[]): OrganizeFolderVO[] {
+  const lookup = categoryPathIndex(paths)
+  const result = new Map<string, OrganizeFolderVO>()
+  const kinds = ['characters', 'works', 'tags'] as const
+  const assigned = new Set<string>()
+  for (const kind of kinds) {
+    for (const [word] of stats[kind]) {
+      const key = word.toLowerCase()
+      const name = lookup.get(key)
+      if (!name || assigned.has(key)) continue
+      if (!result.has(name) && result.size >= ORGANIZE_FOLDERS_MAX) continue
+      const target = result.get(name) ?? { name, isNew: false, characters: [], works: [], tags: [] }
+      if (target[kind].length >= ORGANIZE_TERMS_MAX) continue
+      target[kind].push(word)
+      result.set(name, target)
+      assigned.add(key)
+    }
+  }
+  for (const folder of plan) {
+    if (!result.has(folder.name) && result.size >= ORGANIZE_FOLDERS_MAX) continue
+    const target = result.get(folder.name) ?? { ...folder, characters: [], works: [], tags: [] }
+    for (const kind of kinds) {
+      target[kind].push(...folder[kind].filter((w) => !assigned.has(w.toLowerCase())).slice(0, ORGANIZE_TERMS_MAX - target[kind].length))
+    }
+    if (kinds.some((kind) => target[kind].length)) result.set(folder.name, target)
+  }
+  return [...result.values()]
+}
+
+function availableRules(rules: OrganizeFolderVO[], index: Map<string, string>): OrganizeFolderVO[] {
+  return rules.flatMap((folder) => {
+    const known = index.get(folder.name.toLowerCase())
+    if (known) return [{ ...folder, name: known, isNew: false }]
+    return folder.isNew ? [folder] : []
+  })
+}
+
 async function makePlan(): Promise<void> {
   if (planning === state) {
     return
@@ -366,15 +407,36 @@ async function makePlan(): Promise<void> {
   planning = current
   try {
     await setState(current)
-    const all = await findOrganizeTerms()
-    const existing = await categoryTopNames()
+    let all = await findOrganizeTerms()
+    const existing = await categoryPaths(true)
+    const index = categoryPathIndex(existing)
+    const saved = await readSetting<OrganizeFolderVO[]>(RULES_KEY) ?? []
+    const confirmed = availableRules(saved, index)
+    const missing = new Set(saved.filter((f) => !f.isNew && !index.has(f.name.toLowerCase())).map((f) => f.name.toLowerCase()))
+    const covered = assignFolders(all, confirmed)
+    if (state !== current) return
+    if (covered.length) {
+      if (await insertOrganizeResults(covered, 'confirmed-rules')) config?.onSuggested()
+      if (state !== current) return
+      const ids = new Set(covered.map((r) => r.imageId))
+      all = all.filter((t) => !ids.has(t.imageId))
+      if (!all.some((t) => t.tags.length || t.characters.length || t.works.length)) {
+        await recordLocalReuse()
+        if (state !== current) return
+        await setState({phase:'FOLLOWING',plan:confirmed,error:null})
+        await maybeFinish()
+        return
+      }
+    }
     const stats = {
       characters: topTerms(all, (t) => t.characters, STAT_LIMITS.characters),
       works: topTerms(all, (t) => t.works, STAT_LIMITS.works),
       tags: topTerms(all, (t) => t.tags, STAT_LIMITS.tags)
     }
     const allowed = new Set([...stats.characters, ...stats.works, ...stats.tags].map(([w]) => w))
-    const habits = allowed.size ? await habitLines() : []
+    const lookup = categoryPathIndex(existing)
+    const matching = [...allowed].map((w) => lookup.get(w.toLowerCase())).filter((p): p is string => !!p)
+    const promptPaths = [...new Set([...matching, ...existing])].slice(0, 160)
     if (state !== current) {
       return
     }
@@ -382,17 +444,27 @@ async function makePlan(): Promise<void> {
       await setState({ phase: 'PLAN_READY', plan: null, error: '没有能用来分类的标签和建议，先让诺诺看看图或打几个标签' })
       return
     }
+    if (matching.length === allowed.size) {
+      const local = reuseOrganizePaths([], stats, existing)
+      if (local.reduce((n, f) => n + f.characters.length + f.works.length + f.tags.length, 0) === allowed.size) {
+        await setState({ phase: 'PLAN_READY', plan: local, error: null })
+        return
+      }
+    }
+    const habits = await habitLines()
+    if (state !== current) return
     const res = await chatCall({
       kind: 'organize',
       model: BAILIAN_CONFIG.chatModel,
-      messages: [{ role: 'user', content: planPrompt(existing, all.length, stats, habits) }],
+      messages: [{ role: 'user', content: planPrompt(promptPaths, all.length, stats, habits) }],
       timeoutMs: PLAN_TIMEOUT_MS
     })
     if (state !== current) {
       return
     }
     const text = String(res.message.content ?? '')
-    const plan = sanitizePlan(parseAssistJson(text), allowed, existing)
+    const suggestions = sanitizePlan(parseAssistJson(text), allowed, existing).filter((f) => !missing.has(f.name.toLowerCase()))
+    const plan = reuseOrganizePaths(suggestions, stats, existing)
     if (plan.length === 0) {
       // 只有目录名和标签词，不含图片内容，记下来方便查为什么用不了
       log.warn(`一键整理方案用不了：${text.slice(0, 600)}`)
@@ -415,26 +487,31 @@ function checkPlan(raw: unknown, existing: string[]): OrganizeFolderVO[] {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > ORGANIZE_FOLDERS_MAX) {
     throw new BizError('BAD_REQUEST', '方案不对')
   }
-  const existingLow = new Set(existing.map((n) => n.toLowerCase()))
+  const existingLow = categoryPathIndex(existing)
   const names = new Set<string>()
   const list = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map((w) => w.trim()).slice(0, ORGANIZE_TERMS_MAX) : []
   return raw.map((f) => {
     const o = (f ?? {}) as Record<string, unknown>
-    const name = typeof o.name === 'string' ? o.name.trim() : ''
-    if (!isValidDirName(name) || Array.from(name).length > DIR_NAME_MAX) {
+    const input = typeof o.name === 'string' ? o.name.trim() : ''
+    const known = existingLow.get(input.replaceAll('/', '\\').toLowerCase())
+    const name = known ?? input
+    if (!known && state.plan?.some((f) => !f.isNew && f.name.toLowerCase() === input.toLowerCase())) {
+      throw new BizError('CONFLICT', '原类目录位置已改变，请选择当前目录')
+    }
+    if (!known && (!isValidDirName(name) || Array.from(name).length > DIR_NAME_MAX)) {
       throw new BizError('BAD_REQUEST', `目录名「${name}」不能用：最多 ${DIR_NAME_MAX} 个字，不能有 \\ / : * ? " < > |`)
     }
     if (names.has(name.toLowerCase())) {
       throw new BizError('BAD_REQUEST', `目录「${name}」重复了`)
     }
     names.add(name.toLowerCase())
-    return { name, isNew: !existingLow.has(name.toLowerCase()), characters: list(o.characters), works: list(o.works), tags: list(o.tags) }
+    return { name, isNew: !known, characters: list(o.characters), works: list(o.works), tags: list(o.tags) }
   })
 }
 
 // 本地分图：角色优先、其次作品、再次标签，按方案里目录的顺序取第一个对上的；对不上的不管
-export function assignFolders(all: OrganizeTerms[], plan: OrganizeFolderVO[]): Array<{ imageId: number; dir: string }> {
+export function assignFolders(all: OrganizeTerms[], plan: OrganizeFolderVO[]): Array<{ imageId: number; dir: string; existing?: boolean }> {
   const index = (pick: (f: OrganizeFolderVO) => string[]): Map<string, string> => {
     const m = new Map<string, string>()
     for (const f of plan) {
@@ -449,12 +526,13 @@ export function assignFolders(all: OrganizeTerms[], plan: OrganizeFolderVO[]): A
   const byWho = index((f) => f.characters)
   const byWork = index((f) => f.works)
   const byTag = index((f) => f.tags)
-  const out: Array<{ imageId: number; dir: string }> = []
+  const existing = new Set(plan.filter((f) => !f.isNew).map((f) => f.name))
+  const out: Array<{ imageId: number; dir: string; existing?: boolean }> = []
   for (const t of all) {
     const hit = (words: string[], m: Map<string, string>): string | undefined => words.map((w) => m.get(w.toLowerCase())).find(Boolean)
     const dir = hit(t.characters, byWho) ?? hit(t.works, byWork) ?? hit(t.tags, byTag)
     if (dir) {
-      out.push({ imageId: t.imageId, dir })
+      out.push({ imageId: t.imageId, dir, ...(existing.has(dir) ? {existing: true} : {}) })
     }
   }
   return out
@@ -465,8 +543,26 @@ export async function approveOrganize(rawPlan: unknown): Promise<number> {
   if (state.phase !== 'PLAN_READY') {
     throw new BizError('CONFLICT', '现在没有待确认的方案')
   }
-  const plan = checkPlan(rawPlan, await categoryTopNames())
-  await setState({ phase: 'ASSIGNING', plan, error: null })
+  const plan = checkPlan(rawPlan, await categoryPaths(true))
+  const previous = await readSetting<OrganizeFolderVO[]>(RULES_KEY) ?? []
+  const kinds = ['characters','works','tags'] as const
+  const rules = plan.map((f) => ({...f,characters:[...f.characters],works:[...f.works],tags:[...f.tags]}))
+  const known = new Map(rules.map((f) => [f.name.toLowerCase(),f]))
+  for (const kind of kinds) {
+    const replaced = new Set(plan.flatMap((f) => f[kind].map((w) => w.toLowerCase())))
+    for (const old of previous) {
+      const words = old[kind].filter((w) => !replaced.has(w.toLowerCase()))
+      if (!words.length) continue
+      let rule = known.get(old.name.toLowerCase())
+      if (!rule) {
+        rule = {...old,characters:[],works:[],tags:[]}
+        rules.push(rule)
+        known.set(old.name.toLowerCase(),rule)
+      }
+      rule[kind].push(...words)
+    }
+  }
+  await setState({ phase: 'ASSIGNING', plan, error: null }, rules)
   return applyApprovedPlan(plan)
 }
 

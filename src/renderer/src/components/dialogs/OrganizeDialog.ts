@@ -1,5 +1,4 @@
 import { computed, defineComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { DIR_NAME_MAX } from '@shared/api'
 import NonoArt from '@/components/nono/NonoArt.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useOrganizeStore } from '@/stores/organize'
@@ -61,7 +60,10 @@ export default defineComponent({
     onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true))
 
     // 改过名字后按现在的名字判断是不是新建
-    const existing = computed(() => new Set((library.overview?.categories ?? []).map((c) => c.name.toLowerCase())))
+    const existing = computed(() => new Set([
+      ...(library.overview?.categories ?? []).map((c) => c.name.toLowerCase()),
+      ...(org.plan ?? []).filter((f) => !f.isNew).map((f) => f.name.toLowerCase())
+    ]))
     const isNew = (name: string): boolean => !existing.value.has(name.toLowerCase())
     const est = computed(() => org.estimate)
     const tokenText = computed(() => {
@@ -89,7 +91,6 @@ export default defineComponent({
       isNew,
       kinds: KINDS,
       lines: LINES,
-      nameMax: DIR_NAME_MAX,
       starPath: ICON.spark,
       folderPath: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'
     }

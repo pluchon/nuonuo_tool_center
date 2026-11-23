@@ -32,7 +32,8 @@ import { findActiveRootById, findActiveRootsByKind } from '../repositories/libra
 import { THUMB_FAILED, THUMB_READY } from '../repositories/imageRepository'
 import { findTagsOfImage } from '../repositories/tagRepository'
 import { findPendingSummary } from '../repositories/aiResultRepository'
-import { categoryTopNames } from './fileOps/folderOpsService'
+import { categoryPaths } from './fileOps/folderOpsService'
+import { categoryPathIndex } from './fileOps/categoryPaths'
 
 // “最近导入”的天数（和侧栏计数一致）
 export const RECENT_DAYS = 30
@@ -273,10 +274,12 @@ export async function listGallery(query: GalleryQueryDTO): Promise<GalleryListVO
 // “AI 建议”视图：按建议生成的先后排（后来的接在最后），带上建议放进的类目录（目录还不存在的标成新建）
 async function withAiOrder(items: GalleryItemVO[]): Promise<GalleryItemVO[]> {
   const summary = await findPendingSummary()
-  const existing = new Set((await categoryTopNames()).map((n) => n.toLowerCase()))
+  const existing = [...summary.values()].some((entry) => entry.dir) ? categoryPathIndex(await categoryPaths()) : new Map<string, string>()
   for (const item of items) {
-    const dir = summary.get(item.imageId)?.dir
-    item.aiDir = dir ? { name: dir, isNew: !existing.has(dir.toLowerCase()) } : null
+    const target = summary.get(item.imageId)
+    const dir = target?.dir
+    const known = dir ? existing.get(dir.replaceAll('/', '\\').toLowerCase()) : null
+    item.aiDir = dir ? { name: known ?? dir, isNew: !target?.existing && !known && !/[\\/]/.test(dir) } : null
   }
   const first = (id: number): number => summary.get(id)?.firstId ?? Number.MAX_SAFE_INTEGER
   // 同一个目标目录的排在一起（界面按目录分组），组按组里最早的建议排
@@ -346,18 +349,8 @@ export async function getImageDetail(imageId: number): Promise<ImageDetailVO> {
   const rep = pickRepresentative(rows, offline)
   const extras = await findImageExtras(imageId)
   return {
-    imageId,
-    name: nameOf(rep),
-    format: rep.format as ScanFormat,
-    width: rep.width,
-    height: rep.height,
-    byteSize: rep.byteSize,
-    hash: rep.contentHash,
-    thumb: thumbOf(rep.thumbReady),
-    isR18: rep.isR18,
+    ...toItem(rep, offline),
     r18ByModel: rep.isR18 && extras.ratingSource === 'MODEL' && !extras.r18Pending,
-    importedAt: rep.createTime.toISOString(),
-    takenAt: rep.takenAt ? rep.takenAt.toISOString() : null,
     exif: (extras.exif as ExifInfo | null) ?? null,
     displayName: rep.displayName,
     tags: await findTagsOfImage(imageId),

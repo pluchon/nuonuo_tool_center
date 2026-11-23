@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
+import { hashBuffer } from '../../src/main/services/scan/imageProbe'
 
 // 出方案的模型调用换成脚本
 let planReply = ''
@@ -101,7 +102,7 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     // 1 甘雨（已打标签）；2 待确认建议里是原神；3 R-18；4 什么词都没有；5 已经在类目录“风景”里
     await pg.exec(`
       INSERT INTO image (content_hash, format, byte_size, rating, rating_source, is_r18) VALUES
-        ('h1', 'JPG', 1, 'GENERAL', 'MODEL', false), ('h2', 'JPG', 1, 'GENERAL', 'MODEL', false),
+        ('${hashBuffer(Buffer.from('a.jpg'))}', 'JPG', 5, 'GENERAL', 'MODEL', false), ('${hashBuffer(Buffer.from('b.jpg'))}', 'JPG', 5, 'GENERAL', 'MODEL', false),
         ('h3', 'JPG', 1, 'EXPLICIT', 'MODEL', true), ('h4', 'JPG', 1, 'GENERAL', 'MANUAL', false), ('h5', 'JPG', 1, 'GENERAL', 'MODEL', false);
       INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES
         (1, 1, 'a.jpg', now()), (2, 1, 'b.jpg', now()), (3, 1, 'c.jpg', now()), (4, 1, 'd.jpg', now()), (5, 2, '风景\\e.jpg', now());
@@ -197,6 +198,8 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
   })
 
   it('本地分级没判完不能开始；开始后新导入的图进入补图：判完排进批量看图、看完按方案分，都做完自己收尾', async () => {
+    const { resetOrganizeRules } = await import('../../src/main/services/ai/aiPolicy')
+    await resetOrganizeRules()
     const { pg } = getDatabase()
     // 7 还没分级：不能开始
     await pg.exec(`
@@ -281,11 +284,23 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     await org.cancelOrganize()
   })
 
-  it('停止整理后，迟到的方案不会重新打开确认窗口', async () => {
+  it('已有同名目录直接出方案，停止后迟到的云端方案不会重新打开确认窗口', async () => {
+    const { resetOrganizeRules } = await import('../../src/main/services/ai/aiPolicy')
+    await resetOrganizeRules()
     const { pg } = getDatabase()
     await pg.exec(`
       UPDATE ai_job SET status = 'DONE', finished_at = now() WHERE kind = 'LOOK' AND status = 'QUEUED';
       INSERT INTO image_tag (image_id, tag_id, source, status) VALUES (4, 2, 'MANUAL', 'ACCEPTED');
+    `)
+    const beforeLocal = prompts.length
+    await org.startOrganize()
+    await vi.waitFor(() => expect(org.getOrganizeState().phase).toBe('PLAN_READY'))
+    expect(prompts).toHaveLength(beforeLocal)
+    await org.cancelOrganize()
+    // 增加没有同名目录的标签，确保下面确实会发起异步规划请求。
+    await pg.exec(`
+      with fresh as (insert into tag(name,category_id) values ('尚未归类的主题',4) returning id)
+      insert into image_tag(image_id,tag_id,source,status) select 4,id,'MANUAL','ACCEPTED' from fresh
     `)
     planReply = '```json\n{"folders":[{"name":"风景","tags":["风景"]}]}\n```'
     const onState = vi.fn()
@@ -305,5 +320,62 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     await new Promise<void>((resolve) => setImmediate(resolve))
     expect(org.getOrganizeState().phase).toBe('IDLE')
     expect(onState).not.toHaveBeenCalledWith(expect.objectContaining({ phase: 'PLAN_READY' }))
+  })
+
+  it('重新启动后新图直接采用手动确认的分类规则，目录名可与标签不同', async () => {
+    const {pg} = getDatabase()
+    await pg.exec("update image set is_r18=true, rating='EXPLICIT', rating_source='MANUAL'; update ai_job set status='DONE' where kind='LOOK'")
+    const plan = [{name:'选定归档',tags:['回归标签'],characters:[],works:[],isNew:true}]
+    await upsertSettings([{key:'ai.organize',value:{phase:'PLAN_READY',plan,error:null}}])
+    await org.restoreOrganize()
+    await org.approveOrganize(plan)
+    await closeDatabase()
+    const again = await openDatabase(join(dir,'pgdata'),resolve('drizzle'))
+    await org.restoreOrganize()
+    await again.pg.exec(`
+      insert into tag(name,category_id) values('回归标签',4);
+      insert into image(content_hash,format,byte_size,thumb_ready,rating,rating_source) values('confirmed-new','JPG',1,1,'GENERAL','MANUAL');
+      insert into image_file(image_id,root_id,rel_path,mtime) select id,1,'confirmed-new.jpg',now() from image where content_hash='confirmed-new';
+      insert into image_tag(image_id,tag_id,source,status) select i.id,t.id,'MANUAL','ACCEPTED' from image i, tag t where i.content_hash='confirmed-new' and t.name='回归标签';
+      insert into ai_job(kind,image_id,status) select 'LOOK',id,'DONE' from image where content_hash='confirmed-new';
+    `)
+    const before = prompts.length
+    await org.startOrganize()
+    await vi.waitFor(async () => {
+      const rows = await again.pg.query("select result->>'dir' as dir from image_ai_result a join image i on i.id=a.image_id where i.content_hash='confirmed-new' and a.kind='ORGANIZE'")
+      expect(rows.rows).toEqual([{dir:'选定归档'}])
+    })
+    expect(prompts).toHaveLength(before)
+    await vi.waitFor(() => expect(org.getOrganizeState().phase).toBe('IDLE'))
+  })
+
+  it('首次创建的目标随用户改名，删除后既有建议和新增分类都不会重建旧目录', async () => {
+    const { ensureSuggestionTarget, renameCategoryFolder, deleteCategoryFolder } = await import('../../src/main/services/fileOps/folderOpsService')
+    const { readSetting } = await import('../../src/main/repositories/appSettingRepository')
+    const { decideSuggestion } = await import('../../src/main/services/ai/suggestionService')
+    const rules = () => readSetting<Array<{name:string;isNew:boolean}>>('ai.organize.rules')
+    expect(await rules()).toMatchObject([{name:'选定归档',isNew:true}])
+    await ensureSuggestionTarget('选定归档')
+    expect(await rules()).toMatchObject([{name:'选定归档',isNew:false}])
+    await renameCategoryFolder({kind:'category',path:'选定归档'},'归档已调整')
+    expect(await rules()).toMatchObject([{name:'归档已调整',isNew:false}])
+    await deleteCategoryFolder({kind:'category',path:'归档已调整'})
+    const {pg} = getDatabase()
+    const id = Number((await pg.query<{id:number}>("select id from image where content_hash='confirmed-new'")).rows[0].id)
+    await expect(decideSuggestion(id,'dir',true)).rejects.toThrow('不存在')
+    expect(existsSync(join(library,'归档已调整'))).toBe(false)
+    await pg.exec(`
+      insert into image(content_hash,format,byte_size,thumb_ready,rating,rating_source) values('after-delete','JPG',1,1,'GENERAL','MANUAL');
+      insert into image_file(image_id,root_id,rel_path,mtime) select id,1,'after-delete.jpg',now() from image where content_hash='after-delete';
+      insert into image_tag(image_id,tag_id,source,status) select i.id,t.id,'MANUAL','ACCEPTED' from image i,tag t where i.content_hash='after-delete' and t.name='回归标签';
+      insert into ai_job(kind,image_id,status) select 'LOOK',id,'DONE' from image where content_hash='after-delete';
+    `)
+    planReply = JSON.stringify({folders:[{name:'归档已调整',tags:['回归标签']}]})
+    await org.startOrganize()
+    await vi.waitFor(() => expect(org.getOrganizeState().phase).toBe('PLAN_READY'))
+    expect(org.getOrganizeState().plan).toBeNull()
+    expect((await pg.query("select 1 from image_ai_result a join image i on i.id=a.image_id where i.content_hash='after-delete' and kind='ORGANIZE'")).rows).toEqual([])
+    expect(existsSync(join(library,'选定归档'))).toBe(false)
+    await org.cancelOrganize()
   })
 })

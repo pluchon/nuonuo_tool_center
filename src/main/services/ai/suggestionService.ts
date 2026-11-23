@@ -1,7 +1,8 @@
 // AI 建议：列出一张图待确认的各项、逐项采用或不要、全部采用；其他 AI 辅助整理的提示词和贴回结果的整理（设计 6.5、6.6）
 import { TAGS_PER_IMAGE, type AiSuggestionVO, type SuggestionBatchVO } from '@shared/api'
 import { BizError } from '../../common/bizError'
-import { categoryTopNames, ensureCategoryTop } from '../fileOps/folderOpsService'
+import { categoryPaths, ensureSuggestionTarget } from '../fileOps/folderOpsService'
+import { categoryPathIndex } from '../fileOps/categoryPaths'
 import { copyImages } from '../fileOps/transferService'
 import { getDatabase } from '../../db/client'
 import { findImageBrief, findTagNamesOf, findVocabulary } from '../../repositories/aiSearchRepository'
@@ -35,7 +36,7 @@ export async function listSuggestions(imageId: number): Promise<AiSuggestionVO[]
         continue
       }
       const value = kind === 'r18Review' ? LOOK_CONTENT_REJECTED : valueOf(r.result as SuggestionFields, key)
-      out.push({ key, kind, value, origin: r.origin })
+      out.push({ key, kind, value, origin: r.origin, ...(kind === 'dir' && (r.result as { existing?: boolean }).existing ? { isNew: false } : {}) })
     }
   }
   // 放进类目录的：标出目录现在还不存在（采用时新建）
@@ -44,8 +45,10 @@ export async function listSuggestions(imageId: number): Promise<AiSuggestionVO[]
     if ((await findImageBrief(imageId))?.isR18) {
       out.splice(dir, 1)
     } else {
-      const names = (await categoryTopNames()).map((n) => n.toLowerCase())
-      out[dir].isNew = !names.includes(out[dir].value.toLowerCase())
+      const item = out[dir]
+      const known = categoryPathIndex(await categoryPaths()).get(item.value.replaceAll('/', '\\').toLowerCase())
+      if (known) item.value = known
+      item.isNew = item.isNew !== false && !known && !/[\\/]/.test(item.value)
     }
   }
   // 按名字、标签、角色、作品、出处、放进类目录的顺序
@@ -54,11 +57,11 @@ export async function listSuggestions(imageId: number): Promise<AiSuggestionVO[]
 }
 
 // 复制进类目录（目录不在就建），源目录里的原图不动；有没复制成的报原因
-async function copyIntoCategory(imageIds: number[], name: string): Promise<void> {
+async function copyIntoCategory(imageIds: number[], name: string, mustExist: boolean): Promise<void> {
   const { pg } = getDatabase()
   const { rows } = await pg.query('SELECT 1 FROM image WHERE id = ANY($1::bigint[]) AND is_r18 LIMIT 1', [imageIds])
   if (rows.length > 0) throw new BizError('CONFLICT', 'R-18 图片不参与自动整理')
-  const abs = await ensureCategoryTop(name)
+  const abs = await ensureSuggestionTarget(name, mustExist)
   const res = await copyImages({ view: 'all', sort: 'new' }, imageIds, [abs])
   if (res.failed > 0) {
     throw new BizError('DEPENDENCY_FAILED', `有 ${res.failed} 张没放进「${name}」：${res.error ?? '原因不明'}`)
@@ -71,11 +74,11 @@ async function categoryIdOf(name: string): Promise<number | undefined> {
 }
 
 // 采用一项：名字写进图片名字，标签、角色、作品当标签加上（角色、作品放进对应分类），出处记下来
-async function apply(imageId: number, kind: Exclude<AiSuggestionVO['kind'], 'r18Review'>, value: string): Promise<void> {
+async function apply(imageId: number, kind: Exclude<AiSuggestionVO['kind'], 'r18Review'>, value: string, mustExist = false): Promise<void> {
   if (kind === 'name') {
     await renameImage(imageId, value, { record: false })
   } else if (kind === 'dir') {
-    await copyIntoCategory([imageId], value)
+    await copyIntoCategory([imageId], value, mustExist)
   } else if (kind === 'src') {
     await updateSource(imageId, value)
   } else {
@@ -110,7 +113,7 @@ export async function decideSuggestion(imageId: number, key: string, accept: boo
     return listSuggestions(imageId)
   }
   if (accept) {
-    await apply(imageId, item.kind, item.value)
+    await apply(imageId, item.kind, item.value, item.isNew === false)
   }
   await mark(imageId, key, accept ? 'ACCEPTED' : 'REJECTED')
   await recordEvent(accept ? 'suggestion.accept' : 'suggestion.reject', imageId, { kind: item.kind, value: item.value, origin: item.origin })
@@ -124,7 +127,7 @@ export async function acceptAllSuggestions(imageId: number): Promise<AiSuggestio
   for (const item of await listSuggestions(imageId)) {
     if (item.kind === 'r18Review') continue
     try {
-      await apply(imageId, item.kind, item.value)
+      await apply(imageId, item.kind, item.value, item.isNew === false)
       await mark(imageId, item.key, 'ACCEPTED')
       await recordEvent('suggestion.accept', imageId, { kind: item.kind, value: item.value, origin: item.origin })
     } catch (err) {
@@ -147,6 +150,7 @@ export async function decideMany(rawIds: unknown, accept: unknown): Promise<Sugg
   let error: string | null = null
   // 放进类目录的按目录分组，其余的逐项处理
   const byDir = new Map<string, number[]>()
+  const existingDirs = new Set<string>()
   const bad = new Set<number>()
   let reviewOnly = 0
   for (const id of ids) {
@@ -160,6 +164,7 @@ export async function decideMany(rawIds: unknown, accept: unknown): Promise<Sugg
         continue
       }
       if (item.kind === 'dir') {
+        if (item.isNew === false) existingDirs.add(item.value)
         byDir.set(item.value, [...(byDir.get(item.value) ?? []), id])
         continue
       }
@@ -175,7 +180,7 @@ export async function decideMany(rawIds: unknown, accept: unknown): Promise<Sugg
   }
   for (const [dir, list] of byDir) {
     try {
-      await copyIntoCategory(list, dir)
+      await copyIntoCategory(list, dir, existingDirs.has(dir))
       for (const id of list) {
         await mark(id, 'dir', 'ACCEPTED')
       }

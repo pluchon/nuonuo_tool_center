@@ -9,6 +9,7 @@ import {
   hideRowsUnder,
   insertBatch,
   renameRowsUnder,
+  observeOrganizeTarget,
   retireRowsUnder,
   unhideRowsUnder,
   updateBatchStatus,
@@ -20,6 +21,7 @@ import { categoryHomeOf, ensureCategoryRoot } from '../categoryHome'
 import { childDirs } from '../libraryService'
 import { getScanState } from '../scan/scanService'
 import { enqueue, trashPath } from './fileOpsService'
+import { cachedCategoryTree, categoryDirectory, categoryPathIndex, categoryRel, invalidateCategoryTree } from './categoryPaths'
 
 const log = getLogger('fileOps')
 
@@ -119,6 +121,11 @@ export async function createFolder(parent: FolderRefDTO, rawName: unknown): Prom
       }
       try {
         await mkdir(join(folder.abs, name))
+        if (folder.kind === 'category') {
+          invalidateCategoryTree()
+          const path = folder.rel ? join(folder.rel, name) : name
+          await observeOrganizeTarget(path)
+        }
         return folder.rel ? `${folder.rel}\\${name}` : name
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
@@ -130,24 +137,40 @@ export async function createFolder(parent: FolderRefDTO, rawName: unknown): Prom
   })
 }
 
-// 类目录根下现有的顶层目录名（类目录位置还不存在时为空）
-export async function categoryTopNames(): Promise<string[]> {
-  return (await childDirs(await categoryHomeOf(categoryHomeOverride))) ?? []
+// 归档方案和建议共用已存在的类目录相对路径。
+export async function categoryPaths(refresh = false): Promise<string[]> {
+  return cachedCategoryTree(await categoryHomeOf(categoryHomeOverride), refresh)
 }
 
-// 一键整理采用“放进类目录”时：找到类目录根下这个名字的目录（不分大小写），没有就新建；返回绝对路径
-export async function ensureCategoryTop(rawName: string): Promise<string> {
-  const name = checkName(rawName)
-  if (!name) {
-    throw new BizError('BAD_REQUEST', '目录名不能为空')
-  }
+// 优先沿用现有路径。只有明确允许新建的单段目录名才能在根下创建。
+export async function ensureSuggestionTarget(rawName: string, mustExist = false): Promise<string> {
+  const path = categoryRel(rawName)
   const home = await categoryHomeOf(categoryHomeOverride)
-  const hit = (await categoryTopNames()).find((n) => n.toLowerCase() === name.toLowerCase())
-  if (hit) {
-    return join(home, hit)
-  }
-  const rel = await createFolder({ kind: 'category', path: '' }, name)
-  return join(home, rel)
+  return enqueue(async () => {
+    checkNotScanning()
+    const direct = await categoryDirectory(home, path)
+    if (direct) {
+      await observeOrganizeTarget(path)
+      return direct.abs
+    }
+    if (path.includes('\\')) throw new BizError('NOT_FOUND', '建议中的类目录位置已改变，请重新选择')
+    const match = categoryPathIndex(await categoryPaths(true)).get(path.toLowerCase())
+    if (match) {
+      const actual = await categoryDirectory(home, match)
+      if (actual) {
+        await observeOrganizeTarget(path, match)
+        return actual.abs
+      }
+    }
+    if (mustExist) throw new BizError('NOT_FOUND', '建议中的类目录已不存在')
+    const name = checkName(path)
+    if (!await categoryDirectory(home, '')) await mkdir(home, { recursive: true })
+    await mkdir(join(home, name))
+    await ensureCategoryRoot(categoryHomeOverride)
+    await observeOrganizeTarget(name)
+    invalidateCategoryTree()
+    return join(home, name)
+  })
 }
 
 // 类目录改名：磁盘上改名，下面所有文件记录的路径跟着换（先写日志）。返回新的相对路径
@@ -202,6 +225,7 @@ export async function renameCategoryFolder(ref: FolderRefDTO, rawName: unknown):
       await updateOpStatus(tx, op.id, 'DONE')
       await updateBatchStatus(tx, batchId, 'APPLIED')
     })
+    invalidateCategoryTree()
     return newRel
   })
 }
@@ -248,6 +272,7 @@ export async function deleteCategoryFolder(ref: FolderRefDTO): Promise<number> {
       await updateOpStatus(tx, op.id, 'DONE')
       await updateBatchStatus(tx, batchId, 'APPLIED')
     })
+    invalidateCategoryTree()
     return hidden.length
   })
 }
