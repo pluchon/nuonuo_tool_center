@@ -85,3 +85,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
 }
 
 export type SettingKey = keyof AppSettings
+
+export const AI_CREDENTIAL_KEYS = ['dashscopeApiKey', 'aliyunAccessKeyId', 'aliyunAccessKeySecret'] as const
+export type AiCredentialKey = (typeof AI_CREDENTIAL_KEYS)[number]
+export type AiCredentialPatch = Partial<Record<AiCredentialKey, string | null>>
+export type AiCredentialStatus = Record<AiCredentialKey, 'saved' | 'environment' | 'missing'> & { localOnly?: boolean }
+export const TOKEN_PLAN_LOCAL_HINT = '当前为套餐本地模式，此操作需要云端模型。'

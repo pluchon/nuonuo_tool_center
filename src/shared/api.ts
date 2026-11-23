@@ -480,9 +480,10 @@ export interface ExifInfoVO {
   iso?: number
 }
 
-// 诺诺助手：能不能用（没配 DASHSCOPE_API_KEY 时整页显示“诺诺还没连上云端”）
+// 诺诺助手：是否配置了百炼 API Key
 export interface AiStatusVO {
   ready: boolean
+  localOnly?: boolean
 }
 
 // 对话记录里的一段对话

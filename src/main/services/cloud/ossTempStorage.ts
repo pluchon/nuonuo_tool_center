@@ -15,24 +15,23 @@ export interface TempUpload {
   remove: () => Promise<void>
 }
 
-let client: OSS | null = null
+let cached: { client: OSS; accessKeyId: string; accessKeySecret: string } | undefined
 
 // 懒加载 OSS 客户端；凭证缺失时明确报错
 function getClient(): OSS {
-  if (client) {
-    return client
+  const { aliyunAccessKeyId: accessKeyId, aliyunAccessKeySecret: accessKeySecret } = readCloudCredentials()
+  if (!accessKeyId || !accessKeySecret) {
+    throw new Error('未配置阿里云 AccessKey')
   }
-  const cred = readCloudCredentials()
-  if (!cred.aliyunAccessKeyId || !cred.aliyunAccessKeySecret) {
-    throw new Error('缺少环境变量 ALIYUN_ACCESS_KEY_ID / ALIYUN_ACCESS_KEY_SECRET')
-  }
-  client = new OSS({
+  if (cached?.accessKeyId === accessKeyId && cached.accessKeySecret === accessKeySecret) return cached.client
+  const client = new OSS({
     region: OSS_CONFIG.region,
     bucket: OSS_CONFIG.bucket,
-    accessKeyId: cred.aliyunAccessKeyId,
-    accessKeySecret: cred.aliyunAccessKeySecret,
+    accessKeyId,
+    accessKeySecret,
     secure: true
   })
+  cached = { client, accessKeyId, accessKeySecret }
   return client
 }
 

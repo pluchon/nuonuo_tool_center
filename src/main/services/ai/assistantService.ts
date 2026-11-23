@@ -10,7 +10,7 @@ import {
   type AiStatusVO,
   type DirKeyDTO
 } from '@shared/api'
-import { BAILIAN_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
+import { isTokenPlanLocalMode, BAILIAN_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import {
@@ -78,9 +78,9 @@ interface SearchOutcome {
 // 正在回答的对话（同一段对话不并发回答）
 const answering = new Set<number>()
 
-// 诺诺能不能用：只看有没有配置 DASHSCOPE_API_KEY
+// 是否配置了百炼 API Key
 export function getAiStatus(): AiStatusVO {
-  return { ready: !!readCloudCredentials().dashscopeApiKey }
+  return isTokenPlanLocalMode() ? { ready: false, localOnly: true } : { ready: !!readCloudCredentials().dashscopeApiKey }
 }
 
 // 对话转成界面用的结构

@@ -1,5 +1,5 @@
 import OpenAI from 'openai'
-import { BAILIAN_CONFIG, CACHE_HIT_CHECK, readCloudCredentials } from '../../config/cloudConfig'
+import { BAILIAN_CONFIG, CACHE_HIT_CHECK, bailianUnavailableMessage, readCloudCredentials } from '../../config/cloudConfig'
 import { getLogger } from '../../common/logger'
 import { findRecentUsage, insertApiUsage } from '../../repositories/apiUsageRepository'
 import { assertCacheMarks, type PromptMessage } from './promptPrefix'
@@ -19,13 +19,11 @@ let client: OpenAI | null = null
 
 // 懒加载百炼兼容客户端；关闭自动重试，避免一次超时被重试成多次计费
 export function getBailianClient(): OpenAI {
-  if (client) {
-    return client
-  }
   const { dashscopeApiKey } = readCloudCredentials()
   if (!dashscopeApiKey) {
-    throw new Error('缺少环境变量 DASHSCOPE_API_KEY')
+    throw new Error(bailianUnavailableMessage('未配置百炼 API Key'))
   }
+  if (client?.apiKey === dashscopeApiKey) return client
   client = new OpenAI({
     apiKey: dashscopeApiKey,
     baseURL: BAILIAN_CONFIG.baseURL,

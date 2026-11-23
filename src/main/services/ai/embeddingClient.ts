@@ -1,5 +1,5 @@
 // 语义向量的云端调用（qwen3-vl-embedding，1024 维）：一张图或一句话换成向量，调用后记账；不自动重试
-import { EMBEDDING_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
+import { EMBEDDING_CONFIG, bailianUnavailableMessage, readCloudCredentials } from '../../config/cloudConfig'
 import { getLogger } from '../../common/logger'
 import { insertApiUsage } from '../../repositories/apiUsageRepository'
 
@@ -9,20 +9,21 @@ const log = getLogger('embed')
 export type EmbedInput = { image: string } | { text: string }
 
 // 调一次向量接口
-export async function embed(input: EmbedInput, imageId?: number): Promise<number[]> {
+export async function embed(input: EmbedInput, imageId?: number, signal?: AbortSignal): Promise<number[]> {
   const key = readCloudCredentials().dashscopeApiKey
   if (!key) {
-    throw new Error('缺少环境变量 DASHSCOPE_API_KEY')
+    throw new Error(bailianUnavailableMessage('未配置百炼 API Key'))
   }
   const t0 = Date.now()
   let error: string | null = null
   let usage: Record<string, number> = {}
   try {
+    const timeout = AbortSignal.timeout(EMBEDDING_CONFIG.timeoutMs)
     const res = await fetch(EMBEDDING_CONFIG.url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: EMBEDDING_CONFIG.model, input: { contents: [input] }, parameters: { dimension: EMBEDDING_CONFIG.dimension } }),
-      signal: AbortSignal.timeout(EMBEDDING_CONFIG.timeoutMs)
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout
     })
     const body = (await res.json().catch(() => ({}))) as {
       output?: { embeddings?: Array<{ embedding?: number[] }> }

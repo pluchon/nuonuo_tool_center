@@ -1,4 +1,6 @@
-// 云端配置：凭证只从环境变量读取，不落库、不写日志；非机密参数集中在这里
+import { AI_CREDENTIAL_KEYS, TOKEN_PLAN_LOCAL_HINT, type AiCredentialKey } from '@shared/settings'
+
+// 非机密的云端参数集中在这里
 export const OSS_CONFIG = {
   region: 'oss-cn-guangzhou',
   bucket: 'zlhimage',
@@ -25,11 +27,13 @@ export const EMBEDDING_CONFIG = {
   timeoutMs: 30_000
 } as const
 
-// 一键整理开始前的费用估算（粗估，以账单为准）：实时看一张约 2.6k token，带联网搜索约 0.006 元；批量半价、不联网约 0.0004 元
+// 一键整理开始前的费用估算。按华北 2 的 qwen3.8-flash 标准价，估计每张输入 2300、输出 300 Token。
+// 实时按一次联网搜索估算，批量按模型费用的 50% 估算，两者均不预先扣除缓存折扣。
+const ESTIMATED_LOOK_TOKEN_YUAN = (2300 * 0.8 + 300 * 2.7) / 1_000_000
 export const ORGANIZE_COST = {
   tokensPerImage: 2600,
-  realtimeYuanPerImage: 0.006,
-  batchYuanPerImage: 0.0004,
+  realtimeYuanPerImage: ESTIMATED_LOOK_TOKEN_YUAN + 0.004,
+  batchYuanPerImage: ESTIMATED_LOOK_TOKEN_YUAN * 0.5,
   // 队列里前这么多张实时看，其余走批量（和看图队列一致）
   realtimeMax: 50
 } as const
@@ -41,18 +45,56 @@ export const CACHE_HIT_CHECK = {
   minCalls: 10
 } as const
 
-// 云端凭证
-export interface CloudCredentials {
-  dashscopeApiKey?: string
-  aliyunAccessKeyId?: string
-  aliyunAccessKeySecret?: string
+export type CloudCredentials = Partial<Record<AiCredentialKey, string>>
+
+export const CLOUD_ENV_NAMES: Record<AiCredentialKey, string> = {
+  dashscopeApiKey: 'DASHSCOPE_API_KEY',
+  aliyunAccessKeyId: 'ALIYUN_ACCESS_KEY_ID',
+  aliyunAccessKeySecret: 'ALIYUN_ACCESS_KEY_SECRET'
 }
 
-// 读取环境变量中的云端凭证，缺失的字段保持 undefined
-export function readCloudCredentials(env: NodeJS.ProcessEnv = process.env): CloudCredentials {
-  return {
-    dashscopeApiKey: env.DASHSCOPE_API_KEY || undefined,
-    aliyunAccessKeyId: env.ALIYUN_ACCESS_KEY_ID || undefined,
-    aliyunAccessKeySecret: env.ALIYUN_ACCESS_KEY_SECRET || undefined
+let userEnvironment: CloudCredentials = {}
+let savedCredentials: CloudCredentials = {}
+export const TOKEN_PLAN_ENV = 'ALIYUN_TOKEN_PLAN_KEY'
+let windowsUserHasTokenPlan = false
+
+export function setWindowsUserHasTokenPlan(present: boolean): void {
+  windowsUserHasTokenPlan = present
+}
+
+export function isTokenPlanLocalMode(): boolean {
+  const value = process.env[TOKEN_PLAN_ENV]
+  return value === undefined ? windowsUserHasTokenPlan : !!value.trim()
+}
+
+export function bailianUnavailableMessage(fallback: string): string {
+  return isTokenPlanLocalMode() ? TOKEN_PLAN_LOCAL_HINT : fallback
+}
+
+export function setUserEnvironmentCloudCredentials(credentials: CloudCredentials): void {
+  userEnvironment = credentials
+}
+
+export function getSavedCloudCredentials(): CloudCredentials {
+  return savedCredentials
+}
+
+export function setSavedCloudCredentials(credentials: CloudCredentials): void {
+  savedCredentials = credentials
+}
+
+export function readEnvironmentCloudCredentials(env: NodeJS.ProcessEnv = process.env): CloudCredentials {
+  const credentials: CloudCredentials = {}
+  for (const key of AI_CREDENTIAL_KEYS) {
+    const value = (env[CLOUD_ENV_NAMES[key]] ?? userEnvironment[key])?.trim()
+    if (value) credentials[key] = value
   }
+  return credentials
+}
+
+export function readCloudCredentials(): CloudCredentials {
+  const credentials = { ...readEnvironmentCloudCredentials(), ...savedCredentials }
+  // 套餐仅限交互式工具。自定义应用保留本地功能，并阻止回退到按量密钥。
+  if (isTokenPlanLocalMode()) delete credentials.dashscopeApiKey
+  return credentials
 }
