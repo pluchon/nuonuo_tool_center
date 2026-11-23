@@ -155,7 +155,7 @@ export async function recordBatchUsage(meta: CallMeta, usage: unknown): Promise<
 
 // Responses 调用（看图）：图片放在最后；search 为真时带联网搜索，来源只取搜索工具返回的链接
 export async function searchCall(
-  meta: CallMeta & { instructions: string; text: string; imageDataUrl?: string; timeoutMs?: number; search?: boolean }
+  meta: CallMeta & { instructions: string; text: string; imageDataUrl?: string; timeoutMs?: number; search?: boolean; signal?: AbortSignal }
 ): Promise<SearchCallResult> {
   const t0 = Date.now()
   try {
@@ -171,13 +171,13 @@ export async function searchCall(
         ...(meta.search === false ? {} : { tools: [{ type: 'web_search' }] }),
         enable_thinking: false
       } as never,
-      { timeout: meta.timeoutMs ?? BAILIAN_CONFIG.requestTimeoutMs }
-    )) as unknown as { output?: unknown[]; output_text?: string; usage?: unknown }
-    const usage = normalizeResponsesUsage(res.usage)
+      { timeout: meta.timeoutMs ?? BAILIAN_CONFIG.requestTimeoutMs, signal: meta.signal }
+    )) as unknown as { output?: unknown[]; output_text?: string; usage?: unknown; tool_usage?: unknown }
+    const usage = normalizeResponsesUsage(res.usage, res.tool_usage)
     await record(meta, usage, Date.now() - t0)
     return { text: res.output_text ?? '', sources: collectSearchSources(res.output), usage }
   } catch (err) {
-    await record(meta, EMPTY_USAGE, Date.now() - t0, errorText(err))
+    if (!meta.signal?.aborted) await record(meta, EMPTY_USAGE, Date.now() - t0, errorText(err))
     throw err
   }
 }

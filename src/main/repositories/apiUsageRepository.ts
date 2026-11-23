@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm'
+import { and, desc, eq, isNull } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { apiUsage } from '../db/schema'
 
@@ -11,9 +11,10 @@ export async function insertApiUsage(row: ApiUsageInsert): Promise<void> {
   await db.insert(apiUsage).values(row)
 }
 
-// 某类调用最近的成功记录，按时间倒序，用于算命中率
+// 查询近期成功的实时推理。百炼批量推理不支持上下文缓存。
 export async function findRecentUsage(api: string, limit: number): Promise<ApiUsageEntity[]> {
   const { db } = getDatabase()
-  const rows = await db.select().from(apiUsage).where(eq(apiUsage.api, api)).orderBy(desc(apiUsage.id)).limit(limit)
-  return rows.filter((r) => !r.error)
+  return db.select().from(apiUsage)
+    .where(and(eq(apiUsage.api, api), eq(apiUsage.batch, false), isNull(apiUsage.error)))
+    .orderBy(desc(apiUsage.id)).limit(limit)
 }

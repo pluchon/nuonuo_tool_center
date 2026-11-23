@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
-import { aiEvent, aiJob, aiProfile } from '../../src/main/db/schema'
+import { aiEvent, aiJob, aiProfile, apiUsage } from '../../src/main/db/schema'
 import { findRecentUsage, insertApiUsage } from '../../src/main/repositories/apiUsageRepository'
 import { checkHitRate } from '../../src/main/services/ai/bailianClient'
 import { assertCacheMarks, buildMessages, countCacheMarks, stableStringify } from '../../src/main/services/ai/promptPrefix'
@@ -85,6 +85,17 @@ describe('用量统一', () => {
     expect(normalizeResponsesUsage(null).searchCount).toBe(0)
   })
 
+  it('兼容 Responses 新旧计费字段，避免重复加计图片和搜索', () => {
+    const usage = normalizeResponsesUsage({
+      input_tokens: 2800,
+      output_tokens: 200,
+      prompt_tokens_details: { cached_tokens: 1200, cache_creation_input_tokens: 150 },
+      x_details: [{ image_tokens: 500, input_tokens_details: { image_tokens: 500 } }],
+      x_tools: { web_search: { count: 1 } }
+    }, { web_search: { num_requests: 1 } })
+    expect(usage).toEqual({ inputTokens: 2800, cachedTokens: 1200, cacheWriteTokens: 150, imageTokens: 500, outputTokens: 200, searchCount: 1 })
+  })
+
   it('命中率按文本 token 算，图片不进分母', () => {
     expect(textHitRate([{ inputTokens: 1386, cachedTokens: 950, imageTokens: 386 }])).toBeCloseTo(0.95)
     expect(textHitRate([{ inputTokens: 0, cachedTokens: 0, imageTokens: 0 }])).toBeNull()
@@ -146,5 +157,13 @@ describe('AI 表和记账', () => {
     await insertApiUsage({ api: 'chat', model: 'm', inputTokens: 1000, cachedTokens: 0 })
     expect(await checkHitRate('chat')).toBeCloseTo(0.891)
     expect((await findRecentUsage('chat', 20)).length).toBe(10)
+  })
+
+  it('批量和失败请求不会挤占实时缓存统计窗口', async () => {
+    const { db } = getDatabase()
+    await db.insert(apiUsage).values(Array.from({ length: 10 }, () => ({ api: 'look', inputTokens: 1000, imageTokens: 200, cachedTokens: 600 })))
+    await db.insert(apiUsage).values(Array.from({ length: 25 }, () => ({ api: 'look', inputTokens: 1000, batch: true })))
+    await insertApiUsage({ api: 'look', error: '请求失败' })
+    expect(await checkHitRate('look')).toBeCloseTo(0.75)
   })
 })

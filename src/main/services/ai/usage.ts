@@ -41,18 +41,22 @@ export function normalizeChatUsage(usage: unknown): NormalizedUsage {
 }
 
 // Responses：input_tokens 含命中部分；图片 token 在 x_details，联网搜索次数在 x_tools.web_search.count
-export function normalizeResponsesUsage(usage: unknown): NormalizedUsage {
+export function normalizeResponsesUsage(usage: unknown, toolUsage?: unknown): NormalizedUsage {
   const u = obj(usage)
   const d = obj(u.input_tokens_details)
+  const session = obj(u.prompt_tokens_details)
   const details = Array.isArray(u.x_details) ? u.x_details : []
-  const imageTokens = details.reduce((sum: number, x) => sum + num(obj(obj(x).input_tokens_details).image_tokens), 0)
+  const imageTokens = details.reduce((sum: number, x) => {
+    const item = obj(x)
+    return sum + num(obj(item.input_tokens_details).image_tokens ?? item.image_tokens)
+  }, 0)
   return {
     inputTokens: num(u.input_tokens),
-    cachedTokens: num(d.cached_tokens),
-    cacheWriteTokens: num(d.cache_write_tokens),
-    imageTokens,
+    cachedTokens: num(d.cached_tokens ?? session.cached_tokens),
+    cacheWriteTokens: num(d.cache_write_tokens ?? session.cache_creation_input_tokens),
+    imageTokens: num(d.image_tokens ?? imageTokens),
     outputTokens: num(u.output_tokens),
-    searchCount: num(obj(obj(u.x_tools).web_search).count)
+    searchCount: num(obj(obj(toolUsage).web_search).num_requests ?? obj(obj(u.x_tools).web_search).count)
   }
 }
 
