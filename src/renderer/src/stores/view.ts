@@ -10,6 +10,17 @@ export type MainPage = 'gallery' | 'tags' | 'assistant'
 // 正在看的目录：源目录按 id（sub 是子文件夹，空表示整个源目录），类目录按相对图库文件夹的路径（可以带子目录）
 export type DirRef = { kind: 'source'; id: number; sub?: string } | { kind: 'category'; name: string }
 
+const PANEL_KEY = 'ltm.closedRightPanels'
+
+function readClosedPanels(): string[] {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(PANEL_KEY) ?? '[]')
+    return Array.isArray(saved) ? saved.filter((key): key is string => typeof key === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 // 目录引用换成主进程用的格式
 export function toFolderRef(dir: DirRef): FolderRefDTO {
   return dir.kind === 'source' ? { kind: 'source', id: dir.id, sub: dir.sub ?? '' } : { kind: 'category', path: dir.name }
@@ -48,10 +59,33 @@ export const useViewStore = defineStore('view', {
     page: 'gallery' as MainPage,
     view: 'all' as GalleryView,
     dir: null as DirRef | null,
+    closedPanels: readClosedPanels(),
     // 进入图库时要预先选上的标签筛选（标签管理里点“N 张 ›”）；图库读走后清空
     presetTagIds: [] as number[]
   }),
+  getters: {
+    panelKey(state): string {
+      if (state.page !== 'gallery') return state.page
+      if (state.view !== 'dir' || !state.dir) return state.view
+      const dir = state.dir
+      return dir.kind === 'source'
+        ? `source:${dir.id}:${(dir.sub ?? '').toLowerCase()}`
+        : `category:${dir.name.toLowerCase()}`
+    },
+    panelOpen(): boolean {
+      return !this.closedPanels.includes(this.panelKey)
+    }
+  },
   actions: {
+    setPanelOpen(open: boolean): void {
+      if (open === this.panelOpen) return
+      this.closedPanels = open ? this.closedPanels.filter((key) => key !== this.panelKey) : [...this.closedPanels, this.panelKey]
+      try {
+        localStorage.setItem(PANEL_KEY, JSON.stringify(this.closedPanels))
+      } catch {
+        // 存储不可用时继续保留当前会话的选择。
+      }
+    },
     // 切到某个图库视图
     show(view: Exclude<GalleryView, 'dir'>): void {
       this.page = 'gallery'

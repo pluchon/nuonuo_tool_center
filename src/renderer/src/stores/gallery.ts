@@ -116,8 +116,11 @@ export const useGalleryStore = defineStore('gallery', {
       }
       return { ...base, view: v.view, dirs: v.view === 'untagged' ? dirs : undefined }
     },
-    // 切换视图时清掉搜索、筛选和只看开关，排序回到设置里的默认排序
+    // 切换视图时先撤下旧结果，避免新目录查询缓慢或失败时仍能操作上一目录的图片。
     resetFilters(): void {
+      this.items = []
+      this.loaded = false
+      this.error = ''
       this.q = ''
       this.onlyR18 = false
       this.onlyHere = false
@@ -156,13 +159,14 @@ export const useGalleryStore = defineStore('gallery', {
           if (this.primary === null || !ids.has(this.primary)) {
             this.primary = kept[0]
           }
+          void this.loadDetail()
         } else {
           const at = oldIndex >= 0 ? Math.min(oldIndex, items.length - 1) : 0
           this.selectOne(items[at]?.imageId ?? null)
         }
-        void this.loadDetail()
       } catch (err) {
         if (seq === querySeq) {
+          if (!this.loaded) this.selectOne(null)
           this.error = errText(err)
           this.loaded = true
           // 列表里还留着上一次的图时，不能悄悄显示旧结果：提示出来
@@ -294,12 +298,13 @@ export const useGalleryStore = defineStore('gallery', {
     },
     // 当前要改的图：多选时是全部选中的，否则是正在看的那张
     targets(): number[] {
-      return this.multi ? [...this.selected] : this.primary === null ? [] : [this.primary]
+      if (!this.primaryItem) return []
+      return this.multi ? [...this.selected] : [this.primaryItem.imageId]
     },
     // 改名字；失败时提示并保留原名
     async rename(name: string): Promise<boolean> {
       const id = this.primary
-      if (id === null || this.multi) {
+      if (id === null || this.multi || !this.primaryItem) {
         return false
       }
       try {
@@ -324,7 +329,7 @@ export const useGalleryStore = defineStore('gallery', {
         useToastStore().show(errText(err), 'error')
       }
     },
-    // 加标签（单张或多选）；多选时有图已满 5 个就提示跳过了几张
+    // 加标签（单张或多选）；多选时提示有多少张因标签已满而跳过
     async addTag(name: string, categoryId?: number): Promise<boolean> {
       const ids = this.targets()
       if (ids.length === 0 || !name.trim()) {

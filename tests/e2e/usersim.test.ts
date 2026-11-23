@@ -156,31 +156,11 @@ describe('模拟用户全流程', () => {
     await page.click('.filter-chips__x')
     await page.waitForSelector('.gallery__side')
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 2)
-    // 收起 / 展开时网格跟着变宽变窄：面板动画过程中宽度在 0 和 300 之间
-    await page.click('.filter-bar__btn >> nth=2')
-    await page.click('.filter-bar__pill:has-text("RAW")')
-    await page.keyboard.press('Escape')
-    const mid = await page.evaluate(
-      () =>
-        new Promise<number>((done) => {
-          const t0 = performance.now()
-          const tick = (): void => {
-            const el = document.querySelector<HTMLElement>('.gallery__side')
-            if (!el) {
-              done(-1)
-            } else if (performance.now() - t0 > 120) {
-              done(el.getBoundingClientRect().width)
-            } else {
-              requestAnimationFrame(tick)
-            }
-          }
-          requestAnimationFrame(tick)
-        })
-    )
-    expect(mid).toBeGreaterThan(0)
-    expect(mid).toBeLessThan(300)
-    await page.click('.filter-chips__x')
-    await page.waitForSelector('.gallery__side')
+    // 手动收起后可以用同一入口再次展开。
+    await page.getByRole('button', { name: '收起图片详情栏' }).click()
+    await page.locator('.gallery__side').waitFor({ state: 'hidden' })
+    await page.getByRole('button', { name: '展开图片详情栏' }).click()
+    await page.locator('.gallery__side').waitFor()
     // 排序、标签筛选、搜索
     await page.click('.filter-bar__btn >> nth=3')
     await page.click('.filter-bar__opt:has-text("名称")')

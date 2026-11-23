@@ -1,6 +1,6 @@
 <template>
   <div class="image-grid-wrap">
-    <div ref="gridRef" class="image-grid nn-noscroll" @wheel="onWheel">
+    <div ref="gridRef" class="image-grid nn-noscroll" :style="rowStyle" @wheel="onWheel">
       <section v-for="g in groups" :key="g.key" class="image-grid__group" :data-month="g.key">
         <div v-if="g.timeline" class="image-grid__head">
           <span class="image-grid__bar" aria-hidden="true" />
@@ -37,9 +37,10 @@
           </button>
         </div>
 
-        <div v-for="(row, ri) in g.rows" :key="ri" class="image-grid__row" :style="rowStyle">
+        <div v-for="(row, ri) in g.rows" :key="ri" class="image-grid__row" :data-first-id="row.tiles[0].id"
+          :data-row-key="g.key + '/' + ri" @vue:mounted="mountRow" @vue:before-unmount="unmountRow">
           <button
-            v-for="t in row.tiles"
+            v-for="t in !virtual || visibleRows.has(g.key + '/' + ri) ? row.tiles : []"
             :key="t.id"
             class="tile"
             :class="{ 'tile--on': gallery.isSelected(t.id), 'tile--multi': gallery.multi }"

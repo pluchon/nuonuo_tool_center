@@ -49,15 +49,29 @@ describe('性能', () => {
       // 进源目录：主进程查全量列表 + 首屏渲染
       const t1 = Date.now()
       await page.click('.side-nav__label:text-is("pics")')
-      await page.waitForFunction((n) => document.querySelectorAll('.tile').length === n, COUNT, { timeout: 60_000 })
+      await page.waitForFunction((n) => {
+        const total = [...document.querySelectorAll('.image-grid__count')].reduce((sum, e) => sum + parseInt(e.textContent ?? '0'), 0)
+        return total === n && document.querySelectorAll('.tile').length > 0
+      }, COUNT, { timeout: 60_000 })
       await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('.tile__pic')].slice(0, 12).every((i) => i.complete))
       const firstScreenMs = Date.now() - t1
 
-      const listMs = await page.evaluate(async () => {
+      const listing = await page.evaluate(async () => {
+        const overview = await window.api.library.getOverview()
+        if (!overview.ok || !overview.data.sources[0]) throw new Error('未找到测试源目录')
         const t = performance.now()
-        await window.api.gallery.list({ view: 'source', sourceId: 1, sub: '', q: '', sort: 'new', onlyHere: false })
-        return performance.now() - t
+        const result = await window.api.gallery.list({ view: 'source', sourceId: overview.data.sources[0].id, sub: '', sort: 'new' })
+        if (!result.ok || result.data.items.length === 0) throw new Error('未读取到测试图片')
+        return { ms: performance.now() - t, count: result.data.items.length, first: result.data.items[0].imageId, last: result.data.items.at(-1)!.imageId }
       })
+      const listMs = listing.ms
+      expect(listing.count).toBe(COUNT)
+      await page.locator(`.tile[data-id="${listing.first}"]`).click()
+      await page.keyboard.press('End')
+      await page.locator(`.tile--on[data-id="${listing.last}"]`).waitFor()
+      await page.keyboard.press('Home')
+      await page.locator(`.tile--on[data-id="${listing.first}"]`).waitFor()
+      if (COUNT > 200) expect(await page.locator('.tile').count()).toBeLessThan(COUNT)
 
       // 从头滚到尾：数一下这段时间的帧数
       const scroll = await page.evaluate(async () => {

@@ -110,6 +110,11 @@ export default defineComponent({
         draft.value = q
       }
     )
+    watch([() => viewStore.view, () => viewStore.dir], () => {
+      if (timer) clearTimeout(timer)
+      draft.value = ''
+      open.value = null
+    })
 
     const isCategory = computed(() => viewStore.view === 'dir' && viewStore.dir?.kind === 'category')
     const placeholder = computed(() => (gallery.nameOnly ? '按图片名找' : '来找找你想要的标签与图片名'))

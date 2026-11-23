@@ -2,6 +2,7 @@
 
 // 标签管理页：左边搜索栏 + 分类卡片列表，右边标签操作面板
 .tags-view {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;

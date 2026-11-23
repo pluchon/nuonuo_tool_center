@@ -1,15 +1,14 @@
-import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowReactive, watch, type VNode } from 'vue'
 import type { GalleryItemVO } from '@shared/api'
 import { thumbUrl } from '@/api/gallery'
 import { startNativeDrag } from '@/api/files'
+import { hasInteractiveModal } from '@/components/dialogs/modal'
 import { useGalleryStore } from '@/stores/gallery'
 import { useToastStore } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
-import { useTransferStore } from '@/stores/transfer'
 import { useViewerStore } from '@/stores/viewer'
 import { useViewStore } from '@/stores/view'
 import { useSuggestStore } from '@/stores/suggest'
-import { useOrganizeStore } from '@/stores/organize'
 import { groupConsecutive, layoutRows, monthKey, monthLabel, TILE_GAP, type LayoutRow } from '@/utils/gridLayout'
 import GridScrollbar from './GridScrollbar.vue'
 
@@ -41,10 +40,8 @@ export default defineComponent({
     const toast = useToastStore()
     const settings = useSettingsStore()
     const viewer = useViewerStore()
-    const transfer = useTransferStore()
     const viewStore = useViewStore()
     const suggest = useSuggestStore()
-    const organize = useOrganizeStore()
     const gridRef = ref<HTMLElement | null>(null)
     const width = ref(0)
 
@@ -90,8 +87,28 @@ export default defineComponent({
       })
     })
 
-    // 行很多时让浏览器跳过屏幕外的行（缩略图本身也是懒加载）
-    const rowStyle = computed(() => ({ containIntrinsicSize: `auto ${gallery.rowHeight + 40}px` }))
+    // 大图库给每行保留准确的高度，只在视口附近挂载卡片。所有行共用一个观察器。
+    const virtual = computed(() => gallery.items.length > 200)
+    const visibleRows = shallowReactive(new Set<string>())
+    const rowStyle = computed(() => ({ '--tile-row-height': `${gallery.rowHeight + 40}px` }))
+    let rowObserver: IntersectionObserver | undefined
+    const mountRow = ({ el }: VNode): void => {
+      rowObserver ??= new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          const row = entry.target as HTMLElement
+          if (!row.isConnected) continue
+          const key = row.dataset.rowKey!
+          if (entry.isIntersecting) visibleRows.add(key)
+          else visibleRows.delete(key)
+        }
+      }, { root: gridRef.value, rootMargin: '600px 0px' })
+      rowObserver.observe(el as HTMLElement)
+    }
+    const unmountRow = ({ el }: VNode): void => {
+      const row = el as HTMLElement
+      rowObserver?.unobserve(row)
+      visibleRows.delete(row.dataset.rowKey!)
+    }
 
     // 按下的时间：按住约 0.4 秒再拖是系统原生拖拽（带出原文件到别的软件），直接拖是拖到侧栏源目录
     let pressAt = 0
@@ -155,7 +172,21 @@ export default defineComponent({
     // 把某张图滚到看得见的位置：单按一下平滑滚过去，按住不放连续跳时直接到位（平滑滚动会跟不上）
     const reveal = (id: number, smooth = false): void => {
       void nextTick(() => {
-        gridRef.value?.querySelector(`[data-id="${id}"]`)?.scrollIntoView({ block: 'nearest', behavior: smooth ? 'smooth' : 'auto' })
+        const grid = gridRef.value
+        if (!grid) return
+        const tile = grid.querySelector(`[data-id="${id}"]`)
+        if (tile) {
+          tile.scrollIntoView({ block: 'nearest', behavior: smooth ? 'smooth' : 'auto' })
+          return
+        }
+        // Home、End 和大图返回可以跨过尚未渲染的卡片，先定位它所属的行。
+        for (const group of groups.value) {
+          const row = group.rows.find((r) => r.tiles.some((t) => t.id === id))
+          if (row) {
+            grid.querySelector(`[data-first-id="${row.tiles[0].id}"]`)?.scrollIntoView({ block: 'nearest' })
+            return
+          }
+        }
       })
     }
 
@@ -182,7 +213,7 @@ export default defineComponent({
     // 网格的键盘操作；焦点在输入框里或对话框开着时不处理
     const onKey = (e: KeyboardEvent): void => {
       const el = e.target as HTMLElement | null
-      if (viewer.open || settings.dialogOpen || gallery.deleteAsk || transfer.mode || organize.dialog || (el &&(el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))) {
+      if (hasInteractiveModal() || el?.matches('input, textarea, select') || el?.isContentEditable) {
         return
       }
       // Delete：删除选中的图（走确认）
@@ -255,6 +286,7 @@ export default defineComponent({
       window.addEventListener('keydown', onKey)
     })
     onBeforeUnmount(() => {
+      rowObserver?.disconnect()
       observer?.disconnect()
       window.removeEventListener('keydown', onKey)
     })
@@ -277,6 +309,6 @@ export default defineComponent({
       }
     )
 
-    return { gallery, viewer, suggest, gridRef, groups, rowStyle, item, masked, thumbUrl, onTileClick, onTileDown, onDragStart, onWheel }
+    return { gallery, viewer, suggest, gridRef, groups, rowStyle, virtual, visibleRows, mountRow, unmountRow, item, masked, thumbUrl, onTileClick, onTileDown, onDragStart, onWheel }
   }
 })

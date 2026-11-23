@@ -39,11 +39,12 @@ export default defineComponent({
         return ''
       }
       let key = ''
-      for (const s of el.querySelectorAll<HTMLElement>('[data-month]')) {
-        if (s.offsetTop - 8 > el.scrollTop) {
+      for (const child of el.children) {
+        const section = child as HTMLElement
+        if (section.offsetTop - 8 > el.scrollTop) {
           break
         }
-        key = s.dataset.month ?? ''
+        key = section.dataset.month ?? ''
       }
       return key ? monthLabel(key) : ''
     }
@@ -75,10 +76,14 @@ export default defineComponent({
           measure()
         })
       }
-      scrolling.value = true
+      if (!scrolling.value) {
+        scrolling.value = true
+        props.target?.classList.add('image-grid--scrolling')
+      }
       clearTimeout(idle)
       idle = window.setTimeout(() => {
         scrolling.value = false
+        props.target?.classList.remove('image-grid--scrolling')
       }, IDLE_MS)
     }
 
@@ -180,6 +185,9 @@ export default defineComponent({
       old?.removeEventListener('scrollend', onScrollEnd)
       old?.removeEventListener('wheel', onUserScroll)
       old?.removeEventListener('keydown', onUserScroll)
+      old?.classList.remove('image-grid--scrolling')
+      clearTimeout(idle)
+      scrolling.value = false
       observer?.disconnect()
       if (!el) {
         return
@@ -226,6 +234,7 @@ export default defineComponent({
       props.target?.removeEventListener('scrollend', onScrollEnd)
       props.target?.removeEventListener('wheel', onUserScroll)
       props.target?.removeEventListener('keydown', onUserScroll)
+      props.target?.classList.remove('image-grid--scrolling')
       observer?.disconnect()
       cancelAnimationFrame(frame)
       clearTimeout(idle)

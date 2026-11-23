@@ -12,6 +12,7 @@ import TagsView from '@/views/tags/TagsView.vue'
 import AssistantView from '@/views/assistant/AssistantView.vue'
 import { useFoldersStore } from '@/stores/folders'
 import { useGalleryStore } from '@/stores/gallery'
+import { hasInteractiveModal } from '@/components/dialogs/modal'
 import { useLibraryStore } from '@/stores/library'
 import { useScanStore } from '@/stores/scan'
 import { useTagsStore } from '@/stores/tags'
@@ -108,7 +109,7 @@ export default defineComponent({
 
     // Ctrl + F：跳到当前页面的搜索框并选中已有的字（弹窗、大图开着时不抢）
     const onFindKey = (e: KeyboardEvent): void => {
-      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'f' || document.querySelector('[aria-modal="true"]')) {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'f' || hasInteractiveModal()) {
         return
       }
       const input = document.querySelector<HTMLInputElement>('.filter-bar__input, .tags-view__input')

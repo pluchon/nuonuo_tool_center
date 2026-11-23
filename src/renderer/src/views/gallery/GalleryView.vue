@@ -1,6 +1,6 @@
 <template>
-  <!-- 第一次打开：还没有任何源目录 -->
-  <main v-if="library.firstRun" class="gallery gallery--welcome">
+  <!-- 空图库的首页提供导入入口，其他视图保留各自的空状态。 -->
+  <main v-if="library.firstRun && viewStore.view === 'all'" class="gallery gallery--welcome">
     <section class="gallery__welcome" aria-label="开始使用">
       <NonoArt pose="welcome" size="large" />
       <button class="gallery__pick" type="button" :disabled="picker.busy" @click="picker.openImport()">
@@ -29,16 +29,14 @@
       <div v-else-if="gallery.loaded && gallery.items.length === 0" class="gallery__empty nn-appear">
         <NonoArt pose="empty" />
         <span class="gallery__text">{{ emptyText }}</span>
+        <button v-if="showUntaggedLink" class="gallery__untagged" type="button" @click="showUntagged">查看未打标签的图片</button>
       </div>
       <!-- 换视图或筛选条件时网格整体淡入（扫描中的刷新不换 key，不闪） -->
       <ImageGrid v-else-if="gallery.items.length > 0" :key="gallery.queryKey" class="nn-appear" />
     </main>
-    <!-- 详情面板：列表空了往右收起、网格跟着变宽；有图了再展开 -->
-    <Transition name="side">
-      <div v-if="gallery.items.length > 0" class="gallery__side">
-        <DetailPanel />
-      </div>
-    </Transition>
+    <RightPanel v-if="gallery.items.length" :key="viewStore.panelKey" class="gallery__side" :open="viewStore.panelOpen">
+      <DetailPanel />
+    </RightPanel>
     <ConfirmDialog
       :open="!!gallery.deleteAsk"
       :title="deleteTitle"

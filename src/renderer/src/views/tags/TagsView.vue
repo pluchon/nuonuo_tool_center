@@ -58,15 +58,17 @@
       </div>
     </section>
 
-    <TagPanel
-      :tag="creating ? null : selected"
-      :creating="creating || !selected"
-      :default-category-id="defaultCategoryId"
-      @saved="onSaved"
-      @cancel="creating = false"
-      @delete="askDelete"
-      @view-images="viewImages"
-    />
+    <RightPanel :open="viewStore.panelOpen">
+      <TagPanel
+        :tag="creating ? null : selected"
+        :creating="creating || !selected"
+        :default-category-id="defaultCategoryId"
+        @saved="onSaved"
+        @cancel="creating = false"
+        @delete="askDelete"
+        @view-images="viewImages"
+      />
+    </RightPanel>
 
     <KindDialog :open="kindOpen" @close="kindOpen = false" />
     <ConfirmDialog

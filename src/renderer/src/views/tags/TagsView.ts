@@ -3,6 +3,7 @@ import type { TagVO } from '@shared/api'
 import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue'
 import KindDialog from '@/components/tags/KindDialog.vue'
 import TagPanel from '@/components/tags/TagPanel.vue'
+import RightPanel from '@/components/layout/RightPanel.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useTagsStore } from '@/stores/tags'
 import { useToastStore } from '@/stores/toast'
@@ -15,7 +16,7 @@ const SWATCHES = [0, 1, 2, 3, 4, 5, 7, 9]
 // 标签管理页（照原型 isTags）：左边搜索栏 + 按分类分组的标签卡片，右边标签操作面板
 export default defineComponent({
   name: 'TagsView',
-  components: { TagPanel, KindDialog, ConfirmDialog },
+  components: { TagPanel, KindDialog, ConfirmDialog, RightPanel },
   setup() {
     const tagsStore = useTagsStore()
     const settings = useSettingsStore()
@@ -81,10 +82,12 @@ export default defineComponent({
     const defaultCategoryId = computed(() => tagsStore.categories[0]?.id ?? 0)
 
     const pick = (id: number): void => {
+      viewStore.setPanelOpen(true)
       selectedId.value = id
       creating.value = false
     }
     const startCreate = (): void => {
+      viewStore.setPanelOpen(true)
       creating.value = true
     }
     const onSaved = (id: number): void => {
@@ -140,6 +143,7 @@ export default defineComponent({
     })
 
     return {
+      viewStore,
       tagsStore,
       query,
       creating,

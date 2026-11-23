@@ -500,3 +500,22 @@
 .filter-bar__box--full {
   border-color: var(--a-line2);
 }
+
+// 详情面板展开时按图库列的实际宽度换行，给搜索框和筛选按钮保留点击空间。
+@container (max-width: 650px) {
+  .filter-bar {
+    flex-wrap: wrap;
+    gap: 4px;
+    border-radius: 20px;
+  }
+
+  .filter-bar__search {
+    min-width: 128px;
+  }
+
+  .filter-bar__btn, .filter-bar__r18 {
+    gap: 4px;
+    padding-inline: 8px;
+    white-space: nowrap;
+  }
+}

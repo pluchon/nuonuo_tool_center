@@ -30,6 +30,12 @@
   padding: 0 14px 18px 0;
   outline: none;
 
+  // 滚动中避免为每张经过视口的卡片重复计算背景模糊，停下后恢复。
+  &--scrolling .tile,
+  &--scrolling .tile__badge {
+    backdrop-filter: none;
+  }
+
   &__group {
     display: flex;
     flex-direction: column;
@@ -162,6 +168,8 @@
 
   // content-visibility 会把绘制裁在行框里：上下各留出空间给悬停弹起的描边和投影，再用负外边距抵掉，图的位置不变
   &__row {
+    box-sizing: content-box;
+    height: var(--tile-row-height);
     display: flex;
     gap: 8px;
     padding: 6px 2px 14px;
@@ -366,6 +374,7 @@
   }
 
   &__foot {
+    height: 18px;
     display: flex;
     align-items: center;
     gap: 4px;

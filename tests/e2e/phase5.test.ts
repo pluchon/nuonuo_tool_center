@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
-import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
+import { closeLeftoverApps, freshCase, launchApp, pinViewport, setAppearance, shot } from './support/app'
 import { importFolder } from './support/picker'
 
 afterEach(async () => {
@@ -87,7 +87,7 @@ describe('第五阶段：编辑', () => {
     await addTag(page, '原神')
     await addTag(page, '表情包')
     await expect(page.locator('.tag-editor__tag').allTextContents()).resolves.toEqual(['甘雨 ✕', '原神 ✕', '表情包 ✕'])
-    await expect(page.locator('.tag-editor__count').textContent()).resolves.toBe('3 / 5')
+    await expect(page.locator('.tag-editor__count').textContent()).resolves.toBe('3 / 15')
     await shot(page, 'edit-detail-light')
 
     // 另一张图：输入“甘”出候选，点它加上；已有标签沿用它的分类（分类按钮锁定）
@@ -102,13 +102,15 @@ describe('第五阶段：编辑', () => {
     await expect(page.locator('.tag-editor__kind').innerText()).resolves.toContain('角色')
     await expect(page.locator('.tag-editor__kind--locked').count()).resolves.toBe(1)
     await page.fill('.tag-editor__input', '')
-    for (const name of ['一', '二', '三', '四']) {
+    const extraTags = Array.from({ length: 10 }, (_, i) => `测试标签${i + 1}`)
+    for (const name of ['一', '二', '三', '四', ...extraTags]) {
       await addTag(page, name)
     }
-    await expect(page.locator('.tag-editor__input').getAttribute('placeholder')).resolves.toBe('已满 5 个，先删掉一个')
+    await expect(page.locator('.tag-editor__input').getAttribute('placeholder')).resolves.toBe('已满 15 个，先删掉一个')
     // 移除一个
     await page.click('.tag-editor__tag:has-text("四") .tag-editor__x')
-    await page.waitForFunction(() => document.querySelectorAll('.tag-editor__tag').length === 4)
+    await page.waitForFunction(() => document.querySelectorAll('.tag-editor__tag').length === 14)
+    expect(await page.locator('.tag-editor__input').getAttribute('readonly')).toBeNull()
 
     // R-18：网格里遮挡并打角标，侧栏计数
     await page.click('.detail-panel__switch')
@@ -137,8 +139,18 @@ describe('第五阶段：编辑', () => {
     // 全部图片：按标签筛选（任一），出现条件标签
     await page.click('.side-nav__label:text-is("全部图片")')
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 2)
+    // 最小窗口且详情面板展开时，搜索框仍可输入，所有筛选按钮都在工具栏内。
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(960, 600))
+    await expect.poll(() => page.locator('.filter-bar__input').evaluate((input) => input.clientWidth)).toBeGreaterThan(80)
+    await page.locator('.filter-bar__input').click()
+    expect(await page.locator('.filter-bar').evaluate((bar) => {
+      const right = bar.getBoundingClientRect().right
+      return [...bar.querySelectorAll('button')].every((button) => button.getBoundingClientRect().right <= right)
+    })).toBe(true)
+    await pinViewport(app, page)
     await page.click('.filter-bar__btn:has-text("标签")')
-    await expect(page.locator('.filter-bar__check .filter-bar__check-label').allTextContents()).resolves.toEqual(['甘雨', '原神', '表情包', '一', '二', '三'])
+    const availableTags = await page.locator('.filter-bar__check .filter-bar__check-label').allTextContents()
+    expect(availableTags.sort()).toEqual(['甘雨', '原神', '表情包', '一', '二', '三', ...extraTags].sort())
     await shot(page, 'filter-tags-light')
     await page.click('.filter-bar__check:has-text("表情包")')
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 1)
