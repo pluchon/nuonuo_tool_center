@@ -407,6 +407,29 @@
     font-variant-numeric: tabular-nums;
   }
 
+  &__credential {
+    flex: 1;
+    max-width: 240px;
+    min-width: 0;
+    height: 30px;
+    box-sizing: border-box;
+    padding: 0 10px;
+    border-radius: 8px;
+    border: 1px solid var(--a-line2);
+    background: var(--a-bg);
+    color: var(--c-i-3B3047);
+    font: inherit;
+    font-size: 12px;
+
+    &::placeholder {
+      color: var(--c-i-6E6280);
+    }
+
+    &:focus-visible {
+      outline: 1px solid var(--a);
+    }
+  }
+
   &__btn {
     flex: none;
     height: 30px;

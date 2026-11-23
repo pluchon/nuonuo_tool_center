@@ -254,7 +254,7 @@ describe('模拟用户全流程', () => {
 
     // 设置：每个分类点一遍，开关来回切
     await page.click('.title-bar__gear')
-    for (const tab of ['外观', '常规', '图库', '数据与缓存', '快捷键', '关于']) {
+    for (const tab of ['外观', '常规', '图库', '数据与缓存', 'AI', '快捷键', '关于']) {
       await page.click(`.set-dlg__tab:has-text("${tab}")`)
     }
     await page.click('.set-dlg__tab:has-text("常规")')

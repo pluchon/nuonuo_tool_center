@@ -39,6 +39,7 @@ import {
 } from '../services/tagManageService'
 import { getScanState, startScan, stopScan } from '../services/scan/scanService'
 import { getSettings, updateSettings } from '../services/settingsService'
+import { getAiCredentialStatus, saveAiCredentialSettings } from '../services/aiCredentialSettings'
 import { categoryHomeOf, changeCategoryHome } from '../services/categoryHome'
 import { backupFileName, cleanThumbCache, exportBackup, folderBytes, importCustomBackground } from '../services/systemService'
 import { applySystemSettings } from '../window/systemSettings'
@@ -105,6 +106,8 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
     }
     return next
   })
+  handle(IpcChannel.settingsGetAiCredentials, async () => getAiCredentialStatus())
+  handle(IpcChannel.settingsSaveAiCredentials, async (_event, patch: unknown) => saveAiCredentialSettings(patch))
   // 更改类目录保存的位置：系统的选文件夹对话框，取消返回 null
   handle(IpcChannel.settingsPickCategoryHome, async (event) => {
     requireDatabase()

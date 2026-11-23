@@ -13,6 +13,8 @@ export const IpcChannel = {
   systemRetryDatabase: 'system:retryDatabase',
   settingsGet: 'settings:get',
   settingsUpdate: 'settings:update',
+  settingsGetAiCredentials: 'settings:getAiCredentials',
+  settingsSaveAiCredentials: 'settings:saveAiCredentials',
   settingsPickCategoryHome: 'settings:pickCategoryHome',
   settingsPickBackground: 'settings:pickBackground',
   systemDataInfo: 'system:dataInfo',

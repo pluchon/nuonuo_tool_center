@@ -30,7 +30,7 @@
           </div>
 
           <!-- 换分类时内容淡入 -->
-          <div :key="settings.tab" class="set-dlg__pane nn-noscroll nn-appear">
+          <div :key="settings.tab" class="set-dlg__pane nn-noscroll nn-appear" @focusout="onCredentialFocusOut">
             <section v-for="g in groups" :key="g.title" class="set-dlg__group" :aria-label="g.title">
               <h3 class="set-dlg__group-title">{{ g.title }}</h3>
               <div
@@ -53,6 +53,27 @@
                   >
                     <span class="set-dlg__knob"></span>
                   </button>
+
+                  <template v-else-if="r.type === 'credential'">
+                    <input
+                      v-model="credentialDraft[r.key]"
+                      class="set-dlg__credential"
+                      type="password"
+                      autocomplete="off"
+                      spellcheck="false"
+                      :aria-label="r.label"
+                      :placeholder="credentialStatus?.localOnly && r.key === 'dashscopeApiKey' ? '套餐本地模式' : credentialStatus ? credentialPlaceholders[credentialStatus[r.key]] : ''"
+                      :disabled="!credentialStatus || (credentialStatus.localOnly && r.key === 'dashscopeApiKey')"
+                      @keydown.enter.stop.prevent="persistCredentials()"
+                    />
+                    <button
+                      v-if="credentialStatus?.[r.key] === 'saved'"
+                      class="set-dlg__btn set-dlg__credential-reset"
+                      type="button"
+                      :aria-label="`恢复默认：${r.label}`"
+                      @click="persistCredentials(r.key)"
+                    >恢复默认</button>
+                  </template>
 
                   <div v-else-if="r.type === 'seg'" class="set-dlg__seg" role="radiogroup" :aria-label="r.label">
                     <button
@@ -121,6 +142,7 @@
                       :value="settings.values[r.key]"
                       :style="{ '--fill': `${((settings.values[r.key] - r.min) / (r.max - r.min)) * 100}%` }"
                       @input="onRange(r.key, $event)"
+                      @change="flushPending"
                     />
                     <span class="set-dlg__range-val">{{ settings.values[r.key] }}{{ r.unit }}</span>
                   </template>

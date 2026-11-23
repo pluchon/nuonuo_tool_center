@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import type { ElectronApplication, Page } from 'playwright'
@@ -44,7 +44,7 @@ function rootVar(page: Page, name: string): Promise<string> {
 }
 
 describe('第十一阶段：设置', () => {
-  it('六个分类、外观即时生效、主题背景和自定义背景、常规开关、缓存清理、导出备份、托盘', async () => {
+  it('七个分类、外观即时生效、主题背景和自定义背景、常规开关、缓存清理、导出备份、托盘', async () => {
     const dirs = freshCase('phase11-settings')
     const source = join(dirs.root, 'pics')
     mkdirSync(source, { recursive: true })
@@ -62,10 +62,10 @@ describe('第十一阶段：设置', () => {
     await stubDialogs(app, bgFile, backup)
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 90_000 })
 
-    // 齿轮打开，六个分类
+    // 齿轮打开，七个分类
     await page.click('.title-bar__gear')
     await page.waitForSelector('.set-dlg')
-    await expect(page.locator('.set-dlg__tab').allTextContents()).resolves.toEqual(['外观', '常规', '图库', '数据与缓存', '快捷键', '关于'])
+    await expect(page.locator('.set-dlg__tab').allTextContents()).resolves.toEqual(['外观', '常规', '图库', 'AI', '数据与缓存', '快捷键', '关于'])
     await shot(page, 'settings-look-light')
 
     // 主题色即时生效
@@ -205,5 +205,122 @@ describe('第十一阶段：设置', () => {
     await expect.poll(() => readdirSync(join(dirs.data, 'backgrounds'))).toEqual([kept.data.customBackground])
     expect(kept.data.customBackground).toBe(latest)
     await again.app.close()
+  })
+
+  it('AI 设置默认读取环境变量，切换分类时加密自动保存，重启后可以恢复默认', async () => {
+    const dirs = freshCase('phase11-ai-settings')
+    const keyFile = join(dirs.data, 'ai-credentials.enc')
+    const overrides = { ALIYUN_ACCESS_KEY_ID: 'fixture-environment-id' }
+    const { app, page } = await launchApp(dirs, overrides)
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    await page.waitForSelector('.app-shell')
+    await page.locator('.side-nav__item').filter({ hasText: '诺诺助手' }).click()
+    await page.waitForSelector('.assistant__nokey')
+    await openTab(page, 'AI')
+    await page.waitForSelector('input[placeholder="使用环境变量"]')
+    const dashscope = page.getByLabel('百炼 API Key', { exact: true })
+    const accessId = page.getByLabel('AccessKey ID', { exact: true })
+    const accessSecret = page.getByLabel('AccessKey Secret', { exact: true })
+    const save = page.getByRole('button', { name: '保存', exact: true })
+    expect(await page.getByRole('tab', { name: 'AI', exact: true }).getAttribute('aria-selected')).toBe('true')
+    expect(await dashscope.getAttribute('placeholder')).toBe('未设置')
+    expect(await accessId.getAttribute('placeholder')).toBe('使用环境变量')
+    expect(await accessId.inputValue()).toBe('')
+    expect(await save.count()).toBe(0)
+    expect(await dashscope.getAttribute('type')).toBe('password')
+
+    await dashscope.fill(' fixture-saved-api-key ')
+    await accessId.fill('fixture-saved-access-id')
+    await accessSecret.fill('fixture-saved-access-secret')
+    expect(existsSync(keyFile)).toBe(false)
+    await openTab(page, '外观')
+    await openTab(page, 'AI')
+    await page.waitForSelector('input[aria-label="AccessKey Secret"][placeholder="已保存"]')
+    expect(await dashscope.inputValue()).toBe('')
+    expect(await page.evaluate(() => window.api.ai.status())).toEqual({ ok: true, data: { ready: true } })
+    expect(await page.evaluate(() => window.api.settings.getAiCredentials())).toEqual({
+      ok: true, data: { dashscopeApiKey: 'saved', aliyunAccessKeyId: 'saved', aliyunAccessKeySecret: 'saved' }
+    })
+    const ciphertext = readFileSync(keyFile)
+    expect(ciphertext.includes(Buffer.from('fixture-saved-api-key'))).toBe(false)
+    const plaintext = await app.evaluate(async ({ safeStorage }, bytes) =>
+      (await safeStorage.decryptStringAsync(Buffer.from(bytes))).result, [...ciphertext])
+    expect(JSON.parse(plaintext)).toEqual({
+      dashscopeApiKey: 'fixture-saved-api-key', aliyunAccessKeyId: 'fixture-saved-access-id', aliyunAccessKeySecret: 'fixture-saved-access-secret'
+    })
+    await page.getByRole('dialog', { name: '设置' }).getByRole('button', { name: '关闭', exact: true }).click()
+    await page.waitForSelector('.assistant__welcome')
+    expect(errors).toEqual([])
+    await app.close()
+
+    const reopened = await launchApp(dirs, overrides)
+    await reopened.page.waitForSelector('.app-shell')
+    await setAppearance(reopened.page, 'dark')
+    await openTab(reopened.page, 'AI')
+    for (const label of ['百炼 API Key', 'AccessKey ID', 'AccessKey Secret']) {
+      await reopened.page.getByRole('button', { name: `恢复默认：${label}` }).click()
+    }
+    await reopened.page.waitForSelector('input[aria-label="AccessKey Secret"][placeholder="未设置"]')
+    expect(await reopened.page.getByLabel('AccessKey ID', { exact: true }).getAttribute('placeholder')).toBe('使用环境变量')
+    expect(await reopened.page.evaluate(() => window.api.ai.status())).toEqual({ ok: true, data: { ready: false } })
+    expect(existsSync(keyFile)).toBe(false)
+    await reopened.app.close()
+  })
+
+  it('AI 密钥自动保存可处理缓慢写入、无效输入、清空草稿和关闭窗口', async () => {
+    const dirs = freshCase('phase11-ai-autosave')
+    const keyFile = join(dirs.data, 'ai-credentials.enc')
+    const overrides = { ALIYUN_ACCESS_KEY_ID: 'fixture-environment-id' }
+    const { app, page } = await launchApp(dirs, overrides)
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 })
+    await app.evaluate(({ safeStorage }) => {
+      const encrypt = safeStorage.encryptStringAsync.bind(safeStorage)
+      safeStorage.encryptStringAsync = async (text) => {
+        if (text.includes('fixture-slow-id')) await new Promise((done) => setTimeout(done, 700))
+        if (text.includes('fixture-disk-error')) throw new Error('模拟写入失败')
+        return encrypt(text)
+      }
+    })
+    await openTab(page, 'AI')
+    const accessId = page.getByLabel('AccessKey ID', { exact: true })
+    const accessSecret = page.getByLabel('AccessKey Secret', { exact: true })
+    await page.waitForSelector('input[placeholder="使用环境变量"]')
+    await accessId.fill('    ')
+    await accessId.press('Enter')
+    expect(await accessId.inputValue()).toBe('')
+    expect(existsSync(keyFile)).toBe(false)
+
+    await accessId.fill('fixture-slow-id')
+    await accessId.press('Enter')
+    await accessId.fill('fixture-latest-id')
+    await accessId.press('Enter')
+    await expect.poll(() => accessId.inputValue()).toBe('')
+    const readSaved = async (desktop: ElectronApplication) => JSON.parse(await desktop.evaluate(async ({ safeStorage }, bytes) =>
+      (await safeStorage.decryptStringAsync(Buffer.from(bytes))).result, [...readFileSync(keyFile)]))
+    expect(await readSaved(app)).toEqual({ aliyunAccessKeyId: 'fixture-latest-id' })
+
+    await accessId.fill('invalid key')
+    await accessId.press('Enter')
+    await page.getByText('AI 密钥格式不正确', { exact: true }).waitFor()
+    expect(await readSaved(app)).toEqual({ aliyunAccessKeyId: 'fixture-latest-id' })
+    await page.getByRole('button', { name: '知道了' }).click()
+    await accessId.fill('x'.repeat(4097))
+    await accessId.press('Enter')
+    await page.getByText('AI 密钥格式不正确', { exact: true }).waitFor()
+    await page.getByRole('button', { name: '知道了' }).click()
+    await accessId.fill('fixture-disk-error')
+    await accessId.press('Enter')
+    await page.getByText('无法保存 AI 密钥', { exact: true }).waitFor()
+    expect(await readSaved(app)).toEqual({ aliyunAccessKeyId: 'fixture-latest-id' })
+    await accessId.fill('')
+
+    // 输入最后一个字段后直接关闭窗口，由正常退出流程等待写入结束。
+    await accessSecret.fill('fixture-key-on-exit')
+    await app.close()
+    const reopened = await launchApp(dirs, overrides)
+    expect(await readSaved(reopened.app)).toEqual({ aliyunAccessKeyId: 'fixture-latest-id', aliyunAccessKeySecret: 'fixture-key-on-exit' })
+    await reopened.app.close()
   })
 })

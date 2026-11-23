@@ -1,4 +1,4 @@
-import type { AppSettings } from '@shared/settings'
+import type { AiCredentialPatch, AiCredentialStatus, AppSettings } from '@shared/settings'
 import { unwrap } from './request'
 
 // 读取全部设置
@@ -9,6 +9,14 @@ export function fetchSettings(): Promise<AppSettings> {
 // 修改若干设置，返回修改后的全部设置
 export function saveSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
   return unwrap(window.api.settings.update(patch))
+}
+
+export function fetchAiCredentials(): Promise<AiCredentialStatus> {
+  return unwrap(window.api.settings.getAiCredentials())
+}
+
+export function saveAiCredentials(patch: AiCredentialPatch): Promise<AiCredentialStatus> {
+  return unwrap(window.api.settings.saveAiCredentials(patch))
 }
 
 // 用系统对话框选类目录的新位置；取消返回 null

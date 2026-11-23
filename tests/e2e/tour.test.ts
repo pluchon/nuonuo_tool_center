@@ -134,7 +134,7 @@ async function lightAndDarkPass(page: Page, mode: 'light' | 'dark'): Promise<voi
 
   // 设置各页
   await page.click('.title-bar__gear')
-  for (const tab of ['外观', '常规', '图库', '数据与缓存', '快捷键', '关于']) {
+  for (const tab of ['外观', '常规', '图库', 'AI', '数据与缓存', '快捷键', '关于']) {
     await page.click(`.set-dlg__tab:has-text("${tab}")`)
     await page.waitForTimeout(150)
     await s(`17-settings-${tab}`)

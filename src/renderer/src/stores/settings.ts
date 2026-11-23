@@ -4,7 +4,7 @@ import { ACCENT_COLORS, APPEARANCE_MODES, DEFAULT_SETTINGS, type AppSettings } f
 import { fetchSettings, pickBackground, pickCategoryHome, saveSettings } from '@/api/settings'
 
 // 设置弹窗左侧的分类
-export type SettingsTab = 'look' | 'general' | 'library' | 'data' | 'keys' | 'about'
+export type SettingsTab = 'look' | 'general' | 'library' | 'ai' | 'data' | 'keys' | 'about'
 
 // 上次的外观（明暗和主题色）缓存在本机：图库数据打不开时读不到设置，靠它让“打不开”页面保持用户习惯的外观
 const LOOK_CACHE_KEY = 'ltm.look'

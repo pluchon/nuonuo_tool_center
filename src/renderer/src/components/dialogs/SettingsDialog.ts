@@ -1,11 +1,13 @@
 import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { DataInfoVO } from '@shared/api'
-import { ACCENT_COLORS, RANGE_LIMITS, SCAN_FORMATS, type AppSettings, type BackgroundKey, type ScanFormat } from '@shared/settings'
-import { backgroundUrl } from '@/api/settings'
+import { ACCENT_COLORS, AI_CREDENTIAL_KEYS, RANGE_LIMITS, SCAN_FORMATS, type AiCredentialKey, type AiCredentialPatch, type AiCredentialStatus, type AppSettings, type BackgroundKey, type ScanFormat } from '@shared/settings'
+import { backgroundUrl, fetchAiCredentials, saveAiCredentials } from '@/api/settings'
 import { cleanCache, exportBackup, fetchDataInfo, openDataDir } from '@/api/system'
+import { useAssistantStore } from '@/stores/assistant'
 import { useLibraryStore } from '@/stores/library'
 import { useSettingsStore, type SettingsTab } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
+import { useViewStore } from '@/stores/view'
 import { defaultBackground } from '@/theme/palette'
 import { sceneOf } from '@/theme/scenes'
 
@@ -24,6 +26,7 @@ export type SettingRow =
   | { type: 'range'; label: string; key: RangeKey; min: number; max: number; unit: string }
   | { type: 'chips'; label: string }
   | { type: 'path'; label: string; path: string; btn: string; run: () => void; disabled?: boolean }
+  | { type: 'credential'; label: string; key: AiCredentialKey }
   | { type: 'value'; label: string; value: string; btn?: string; run?: () => void }
   | { type: 'update'; label: string }
   | { type: 'kbd'; label: string; keys: string[] }
@@ -37,6 +40,7 @@ export const TABS: Array<{ key: SettingsTab; label: string; icon: string }> = [
   { key: 'look', label: '外观', icon: 'M12 3a9 9 0 1 0 0 18c1.1 0 1.5-.8 1.5-1.5 0-.9-.6-1.3-.6-2.1 0-.8.7-1.4 1.6-1.4H17a4 4 0 0 0 4-4c0-5-4-9-9-9zM7.5 11h.01M10 7.5h.01M15 7.5h.01' },
   { key: 'general', label: '常规', icon: 'M4 6h16M4 12h16M4 18h16M8 4v4M16 10v4M10 16v4' },
   { key: 'library', label: '图库', icon: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' },
+  { key: 'ai', label: 'AI', icon: 'M11 3l2.2 5.8L19 11l-5.8 2.2L11 19l-2.2-5.8L3 11l5.8-2.2L11 3zM19 3v4m-2-2h4m-2 11v5m-2.5-2.5h5' },
   { key: 'data', label: '数据与缓存', icon: 'M5 6c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3zM5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3' },
   { key: 'keys', label: '快捷键', icon: 'M3 7h18v10H3zM7 11h.01M11 11h.01M15 11h.01M8 14h8' },
   { key: 'about', label: '关于', icon: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 8h.01' }
@@ -73,7 +77,10 @@ const CHECK_MS = 1200
 // 滑块松手前不写库，停下这么久后保存
 const SAVE_DELAY_MS = 250
 
-// 设置弹窗（照原型 setDlg）：900×620 磨砂玻璃，左侧分类、右侧分组卡片；改动即时生效，没有保存按钮
+const CREDENTIAL_PLACEHOLDERS = { saved: '已保存', environment: '使用环境变量', missing: '未设置' } as const
+const emptyCredentials = (): Record<AiCredentialKey, string> => ({ dashscopeApiKey: '', aliyunAccessKeyId: '', aliyunAccessKeySecret: '' })
+
+// 设置弹窗（照原型 setDlg）：900×620 磨砂玻璃，左侧分类、右侧分组卡片
 export default defineComponent({
   name: 'SettingsDialog',
   setup() {
@@ -83,6 +90,9 @@ export default defineComponent({
     const info = ref<DataInfoVO | null>(null)
     const update = ref<UpdatePhase>('idle')
     const busy = ref(false)
+    const credentialStatus = ref<AiCredentialStatus | null>(null)
+    const credentialDraft = ref(emptyCredentials())
+    const queuedCredentials = new Map<AiCredentialKey, AiCredentialPatch>()
     const closeRef = ref<HTMLButtonElement | null>(null)
     let updateTimer: ReturnType<typeof setTimeout> | null = null
     let saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -92,6 +102,59 @@ export default defineComponent({
     const isDark = computed(() => settings.theme === 'dark')
 
     const fail = (err: unknown): void => toast.show(err instanceof Error ? err.message : String(err), 'error')
+
+    const loadCredentials = async (): Promise<void> => {
+      try {
+        credentialStatus.value = await fetchAiCredentials()
+      } catch (err) {
+        fail(err)
+      }
+    }
+    const persistCredentials = (resetKey?: AiCredentialKey): void => {
+      if (!credentialStatus.value) return
+      const patch: AiCredentialPatch = {}
+      if (resetKey) {
+        credentialDraft.value[resetKey] = ''
+      }
+      for (const key of resetKey ? [resetKey] : AI_CREDENTIAL_KEYS) {
+        const value = key === resetKey ? null : credentialDraft.value[key].trim()
+        if (value === '') {
+          credentialDraft.value[key] = ''
+        } else if (queuedCredentials.get(key)?.[key] !== value) {
+          patch[key] = value
+          queuedCredentials.set(key, patch)
+        }
+      }
+      if (!Object.keys(patch).length) return
+      void saveAiCredentials(patch)
+        .then((next) => {
+          const wasReady = credentialStatus.value?.dashscopeApiKey !== 'missing'
+          credentialStatus.value = next
+          for (const key of AI_CREDENTIAL_KEYS) {
+            if (queuedCredentials.get(key) === patch && patch[key] === credentialDraft.value[key].trim()) {
+              credentialDraft.value[key] = ''
+            }
+          }
+          if (wasReady !== (next.dashscopeApiKey !== 'missing') && useViewStore().page === 'assistant') {
+            void useAssistantStore().enter()
+          }
+        })
+        .catch(fail)
+        .finally(() => {
+          for (const key of AI_CREDENTIAL_KEYS) {
+            if (queuedCredentials.get(key) === patch) queuedCredentials.delete(key)
+          }
+        })
+    }
+    // 在密钥字段之间切换时合并提交，避免只保存一半 AccessKey。
+    const onCredentialFocusOut = (event: FocusEvent): void => {
+      if (settings.tab !== 'ai') return
+      const next = event.relatedTarget
+      if (!(next instanceof HTMLElement) || !next.closest('.set-dlg__credential, .set-dlg__credential-reset')) {
+        persistCredentials()
+      }
+    }
+    const flushCredentials = (): void => persistCredentials()
 
     // 改一项或几项：存进库，以主进程返回为准
     const save = (patch: Partial<AppSettings>): void => {
@@ -307,6 +370,15 @@ export default defineComponent({
               ]
             }
           ]
+        case 'ai':
+          return [{
+            title: '阿里云',
+            rows: [
+              { type: 'credential', label: '百炼 API Key', key: 'dashscopeApiKey' },
+              { type: 'credential', label: 'AccessKey ID', key: 'aliyunAccessKeyId' },
+              { type: 'credential', label: 'AccessKey Secret', key: 'aliyunAccessKeySecret' }
+            ]
+          }]
         case 'data':
           return [
             { title: '存储位置', rows: [{ type: 'path', label: '数据文件夹', path: info.value?.dataDir ?? '', btn: '打开', run: onOpenData }] },
@@ -375,6 +447,7 @@ export default defineComponent({
     }
     const close = (): void => {
       flushPending()
+      persistCredentials()
       settings.closeDialog()
     }
 
@@ -392,24 +465,34 @@ export default defineComponent({
         if (open) {
           update.value = 'idle'
           void loadInfo()
+          if (settings.tab === 'ai' && !credentialStatus.value) void loadCredentials()
           setTimeout(() => closeRef.value?.focus())
+        } else {
+          persistCredentials()
         }
       }
     )
     // 切到“数据与缓存”时重新读一次缓存大小
     watch(
       () => settings.tab,
-      (tab) => {
+      (tab, previous) => {
+        if (previous === 'ai') persistCredentials()
         if (settings.dialogOpen && (tab === 'data' || tab === 'library')) {
           void loadInfo()
         }
+        if (settings.dialogOpen && tab === 'ai' && !credentialStatus.value) void loadCredentials()
       }
     )
 
-    onMounted(() => window.addEventListener('keydown', onKey, true))
+    onMounted(() => {
+      window.addEventListener('keydown', onKey, true)
+      window.addEventListener('beforeunload', flushCredentials)
+    })
     onBeforeUnmount(() => {
       window.removeEventListener('keydown', onKey, true)
+      window.removeEventListener('beforeunload', flushCredentials)
       flushPending()
+      persistCredentials()
       if (updateTimer) {
         clearTimeout(updateTimer)
       }
@@ -427,9 +510,15 @@ export default defineComponent({
       update,
       closeRef,
       busy,
+      credentialStatus,
+      credentialDraft,
+      credentialPlaceholders: CREDENTIAL_PLACEHOLDERS,
+      persistCredentials,
+      onCredentialFocusOut,
       save,
       toggle,
       onRange,
+      flushPending,
       pickBg,
       replaceBg,
       toggleFormat,
