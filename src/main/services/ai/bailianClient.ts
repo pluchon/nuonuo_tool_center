@@ -45,6 +45,7 @@ export interface ChatCallInput extends CallMeta {
   messages: PromptMessage[]
   tools?: unknown[]
   timeoutMs?: number
+  maxTokens?: number
 }
 
 // 对话调用的结果
@@ -124,6 +125,7 @@ export async function chatCall(input: ChatCallInput): Promise<ChatCallResult> {
       model: input.model,
       messages: input.messages,
       ...(input.tools && input.tools.length > 0 ? { tools: input.tools } : {}),
+      ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
       // 百炼扩展参数放在顶层；思考会让输出 token 翻好几倍，诺诺的任务用不到
       enable_thinking: false
     }

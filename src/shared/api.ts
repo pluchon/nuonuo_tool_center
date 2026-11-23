@@ -497,11 +497,20 @@ export interface AiConversationVO {
   updatedAt: string
 }
 
+export const AI_CONTEXT_WINDOW = 475_000
+
+// 单次对话请求占用的上下文，含输入、生成内容和已命中的缓存前缀。
+export interface AiContextUsage {
+  usedTokens: number
+  estimated: boolean
+}
+
 // 对话里的一条消息：你说的话，或诺诺的回复
 export interface AiMessageVO {
   id: number
   role: 'user' | 'assistant'
   text: string
+  contextUsage?: AiContextUsage
   // 回复上方的一行灰字：这次怎么找的（如“搜索了图库：标签「猫」，找到 3 张”）；没有检索时为空
   how: string | null
   // 结果图（按回复时的顺序；已经删掉的图不再出现）
