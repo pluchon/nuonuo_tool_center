@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
-import { closeLeftoverApps, freshCase, launchApp, setAppearance } from './support/app'
+import { captureWindow, closeLeftoverApps, freshCase, launchApp, setAppearance } from './support/app'
 import { importFolder } from './support/picker'
 
 // 网格自绘滚动条：显示、拖动、点轨道、滚轮、月份气泡、不盖住卡片；截图在 test-output/scrollbar/
@@ -45,20 +45,17 @@ describe('网格滚动条', () => {
 
     // 滚动条占着右侧窄边，不盖住任何卡片（等详情面板滑入、网格按新宽度排好）
     await page.mouse.move(5, 400)
-    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity))
-    await page.waitForTimeout(300)
-    const overlap = await page.evaluate(() => {
+    await expect.poll(() => page.evaluate(() => {
       const bar = document.querySelector('.grid-scroll')!.getBoundingClientRect()
       return [...document.querySelectorAll('.tile')].some((t) => t.getBoundingClientRect().right > bar.left + 0.5)
-    })
-    expect(overlap).toBe(false)
+    }), { timeout: 5000 }).toBe(false)
     await page.mouse.move(5, 400)
     await page.waitForTimeout(1200)
-    await page.screenshot({ path: join(OUT, 'idle-light.png') })
+    await captureWindow(page, join(OUT, 'idle-light.png'), app)
 
     // 悬停变粗
     await thumb.hover()
-    await expect.poll(() => thumb.evaluate((el) => el.getBoundingClientRect().width)).toBe(10)
+    await expect.poll(() => thumb.evaluate((el) => el.getBoundingClientRect().width), { timeout: 5000 }).toBe(10)
 
     // 拖滑块往下：网格跟着滚，气泡显示月份
     const box = (await thumb.boundingBox())!
@@ -68,7 +65,7 @@ describe('网格滚动条', () => {
     expect(await scrollTop(page)).toBeGreaterThan(200)
     await expect.poll(() => page.locator('.grid-scroll__bubble--on').textContent()).toMatch(/\d{4} 年 \d+ 月/)
     await page.waitForTimeout(300)
-    await page.screenshot({ path: join(OUT, 'drag-light.png') })
+    await captureWindow(page, join(OUT, 'drag-light.png'), app)
     await page.mouse.up()
 
     // 点轨道底部：平滑滚到底
@@ -106,13 +103,12 @@ describe('网格滚动条', () => {
     // 重载后默认在“全部图片”（只显示打过标签的），回到“还没打标签”
     await page.locator('.side-nav__item').filter({ hasText: '还没打标签' }).first().click()
     await page.waitForSelector('.grid-scroll', { state: 'visible' })
-    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity))
     const b2 = (await thumb.boundingBox())!
     await page.mouse.move(b2.x + b2.width / 2, b2.y + b2.height / 2)
     await page.mouse.down()
     await page.mouse.move(b2.x + b2.width / 2, b2.y + b2.height / 2 + 260, { steps: 6 })
     await page.waitForTimeout(300)
-    await page.screenshot({ path: join(OUT, 'drag-dark.png') })
+    await captureWindow(page, join(OUT, 'drag-dark.png'), app)
     await page.mouse.up()
 
     await app.close()

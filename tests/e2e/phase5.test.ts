@@ -1,10 +1,11 @@
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, pinViewport, setAppearance, shot } from './support/app'
 import { importFolder } from './support/picker'
+import { bmp24 } from '../support/bmp'
 
 afterEach(async () => {
   await closeLeftoverApps()
@@ -51,6 +52,32 @@ async function addTag(page: Page, name: string, category?: string): Promise<void
 }
 
 describe('第五阶段：编辑', () => {
+  it('导入 BMP 和 AVIF 后，可以按格式分别筛选', async () => {
+    const dirs = freshCase('filter-formats')
+    const source = join(dirs.root, 'pics')
+    mkdirSync(source)
+    writeFileSync(join(source, '蓝底.bmp'), bmp24(32, 32))
+    await sharp({ create: { width: 32, height: 32, channels: 3, background: '#bb5588' } })
+      .avif().toFile(join(source, '粉底.avif'))
+    const { app, page } = await launchApp(dirs)
+    await importFolder(app, page, source)
+    await page.locator('.side-nav__label:text-is("pics")').click()
+    for (const file of ['蓝底.bmp', '粉底.avif']) {
+      await page.locator('.tile').filter({ hasText: file }).click()
+      await addTag(page, '样本')
+    }
+    await page.locator('.side-nav__label:text-is("全部图片")').click()
+    await expect.poll(() => page.locator('.tile').count()).toBe(2)
+    await page.click('.filter-bar__btn:has-text("更多")')
+    for (const [format, file] of [['BMP', '蓝底.bmp'], ['AVIF', '粉底.avif']]) {
+      const pill = page.locator(`.filter-bar__pill:text-is("${format}")`)
+      await pill.click()
+      await expect.poll(() => page.locator('.tile__name').allTextContents()).toEqual([file])
+      await pill.click()
+      await expect.poll(() => page.locator('.tile').count()).toBe(2)
+    }
+  })
+
   it('改名、标签、R-18、批量编辑、标签 / 目录 / 更多筛选', async () => {
     const dirs = freshCase('phase5-edit')
     const source = join(dirs.root, 'pics')

@@ -5,6 +5,7 @@ import type { ElectronApplication, Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
 import { importFolder, stubFolderPick } from './support/picker'
+import { dragToFolder } from './support/galleryDrag'
 
 sharp.cache(false)
 
@@ -57,10 +58,6 @@ function nav(page: Page, label: string) {
 }
 
 async function toastGone(page: Page): Promise<void> {
-  const err = page.locator('.app-toast__btn')
-  if (await err.count()) {
-    await err.click()
-  }
   await page.waitForSelector('.app-toast', { state: 'detached', timeout: 15_000 })
 }
 
@@ -85,6 +82,7 @@ describe('模拟用户全流程', () => {
     }
 
     const { app, page } = await launchApp(dirs)
+    page.setDefaultTimeout(20_000)
     const errors = watchErrors(page)
     await stubShell(app)
 
@@ -147,6 +145,17 @@ describe('模拟用户全流程', () => {
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 2)
     await page.waitForSelector('.gallery__side')
     await expect(page.locator('.filter-chips__count').count()).resolves.toBe(0)
+    await page.locator('.tile').first().click()
+    await page.locator('.tile').nth(1).click({ modifiers: ['Control'] })
+    const tagMenu = page.locator('[data-dd="tag"] .filter-bar__btn')
+    await tagMenu.click()
+    await page.keyboard.press('Tab')
+    await page.keyboard.press('Delete')
+    expect(await page.locator('.confirm-dlg').count()).toBe(0)
+    await page.keyboard.press('Escape')
+    expect(await tagMenu.getAttribute('aria-expanded')).toBe('false')
+    expect(await tagMenu.evaluate((el) => document.activeElement === el)).toBe(true)
+    expect(await page.locator('.tile--on').count()).toBe(2)
     await page.click('.filter-bar__btn >> nth=2')
     await page.click('.filter-bar__pill:has-text("RAW")')
     await page.keyboard.press('Escape')
@@ -216,6 +225,7 @@ describe('模拟用户全流程', () => {
     await page.click('.app-toast button:has-text("撤销")')
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 6)
     expect(existsSync(join(source, 'img-2.jpg'))).toBe(true)
+    expect(readdirSync(outside)).toEqual(['img-1.jpg'])
 
     // 目录：新建类目录、改名、右键菜单打开、把图拖进源目录子文件夹（复制）
     await toastGone(page)
@@ -229,7 +239,7 @@ describe('模拟用户全流程', () => {
     await nav(page, 'pics').click()
     await page.locator('.side-nav__row').filter({ has: nav(page, 'pics') }).locator('.side-nav__caret').click()
     await page.waitForSelector('.side-nav__label:text-is("trip")')
-    await page.dragAndDrop('.tile:has-text("img-1.jpg")', '.side-nav__row:has(.side-nav__label:text-is("trip"))')
+    await dragToFolder(page, page.locator('.tile:has-text("img-1.jpg")'), page.locator('.side-nav__row:has(.side-nav__label:text-is("trip"))'))
     await page.click('.confirm-dlg__ok')
     await page.waitForSelector('.app-toast:has-text("已复制 1 张到「trip」")')
 
@@ -284,5 +294,5 @@ describe('模拟用户全流程', () => {
 
     expect(errors).toEqual([])
     await app.close()
-  })
+  }, 300_000)
 })

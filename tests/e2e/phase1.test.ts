@@ -146,7 +146,7 @@ describe('第一阶段：数据隔离、设置、图库打不开', () => {
     expect(readFileSync(join(broken.data, 'logs', 'main.log'), 'utf8')).toContain('打开或迁移数据库失败')
   })
 
-  it('标题栏的窗口按钮：最大化/还原、最小化、关闭（正常退出并释放锁）', async () => {
+  it.skipIf(process.env.LTM_E2E_HIDDEN === '1')('标题栏的窗口按钮：最大化/还原、最小化、关闭（正常退出并释放锁）', async () => {
     const { app, page } = await launchApp(main)
     await page.waitForSelector('.app-shell')
     const state = (): Promise<{ max: boolean; min: boolean }> =>

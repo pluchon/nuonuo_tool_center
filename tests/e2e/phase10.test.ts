@@ -103,9 +103,10 @@ describe('第十阶段：大图查看', () => {
 
     // 原始大小：一个像素对一个像素
     await page.click('.viewer__pill:has-text("原始大小")')
-    await page.waitForTimeout(300)
-    const actual = (await page.locator('.viewer__pic').boundingBox())!
-    expect(Math.abs(actual.width - 3000)).toBeLessThan(4)
+    await expect.poll(async () => {
+      const bounds = await page.locator('.viewer__pic').boundingBox()
+      return Math.abs((bounds?.width ?? 0) - 3000)
+    }, { timeout: 10_000 }).toBeLessThan(4)
     await page.click('.viewer__pill:has-text("适应窗口")')
     await expect(zoomText(page)).resolves.toBe('100%')
 
@@ -114,9 +115,8 @@ describe('第十阶段：大图查看', () => {
     await page.click('.viewer__round[aria-label="水平翻转"]')
     await expect(page.locator('.viewer__pic').getAttribute('style')).resolves.toContain('rotate(90deg)')
     await expect(page.locator('.viewer__round[aria-label="水平翻转"]').getAttribute('aria-pressed')).resolves.toBe('true')
-    await page.waitForTimeout(300)
-    // 转过来以后仍然整张放得下
-    await expect(fullyInside(page)).resolves.toBe(true)
+    // 旋转完成后，整张图片仍在可视区域内。
+    await expect.poll(() => fullyInside(page), { timeout: 10_000 }).toBe(true)
     await shot(page, 'viewer-rotated-light')
     await page.click('.viewer__pill:has-text("还原")')
     await expect(page.locator('.viewer__pic').getAttribute('style')).resolves.toContain('rotate(0deg)')

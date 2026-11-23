@@ -1,10 +1,13 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import sharp from 'sharp'
 import type { ElectronApplication, Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
 import { importFolder } from './support/picker'
+import { bmp24 } from '../support/bmp'
 
 // 测试进程里 sharp 读过的文件会被它的缓存占着（Windows 上删不掉），关掉缓存
 sharp.cache(false)
@@ -44,7 +47,7 @@ function rootVar(page: Page, name: string): Promise<string> {
 }
 
 describe('第十一阶段：设置', () => {
-  it('七个分类、外观即时生效、主题背景和自定义背景、常规开关、缓存清理、导出备份、托盘', async () => {
+  it('七个分类、外观即时生效、主题背景和自定义背景、常规开关、缓存清理、导出备份', async () => {
     const dirs = freshCase('phase11-settings')
     const source = join(dirs.root, 'pics')
     mkdirSync(source, { recursive: true })
@@ -52,8 +55,8 @@ describe('第十一阶段：设置', () => {
     for (const [i, c] of ['#F6CDD8', '#BBD5EE', '#BFE3D6'].entries()) {
       await sharp({ create: { width: 640, height: 420, channels: 3, background: c } }).jpeg().toFile(join(source, `p${i}.jpg`))
     }
-    const bgFile = join(dirs.root, 'my-bg.png')
-    await sharp({ create: { width: 3200, height: 2000, channels: 3, background: '#9FC9A8' } }).png().toFile(bgFile)
+    const bgFile = join(dirs.root, 'my-bg.bmp')
+    writeFileSync(bgFile, bmp24(3200, 2000))
     const backup = join(dirs.root, 'backup.tar.gz')
 
     const { app, page } = await launchApp(dirs)
@@ -178,15 +181,6 @@ describe('第十一阶段：设置', () => {
     await page.click('.app-toast button:has-text("撤销")')
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 3)
 
-    // 关闭窗口时最小化到托盘：点关闭只是藏起来
-    await openTab(page, '常规')
-    await row(page, '关闭窗口时').locator('.set-dlg__seg-btn:has-text("最小化到托盘")').click()
-    await page.keyboard.press('Escape')
-    await page.click('.title-bar__win--close')
-    await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(false)
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show())
-    await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true)
-
     // 深色 + 主题背景
     await setAppearance(page, 'dark')
     await openTab(page, '外观')
@@ -205,6 +199,30 @@ describe('第十一阶段：设置', () => {
     await expect.poll(() => readdirSync(join(dirs.data, 'backgrounds'))).toEqual([kept.data.customBackground])
     expect(kept.data.customBackground).toBe(latest)
     await again.app.close()
+  })
+
+  // 托盘恢复依赖真实窗口可见性，在独立桌面验证。
+  it.skipIf(process.env.LTM_E2E_HIDDEN === '1')('关闭到托盘后再次启动同一图库会恢复窗口', async () => {
+    const dirs = freshCase('phase11-tray')
+    const { app, page } = await launchApp(dirs)
+    try {
+      await page.waitForSelector('.app-shell')
+      // 关闭窗口时最小化到托盘：点关闭只是藏起来
+      await openTab(page, '常规')
+      await row(page, '关闭窗口时').locator('.set-dlg__seg-btn:has-text("最小化到托盘")').click()
+      await page.keyboard.press('Escape')
+      await page.click('.title-bar__win--close')
+      await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(false)
+      // 再次启动同一图库，现有窗口应从托盘恢复。
+      const executable = await app.evaluate(() => process.execPath)
+      await promisify(execFile)(executable, [process.cwd()], {
+        env: { ...process.env, LTM_DATA_DIR: dirs.data, LTM_CATEGORY_HOME: dirs.library },
+        windowsHide: true, timeout: 15_000
+      })
+      await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true)
+    } finally {
+      await app.close()
+    }
   })
 
   it('AI 设置默认读取环境变量，切换分类时加密自动保存，重启后可以恢复默认', async () => {
@@ -296,7 +314,7 @@ describe('第十一阶段：设置', () => {
     await accessId.press('Enter')
     await accessId.fill('fixture-latest-id')
     await accessId.press('Enter')
-    await expect.poll(() => accessId.inputValue()).toBe('')
+    await expect.poll(() => accessId.inputValue(), { timeout: 10_000 }).toBe('')
     const readSaved = async (desktop: ElectronApplication) => JSON.parse(await desktop.evaluate(async ({ safeStorage }, bytes) =>
       (await safeStorage.decryptStringAsync(Buffer.from(bytes))).result, [...readFileSync(keyFile)]))
     expect(await readSaved(app)).toEqual({ aliyunAccessKeyId: 'fixture-latest-id' })

@@ -9,7 +9,7 @@ export async function launchWithMockBailian(dirs: CaseDirs, rejectedImages = 0) 
     const requests: string[] = []
     const main = globalThis as typeof globalThis & { bailianFixtureRequests?: string[] }
     main.bailianFixtureRequests = requests
-    const usage = { prompt_tokens: 15, completion_tokens: 4, total_tokens: 19 }
+    const usage = { prompt_tokens: 15, completion_tokens: 4, total_tokens: 19, prompt_tokens_details: { cached_tokens: 9 } }
     const jsonBlock = (value: object): string => '```json\n' + JSON.stringify(value) + '\n```'
     let remainingRejections = toReject
     globalThis.fetch = async (input, init) => {

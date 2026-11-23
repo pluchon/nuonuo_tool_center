@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, it } from 'vitest'
-import { closeLeftoverApps, freshCase, setAppearance } from './support/app'
+import { captureWindow, closeLeftoverApps, freshCase, setAppearance } from './support/app'
 import { importFolder } from './support/picker'
 import { launchWithMockBailian } from './support/mockBailian'
 
@@ -76,27 +76,42 @@ describe('README 截图', () => {
     await importFolder(app, page, src)
     await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 120_000 })
 
-    // 按示例打标签（按名字找到图片 id）
-    await page.evaluate(async (samples) => {
-      const res = (await window.api.gallery.list({ view: 'untagged', sort: 'new' })) as unknown as { data: { items: Array<{ imageId: number; name: string }> } }
-      const byName = new Map(res.data.items.map((i) => [i.name.replace(/\.jpg$/, ''), i.imageId]))
-      const tags = [...new Set(samples.flatMap((s) => s.tags))]
-      for (const t of tags) {
-        const ids = samples.filter((s) => s.tags.includes(t)).map((s) => byName.get(s.name)).filter((x): x is number => x !== undefined)
-        await window.api.edit.addTag({ imageIds: ids, name: t })
-      }
-    }, SAMPLES)
-
     // 等本地分级和模拟看图完成，再截取 AI 建议页面。
     await page.waitForSelector('.rating-pill', { state: 'detached', timeout: 120_000 })
     await page.waitForFunction(
-      () => {
+      (expected) => {
         const row = [...document.querySelectorAll('.side-nav__item')].find((e) => e.querySelector('.side-nav__label')?.textContent === 'AI 建议')
-        return Number(row?.querySelector('.side-nav__count')?.textContent ?? 0) >= 3
+        return Number(row?.querySelector('.side-nav__count')?.textContent ?? 0) === expected
       },
-      null,
+      SAMPLES.length,
       { timeout: 300_000 }
     )
+
+    // 已复核的示例归入类目录用于检索，其余图片保留在 AI 建议中。
+    const category = join(dirs.library, '已归档风景')
+    mkdirSync(category, { recursive: true })
+    await page.evaluate(async ({ category, samples }) => {
+      const roots = await window.api.library.getOverview()
+      if (!roots.ok) throw new Error(roots.message)
+      const query = { view: 'source' as const, sourceId: roots.data.sources[0].id, sort: 'new' as const }
+      const list = await window.api.gallery.list(query)
+      if (!list.ok) throw new Error(list.message)
+      const ids = new Map(list.data.items.map((item) => [item.name, item.imageId]))
+      const tagged = samples.map((s) => {
+        const id = ids.get(s.name + '.jpg')
+        if (!id) throw new Error('示例图片尚未导入：' + s.name)
+        return { id, tags: s.tags }
+      })
+      const imageIds = tagged.map((item) => item.id)
+      const review = await window.api.suggestion.decideMany(imageIds, false)
+      if (!review.ok) throw new Error(review.message)
+      for (const name of new Set(tagged.flatMap((item) => item.tags))) {
+        const result = await window.api.edit.addTag({ imageIds: tagged.filter((item) => item.tags.includes(name)).map((item) => item.id), name })
+        if (!result.ok) throw new Error(result.message)
+      }
+      const copy = await window.api.files.copy(query, imageIds, [category])
+      if (!copy.ok || copy.data.done !== imageIds.length) throw new Error('示例图片归档失败')
+    }, { category, samples: SAMPLES.filter((s) => s.tags.length) })
 
     for (const mode of ['light', 'dark'] as const) {
       await setAppearance(page, mode)
@@ -107,18 +122,18 @@ describe('README 截图', () => {
       await page.mouse.move(5, 400)
       await settle(page)
       await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('img')].every((i) => i.complete))
-      await page.screenshot({ path: join(OUT, `screenshot-${mode}.png`) })
+      await captureWindow(page, join(OUT, `screenshot-${mode}.png`), app)
 
-      // 诺诺助手：本地就能对上的一句话找图
+      // 模拟百炼按风景标签和横向构图检索已归档图片。
       await page.locator('.side-nav__label:text-is("诺诺助手")').click()
       await page.waitForSelector('.assistant__input')
-      await page.fill('.assistant__input', '找海边的风景')
+      await page.fill('.assistant__input', '想看横向的风景图')
       await page.press('.assistant__input', 'Enter')
       await page.waitForSelector('.assistant__reply .assistant__pic', { timeout: 120_000 })
       await page.mouse.move(5, 400)
       await settle(page)
       await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('img')].every((i) => i.complete))
-      await page.screenshot({ path: join(OUT, `assistant-${mode}.png`) })
+      await captureWindow(page, join(OUT, `assistant-${mode}.png`), app)
 
       // AI 建议：选中一张，看诺诺的建议卡
       await page.locator('.side-nav__label:text-is("AI 建议")').click()
@@ -128,7 +143,7 @@ describe('README 截图', () => {
       await page.mouse.move(5, 400)
       await settle(page)
       await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('img')].every((i) => i.complete))
-      await page.screenshot({ path: join(OUT, `suggest-${mode}.png`) })
+      await captureWindow(page, join(OUT, `suggest-${mode}.png`), app)
     }
     await app.close()
   }, 900_000)

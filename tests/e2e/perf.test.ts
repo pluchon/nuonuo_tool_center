@@ -11,9 +11,9 @@ afterEach(async () => {
   await closeLeftoverApps()
 })
 
-// 性能测试图片数（和用户的二次元目录同一量级）；只在 LTM_PERF=1 时跑，平时跳过
+// 隐藏的 Electron 窗口限制动画回调频率，滚动帧率必须在可见窗口测量。
 const COUNT = Number(process.env.LTM_PERF_COUNT ?? 3000)
-const run = process.env.LTM_PERF === '1' ? it : it.skip
+const run = process.env.LTM_PERF === '1' && process.env.LTM_E2E_HIDDEN !== '1' ? it : it.skip
 
 // 生成一张各不相同的小图：底色和一小块像素按序号变，保证内容哈希都不同；宽高比也轮着变
 async function makeImage(file: string, i: number): Promise<void> {

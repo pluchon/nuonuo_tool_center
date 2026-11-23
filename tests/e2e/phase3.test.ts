@@ -77,7 +77,7 @@ describe('第三阶段：导入和扫描', () => {
     const at = words.indexOf('本地分级中')
     const footer = at >= 0 ? [...words.slice(0, at), ...words.slice(at + 2)] : words
     // 队列状态取决于本地分级进度和凭证配置，扫描计数始终来自实际文件。
-    expect(['诺诺在看图', '看图待配置']).toContain(footer[0])
+    expect(['看图队列', '看图待配置']).toContain(footer[0])
     expect(footer[1]).toMatch(/^\d+$/)
     expect(footer.slice(2)).toEqual(['一键整理', (IMAGE_COUNT + 2).toLocaleString('zh-CN'), '张', '刚刚扫描完成', '重新扫描'])
     await shot(page, 'scanned-light')

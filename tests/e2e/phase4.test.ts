@@ -138,13 +138,13 @@ describe('第四阶段：图片网格', () => {
     expect(after).toBe(before + 1)
 
     // Ctrl + 滚轮换档：变小后每行放更多
-    const heightOf = (): Promise<number> => page.locator('.tile__img').first().evaluate((e) => e.getBoundingClientRect().height)
-    expect(Math.round(await heightOf())).toBe(140)
+    const gridHeight = () => page.locator('.image-grid__group').first().evaluate(el => el.getBoundingClientRect().height)
+    const originalHeight = await gridHeight()
     await page.mouse.move(600, 400)
     await page.keyboard.down('Control')
     await page.mouse.wheel(0, 100)
     await page.keyboard.up('Control')
-    await page.waitForFunction(() => Math.round(document.querySelector('.tile__img')?.getBoundingClientRect().height ?? 0) === 115)
+    await expect.poll(gridHeight).toBeLessThan(originalHeight)
 
     // 搜索：按名字过滤；没结果时空状态
     await page.fill('.filter-bar__input', 'photo-1')

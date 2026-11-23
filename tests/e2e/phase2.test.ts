@@ -70,7 +70,7 @@ describe('第二阶段：按画布换主界面', () => {
       ['AI 建议', '0']
     ])
     expect(await page.locator('.side-nav__hint').allTextContents()).toEqual(['还没有源目录', '还没有类目录'])
-    expect((await page.locator('.status-footer').innerText()).split(/\s+/).filter(Boolean)).toEqual(['诺诺在看图', '0', '一键整理', '0', '张', '还没有扫描过', '重新扫描'])
+    expect((await page.locator('.status-footer').innerText()).split(/\s+/).filter(Boolean)).toEqual(['看图队列', '0', '一键整理', '0', '张', '还没有扫描过', '重新扫描'])
     // 诺诺插画和品牌头像真的加载出来了
     await page.waitForFunction(() =>
       [...document.querySelectorAll<HTMLImageElement>('.nono-art, .title-bar__brand')].every((i) => i.complete && i.naturalWidth > 0)
@@ -123,11 +123,11 @@ describe('第二阶段：按画布换主界面', () => {
     await page.waitForSelector('.app-toast', { state: 'detached', timeout: 15_000 })
     await importFolder(app, page, source, '.side-nav__add[aria-label="导入源目录"]')
     await page.waitForSelector('.app-toast:has-text("与已导入的目录重叠")')
-    // 出错的提示条不自动消失，点“知道了”关掉
+    // 错误提示可以手动关闭，也会在用户不操作时自行消失。
     await page.click('.app-toast__btn')
     await importFolder(app, page, dirs.root, '.side-nav__add[aria-label="导入源目录"]')
     await page.waitForSelector('.app-toast:has-text("重叠")')
-    await page.click('.app-toast__btn')
+    await page.locator('.app-toast').waitFor({ state: 'detached', timeout: 10_000 })
     // 取消：什么都不发生
     await stubFolderPick(app, null)
     await page.click('.side-nav__add[aria-label="导入源目录"]')

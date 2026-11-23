@@ -2,7 +2,11 @@
 const { app, BrowserWindow } = require('electron')
 
 app.whenReady().then(() => {
-  const win = new BrowserWindow({ width: 1280, height: 820, useContentSize: true, show: true, autoHideMenuBar: true })
+  const win = new BrowserWindow({
+    width: 1280, height: 820, useContentSize: true,
+    show: process.env.LTM_E2E_HIDDEN !== '1', autoHideMenuBar: true
+  })
+  if (process.env.LTM_E2E_HIDDEN === '1') win.webContents.setBackgroundThrottling(false)
   void win.loadFile(process.env.PROTO_FILE)
 })
 

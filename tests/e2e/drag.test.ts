@@ -4,6 +4,7 @@ import sharp from 'sharp'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeLeftoverApps, freshCase, launchApp } from './support/app'
 import { importFolder } from './support/picker'
+import { dragToFolder } from './support/galleryDrag'
 
 sharp.cache(false)
 
@@ -29,6 +30,26 @@ describe('拖到别的软件', () => {
     await importFolder(app, page, source)
     await page.locator('.side-nav__label:text-is("pics")').click()
     await page.waitForFunction(() => document.querySelectorAll('.tile').length === 2)
+    const tile = page.locator('.tile:has-text("a.jpg")')
+    const bounds = await tile.boundingBox()
+    if (!bounds) throw new Error('测试图片不可见')
+    const x = bounds.x + bounds.width / 2
+    const y = bounds.y + bounds.height / 2
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    try {
+      await page.waitForTimeout(500)
+      await page.mouse.move(x + 18, y)
+      await page.mouse.move(x + 30, y)
+    } finally {
+      await page.mouse.up()
+    }
+    await expect.poll(() => app.evaluate(() => (globalThis as typeof globalThis & {
+      capturedDrag?: { files?: string[] }
+    }).capturedDrag?.files)).toEqual([join(source, 'a.jpg')])
+    await dragToFolder(page, tile, page.locator('.side-nav__row').filter({ has: page.locator('.side-nav__label:text-is("pics")') }))
+    await page.locator('.confirm-dlg__title').filter({ hasText: '复制 1 张到「pics」' }).waitFor({ timeout: 5000 })
+    await page.keyboard.press('Escape')
     const result = await page.evaluate(async () => {
       const all = await window.api.gallery.list({ view: 'untagged', sort: 'new' })
       const items = all.ok ? all.data.items : []

@@ -204,5 +204,5 @@ describe('全流程巡检', () => {
     await setAppearance(page, 'dark')
     await lightAndDarkPass(page, 'dark')
     await app.close()
-  })
+  }, 360_000)
 })

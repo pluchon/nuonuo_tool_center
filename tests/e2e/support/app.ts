@@ -56,7 +56,6 @@ export async function launchApp(dirs: CaseDirs, overrides: Record<string, string
   Object.assign(env, {
     // 禁止继承真实云端凭证，显式空白也会阻止回退到 Windows 用户环境变量。
     DASHSCOPE_API_KEY: ' ',
-    ALIYUN_TOKEN_PLAN_KEY: ' ',
     ALIYUN_ACCESS_KEY_ID: ' ',
     ALIYUN_ACCESS_KEY_SECRET: ' ',
     ...overrides,
@@ -66,7 +65,8 @@ export async function launchApp(dirs: CaseDirs, overrides: Record<string, string
     LTM_FAKE_TRASH_DIR: join(dirs.root, 'trash'),
     LTM_MODEL_DIR: env.LTM_MODEL_DIR ?? MODEL_DIR
   })
-  const app = await _electron.launch({ executablePath: electronPath as unknown as string, args: [PROJECT_ROOT], env })
+  const entry = env.LTM_E2E_HIDDEN === '1' ? join(PROJECT_ROOT, 'tests/e2e/support/hiddenWindow.cjs') : PROJECT_ROOT
+  const app = await _electron.launch({ executablePath: electronPath as unknown as string, args: [entry], env })
   openApps.add(app)
   app.once('close', () => openApps.delete(app))
   const page = await app.firstWindow()
@@ -115,11 +115,40 @@ export async function setAppearance(page: Page, appearance: 'light' | 'dark'): P
   await page.waitForFunction((dark) => document.documentElement.classList.contains('dark') === dark, appearance === 'dark')
 }
 
+export async function captureWindow(page: Page, file: string, app?: ElectronApplication): Promise<void> {
+  if (process.env.LTM_E2E_HIDDEN !== '1' || !app) {
+    await page.screenshot({ path: file })
+    return
+  }
+  await page.evaluate(async () => {
+    await document.fonts.ready
+    const frame = () => new Promise<void>(done => requestAnimationFrame(() => done()))
+    await frame()
+    const transitions = document.getAnimations().filter(animation => {
+      const duration = animation.effect?.getComputedTiming().endTime
+      return animation.playState === 'running' && typeof duration === 'number' && duration <= 500
+    })
+    await Promise.allSettled(transitions.map(animation => animation.finished))
+    await frame()
+  })
+  const win = await app.browserWindow(page)
+  try {
+    const png = await win.evaluate(async (w) => {
+      const image = await w.webContents.capturePage(undefined, { stayHidden: true })
+      if (image.isEmpty()) throw new Error('未能截取测试窗口')
+      return image.toPNG().toString('base64')
+    })
+    writeFileSync(file, Buffer.from(png, 'base64'))
+  } finally {
+    await win.dispose()
+  }
+}
+
 // 截应用窗口
 export async function shot(page: Page, name: string): Promise<string> {
   const file = join(SHOT_DIR, 'app', `${name}.png`)
   mkdirSync(join(SHOT_DIR, 'app'), { recursive: true })
-  await page.screenshot({ path: file })
+  await captureWindow(page, file, [...openApps].find(app => app.windows().includes(page)))
   return file
 }
 
@@ -140,7 +169,10 @@ export async function shotPrototype(name: string): Promise<string> {
   await page.waitForLoadState('load')
   await pinViewport(proto, page)
   await page.waitForTimeout(1200)
-  await page.screenshot({ path: file })
-  await proto.close()
+  try {
+    await captureWindow(page, file, proto)
+  } finally {
+    await proto.close()
+  }
   return file
 }
