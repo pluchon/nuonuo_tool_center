@@ -497,6 +497,12 @@ export interface AiConversationVO {
   updatedAt: string
 }
 
+// 图片保留原文件类型，发送后的 dataUrl 为缩小的预览图。剪贴板图片可以没有文件名。
+export type AiAttachment =
+  | { kind: 'image'; name: string; mimeType: string; dataUrl: string }
+  | { kind: 'markdown'; name: string; text: string }
+
+export const AI_MARKDOWN_MAX_BYTES = 64 * 1024
 export const AI_CONTEXT_WINDOW = 475_000
 
 // 单次对话请求占用的上下文，含输入、生成内容和已命中的缓存前缀。
@@ -519,6 +525,8 @@ export interface AiMessageVO {
   createdAt: string
   // 你发的图（按图找相似时，长边 512 的 data URL）；没有为空
   image: string | null
+  attachments?: AiAttachment[]
+  attachment?: AiAttachment | null
 }
 
 // 问诺诺：conversationId 为空时新开一段对话；scope 为空表示全部图库
@@ -527,7 +535,10 @@ export interface AiAskDTO {
   text: string
   scope: DirKeyDTO | null
   includeR18: boolean
-  // 上传或粘贴的图（data URL）：有它时按图找相似
+  // 同一条消息可以同时携带一张图片和一份 Markdown。
+  attachments?: AiAttachment[]
+  attachment?: AiAttachment
+  // 兼容原先直接传入图片 data URL 的调用。
   image?: string
 }
 
