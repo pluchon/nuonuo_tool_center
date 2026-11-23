@@ -46,7 +46,7 @@
 | **整理** | 名字、标签（带分类和别名）、自建的“类目录”；复制、移动、删除都能撤销，删除走系统回收站。 |
 | **找图、看图** | 按名字和标签搜，按目录、方向、尺寸、时间筛；网格按月分组；大图缩放、旋转、翻页不用等。 |
 | **本地 R-18 分级** | 导入后在后台用本地模型逐张判，明显的自动标上；你手动改过的永远以你为准。int8 量化模型约 0.56 秒一张，只用 CPU、低优先级。 |
-| **诺诺助手** | 一句话找图（“找海边的风景”），本地能对上的直接查库，对不上的再问通义千问；也能上传一张图找相似的。 |
+| **诺诺助手** | 一句话找图（“找海边的风景”），在已确认标签的图片中检索，跳过待审建议。可以上传一张图找相似图片，也可以附上 Markdown 提示词，让诺诺按文件要求看图。 |
 | **AI 建议** | 新图判完分级后诺诺自动看一遍，给出名字、标签、角色、作品、出处，逐条采用或不要，按 A / X 快速审。 |
 | **一键整理** | 诺诺拟一份“建哪些类目录、哪些图放进去”的方案，你改好、批了才复制进去。 |
 | **外观** | 浅色、深色、跟随系统，六种主题色，主题背景或自己的图，磨砂玻璃和透明度可调。 |
@@ -91,7 +91,8 @@ flowchart TD
 | 类目录 | 默认 `D:\诺诺图床`，可在设置里改 |
 | 原图 | 留在你导入的文件夹里，应用不会搬动 |
 
-- 云端密钥只从环境变量读：`DASHSCOPE_API_KEY`（百炼），`ALIYUN_ACCESS_KEY_ID`、`ALIYUN_ACCESS_KEY_SECRET`（以图搜图时的 OSS 临时上传）。不落库，不写日志。
+- 在「设置 → AI」中填写云端密钥。默认读取 `DASHSCOPE_API_KEY`（百炼）、`ALIYUN_ACCESS_KEY_ID` 和 `ALIYUN_ACCESS_KEY_SECRET`（阿里云 OSS）。离开密钥输入区时自动加密保存填写的值，并优先使用。
+- 检测到用户环境变量 `ALIYUN_TOKEN_PLAN_KEY` 时，图库进入本地模式，保留类目录检索和本地缓存，停用按量模型调用。个人套餐可在受支持的工具中交互使用。[阿里云 Token Plan 使用规范](https://help.aliyun.com/zh/model-studio/token-plan-permissions-and-usage)
 - 发给云端的只有过了本地分级的图，先缩小、去掉 EXIF；需要公网地址时私有上传、用完即删。
 - 云端用不了的图（比如 R-18），可以复制一段提示词给你自己的 AI，把回复贴回来，由本地整理成建议。
 - 设置里可以导出整个图库数据库作备份（不含图片本身）。
@@ -124,7 +125,7 @@ npm run test:e2e     # 端到端测试（先 build），Playwright 驱动真实�
 - 数据目录用环境变量隔离：`LTM_DATA_DIR`、`LTM_CATEGORY_HOME`；分级模型可以用 `LTM_MODEL_DIR` 指到共用目录。
 - 改了 `src/main/db/schema.ts` 后运行 `npm run db:generate`，迁移只往前加。
 - 换图标：替换 `resources/icon.png`，运行 `node scripts/make-icon.mjs`。
-- README 截图：`$env:LTM_SHOTS='1'; npx vitest run tests/e2e/readme-shots.test.ts`，用画出来的示例图库截图（会真实调用百炼）。
+- README 截图：`$env:LTM_SHOTS='1'; npx vitest run tests/e2e/readme-shots.test.ts`，使用合成图片和模拟百炼响应。
 - 生成 int8 分级模型（本机运行、不联网、不覆盖已有文件，需要 [uv](https://docs.astral.sh/uv/)）：
 
 ```powershell

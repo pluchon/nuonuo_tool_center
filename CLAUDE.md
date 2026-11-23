@@ -5,6 +5,7 @@
 ## 运行与验证
 
 - 开发：`npm run dev`；类型检查：`npm run typecheck`；构建：`npm run build`；单元测试：`npm test`；端到端测试：先 `npm run build` 再 `npm run test:e2e`（截图和差异图在 `test-output/phase1/`）。改了 `src/main/db/schema.ts` 后执行 `npm run db:generate` 生成新迁移（只往前加，不改历史迁移；要手写数据转换时用 `--custom`，再把快照换成完整结构，`npm run db:generate` 报 “No schema changes” 才算对上）。
+- 模型测试默认使用隔离数据和模拟百炼响应。真实交互测试使用受支持的编程或智能体工具和个人 Token Plan 额度；应用后端及自动化测试脚本不使用套餐密钥，也不自动改用按量密钥。
 - 数据目录由环境变量决定：`LTM_DATA_DIR`（数据库、缩略图、模型、日志、锁文件）和 `LTM_CATEGORY_HOME`（类目录）。
   - `npm run dev` 默认用 `D:\ltm-dev\data` 和 `D:\ltm-dev\library`；端到端测试用 `D:\ltm-dev\e2e\<场景>`。
   - 本地分级模型目录由 `LTM_MODEL_DIR` 指定，开发和端到端测试共用 `D:\ltm-dev\models`（约 470 MB，从真实目录只读复制来的）；不设时用数据目录下的 `models`，缺了应用会自动下载。
@@ -28,7 +29,7 @@
 
 ## 云端
 
-- 凭证只从用户环境变量读取：`DASHSCOPE_API_KEY`、`ALIYUN_ACCESS_KEY_ID`、`ALIYUN_ACCESS_KEY_SECRET`。不打印、不落库、不写日志。
+- 凭证默认从用户环境变量读取：`DASHSCOPE_API_KEY`、`ALIYUN_ACCESS_KEY_ID`、`ALIYUN_ACCESS_KEY_SECRET`。「设置 → AI」保存的凭证使用系统加密，优先于环境变量。凭证不落库、不写日志。
 - OSS：bucket `zlhimage`（`oss-cn-guangzhou`），临时前缀 `local_image_temp/`。`local_image_temp/` 这个 0 字节对象是控制台的目录占位，清理时不能删。临时对象私有 ACL 上传，用完在 `finally` 里删除。
 - 百炼：OpenAI 兼容端点 `https://dashscope.aliyuncs.com/compatible-mode/v1`，以图搜图用 Responses API + `image_search` 工具。以图搜图用 `qwen3.8-flash`（用户指定，max 太慢）；其他场景用最新可用的 Qwen（以 `/v1/models` 实际返回为准）。客户端必须 `maxRetries: 0`。
 - 以图搜图的出处只采用工具返回的结果，不采用模型自己写的链接。
