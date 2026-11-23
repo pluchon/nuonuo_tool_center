@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   check,
+  customType,
   index,
   integer,
   jsonb,
@@ -311,6 +312,12 @@ export const aiConversation = pgTable('ai_conversation', {
   pinned: boolean('pinned').notNull().default(false),
   // 对话开始时锁定的核心档案版本，保证这段对话的缓存前缀不变；没有档案时为空
   profileVersion: integer('profile_version')
+})
+
+// 上传原图按内容去重。会话历史和模型请求只使用消息中的预览，放大时单独读取原图。
+export const aiImageOriginal = pgTable('ai_image_original', {
+  hash: text('hash').primaryKey(),
+  bytes: customType<{ data: Buffer }>({ dataType: () => 'bytea' })('bytes').notNull()
 })
 
 // 助手消息
