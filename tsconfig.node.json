@@ -24,6 +24,7 @@
     "src/preload/**/*",
     "src/shared/**/*",
     "src/renderer/src/utils/**/*",
-    "tests/unit/**/*"
+    "tests/unit/**/*",
+    "tests/support/**/*"
   ]
 }

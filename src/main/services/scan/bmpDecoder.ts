@@ -1,3 +1,5 @@
+import sharp from 'sharp'
+
 // sharp 不支持 BMP，这里只解未压缩的 24/32 位 BMP（最常见的两种），其余（调色板、RLE 压缩）返回 null 按“无法预览”处理
 
 // 解出的原始像素：sharp 的 raw 输入格式
@@ -60,4 +62,9 @@ export function decodeBmp(buf: Buffer): RawPixels | null {
     }
   }
   return { data: out, width, height, channels }
+}
+
+export function openBmp(data: Buffer): ReturnType<typeof sharp> | null {
+  const pixels = decodeBmp(data)
+  return pixels && sharp(pixels.data, { raw: { width: pixels.width, height: pixels.height, channels: pixels.channels } })
 }

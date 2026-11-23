@@ -4,7 +4,7 @@ import { readFile, rename, rm } from 'node:fs/promises'
 import sharp from 'sharp'
 import type { ScanFormat } from '@shared/settings'
 import { getLogger } from '../../common/logger'
-import { decodeBmp } from './bmpDecoder'
+import { openBmp } from './bmpDecoder'
 import { parseExif, type ExifInfo, type ParsedExif } from './exifInfo'
 import { hasTiffHeader, largestEmbeddedJpeg } from './rawPreview'
 
@@ -58,11 +58,7 @@ async function decodeInput(path: string, format: ScanFormat, data: Buffer | null
     return { input: preview ? sharp(preview, { failOn: 'error' }) : null, exifSource: hasTiffHeader(buf) ? buf : null }
   }
   if (format === 'BMP') {
-    const px = decodeBmp(data ?? (await readFile(path)))
-    return {
-      input: px ? sharp(px.data, { raw: { width: px.width, height: px.height, channels: px.channels } }) : null,
-      exifSource: null
-    }
+    return { input: openBmp(data ?? (await readFile(path))), exifSource: null }
   }
   return { input: sharp(data ?? path, { failOn: 'error' }), exifSource: null }
 }
