@@ -51,14 +51,14 @@ it('可以一次选择两种附件，分别移除和替换后仍能发送并查�
   const cards = page.locator('.assistant__attach')
   const prompt = { name: '提示.md', mimeType: 'text/markdown', buffer: Buffer.from('只回答主色。') }
   const picture = { name: '蓝色.png', mimeType: 'image/png',
-    buffer: await sharp({ create: { width: 128, height: 128, channels: 3, background: '#3377dd' } }).png().toBuffer() }
+    buffer: await sharp({ create: { width: 1024, height: 768, channels: 3, background: '#3377dd' } }).png().toBuffer() }
   await input.setInputFiles([prompt, picture])
   await cards.filter({ hasText: prompt.name }).waitFor()
-  await cards.filter({ hasText: picture.name }).getByRole('button').click()
+  await cards.filter({ hasText: picture.name }).getByRole('button', { name: /移除附件/ }).click()
   expect(await cards.allTextContents()).toEqual([expect.stringContaining(prompt.name)])
   await input.setInputFiles(picture)
   await cards.filter({ hasText: picture.name }).waitFor()
-  await cards.filter({ hasText: prompt.name }).getByRole('button').click()
+  await cards.filter({ hasText: prompt.name }).getByRole('button', { name: /移除附件/ }).click()
   expect(await cards.allTextContents()).toEqual([expect.stringContaining(picture.name)])
   await input.setInputFiles(prompt)
   await input.setInputFiles({ ...picture, name: '替换.png' })
@@ -73,7 +73,13 @@ it('可以一次选择两种附件，分别移除和替换后仍能发送并查�
   await page.getByRole('button', { name: '对话记录' }).click()
   await page.locator('.assistant__hist-row').first().click()
   await sent.filter({ hasText: prompt.name }).waitFor()
-  await sent.filter({ hasText: '替换.png' }).waitFor()
+  const image = sent.getByRole('button', { name: '查看附件 替换.png' })
+  await image.dblclick()
+  const viewer = page.getByRole('dialog', { name: '查看大图' })
+  await expect.poll(() => viewer.locator('.viewer__pic').evaluate(el => (el as HTMLImageElement).naturalWidth)).toBe(1024)
+  await viewer.getByRole('button', {name: '放大', exact: true}).click()
+  expect(await viewer.locator('.viewer__zoom').innerText()).not.toBe('100%')
+  await page.keyboard.press('Escape')
 }, 180_000)
 
 it('替换、移除、无效文件和延迟读取不会误发附件或清空草稿', async () => {

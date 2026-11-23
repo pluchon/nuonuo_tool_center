@@ -63,10 +63,23 @@ export const IpcChannel = {
   fileStartDrag: 'file:startDrag',
   aiStatus: 'ai:status',
   aiIdeas: 'ai:ideas',
+  aiPredict: 'ai:predict',
   aiConversations: 'ai:conversations',
   aiMessages: 'ai:messages',
   aiAsk: 'ai:ask',
+  aiAttachmentOriginal: 'ai:attachmentOriginal',
+  aiEditMessage: 'ai:editMessage',
+  aiRecallMessage: 'ai:recallMessage',
+  aiRecalledDraft: 'ai:recalledDraft',
   aiAnswer: 'ai:answer',
+  aiCompact: 'ai:compact',
+  aiPolicy: 'ai:policy',
+  aiReferencePreviews: 'ai:referencePreviews',
+  aiEmbeddingLimit: 'ai:embeddingLimit',
+  aiResetRules: 'ai:resetRules',
+  aiPreference: 'ai:preference',
+  categoryProposal: 'ai:categoryProposal',
+  categoryProposalDecide: 'ai:categoryProposalDecide',
   aiRename: 'ai:rename',
   aiPin: 'ai:pin',
   aiDelete: 'ai:delete',
@@ -113,6 +126,7 @@ export interface CacheCleanVO {
 
 // 主进程主动推给渲染进程的事件
 export const IpcEvent = {
+  aiCompaction: 'ai:compaction',
   // 扫描状态变化：开始、进度、结束都推同一个结构
   scanState: 'scan:state',
   // 一批文件操作真正执行完（删除进回收站之后），带上失败的数量和原因
@@ -379,20 +393,9 @@ export interface ImageLocationVO {
 }
 
 // 详情面板：一张图的完整信息
-export interface ImageDetailVO {
-  imageId: number
-  name: string
-  format: ScanFormat
-  width: number | null
-  height: number | null
-  byteSize: number
-  hash: string
-  thumb: ThumbState
-  isR18: boolean
+export interface ImageDetailVO extends GalleryItemVO {
   // R-18 是本地模型判的（你还没手动开关过）：详情的 R-18 一行标“诺诺判的”
   r18ByModel: boolean
-  importedAt: string
-  takenAt: string | null
   exif: ExifInfoVO | null
   // 用户起的名字（没起过为空，显示时用文件名）
   displayName: string | null
@@ -485,7 +488,6 @@ export interface ExifInfoVO {
 // 诺诺助手：是否配置了百炼 API Key
 export interface AiStatusVO {
   ready: boolean
-  localOnly?: boolean
 }
 
 // 对话记录里的一段对话
@@ -503,20 +505,62 @@ export type AiAttachment =
   | { kind: 'markdown'; name: string; text: string }
 
 export const AI_MARKDOWN_MAX_BYTES = 64 * 1024
+
+export interface AiImageReference {
+  imageId: number
+  name: string
+  groupId: string
+  position: number
+  sourceMessageId?: number
+}
+export interface AiReferencePreview {
+  imageId: number
+  hash: string
+  isR18: boolean
+}
 export const AI_CONTEXT_WINDOW = 475_000
 
 // 单次对话请求占用的上下文，含输入、生成内容和已命中的缓存前缀。
 export interface AiContextUsage {
   usedTokens: number
   estimated: boolean
+  compacted?: boolean
+}
+
+export interface AiCompactResult {
+  changed: boolean
+  checkpoint: { messageId: number; usage: AiContextUsage } | null
+}
+
+export interface AiPolicyVO {
+  pendingImages: number
+  confirmedFolders: number
+  dailyLimit: number
+  dailyUsed: number
+  localHits: number
+  cloudCachedTokens: number
+  preferences: Array<{ id: number; content: string; explicit: boolean }>
+}
+
+// 百炼为本条回复的各次对话请求实际报告的输入量与缓存命中量。
+export interface AiReplyCacheUsage {
+  inputTokens: number
+  cachedTokens: number
 }
 
 // 对话里的一条消息：你说的话，或诺诺的回复
 export interface AiMessageVO {
+  scope?: DirKeyDTO | null
+  includeR18?: boolean
+  canPredict?: boolean
+  references?: AiImageReference[]
+  categoryProposalId?: number
+  proposalNote?: true
   id: number
   role: 'user' | 'assistant'
   text: string
   contextUsage?: AiContextUsage
+  cacheUsage?: AiReplyCacheUsage
   // 回复上方的一行灰字：这次怎么找的（如“搜索了图库：标签「猫」，找到 3 张”）；没有检索时为空
   how: string | null
   // 结果图（按回复时的顺序；已经删掉的图不再出现）
@@ -531,11 +575,47 @@ export interface AiMessageVO {
   attachment?: AiAttachment | null
 }
 
+export interface CategoryProposalVO {
+  filingPreview?: { hashes: Array<string | null>; total: number }
+  id: number
+  status: 'pending' | 'applied' | 'cancelled'
+  started: boolean
+  analysisCount: number
+  scope: string | null
+  entries: Array<{
+    kind: 'create' | 'existing' | 'move' | 'copy'
+    path: string
+    from?: string
+    count?: number
+    tag?: string
+  }>
+}
+
 export type AiSearchScope = Extract<DirKeyDTO, { kind: 'category' }>
+
+export interface AiPredictionDTO {
+  selectionCount?: number
+  references?: AiImageReference[]
+  conversationId: number
+  replyId: number
+  scope: AiSearchScope | null
+  includeR18: boolean
+}
+
+export interface AiRecalledDraft {
+  references?: AiImageReference[]
+  messageId: number
+  text: string
+  scope: AiSearchScope | null
+  includeR18: boolean
+  attachments: AiAttachment[]
+}
 
 // 问诺诺：conversationId 为空时新开一段对话，scope 为空时搜索全部类目录。
 export interface AiAskDTO {
+  references?: AiImageReference[]
   conversationId: number | null
+  recalledMessageId?: number
   text: string
   scope: AiSearchScope | null
   includeR18: boolean
@@ -568,10 +648,10 @@ export interface LookRowVO {
 // 看图队列：总数（含出错的）和前面若干行
 export interface LookStateVO {
   count: number
+  activity: 'idle' | 'queued' | 'working'
   rows: LookRowVO[]
   canCancel: boolean
   needsApiKey: boolean
-  localOnly?: boolean
 }
 
 export const LOOK_KEY_HINT = '请在「设置 → AI」中配置百炼 API Key'

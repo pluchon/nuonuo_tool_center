@@ -1,4 +1,4 @@
-import type { AiAskDTO, AiAskResultVO, AiConversationVO, AiMessageVO, AiStatusVO } from '@shared/api'
+import type { AiAskDTO, AiAskResultVO, AiConversationVO, AiMessageVO, AiRecalledDraft, AiStatusVO } from '@shared/api'
 import { unwrap } from './request'
 
 // 诺诺能不能用（有没有配置云端凭证）
@@ -29,6 +29,18 @@ export function askNono(dto: AiAskDTO): Promise<AiAskResultVO> {
 // 取这段对话最后一句话的回复
 export function fetchAnswer(conversationId: number): Promise<AiMessageVO> {
   return unwrap(window.api.ai.answer(conversationId))
+}
+
+export function editMessage(id: number, messageId: number, text: string): Promise<AiMessageVO> {
+  return unwrap(window.api.ai.editMessage(id, messageId, text))
+}
+
+export function recallMessage(id: number, messageId: number): Promise<AiRecalledDraft> {
+  return unwrap(window.api.ai.recallMessage(id, messageId))
+}
+
+export function fetchRecalledDraft(id: number): Promise<AiRecalledDraft | null> {
+  return unwrap(window.api.ai.recalledDraft(id))
 }
 
 // 重命名对话

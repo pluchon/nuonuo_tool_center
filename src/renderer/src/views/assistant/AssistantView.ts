@@ -1,10 +1,12 @@
 import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { AI_TEXT_MAX, AI_TITLE_MAX, type AiAttachment, type AiMessageVO, type AiSearchScope, type GalleryItemVO } from '@shared/api'
+import { AI_CONTEXT_WINDOW, AI_TEXT_MAX, AI_TITLE_MAX, type AiAttachment, type AiMessageVO, type AiSearchScope, type GalleryItemVO } from '@shared/api'
 import { copyImageToClipboard, startNativeDrag } from '@/api/files'
 import { thumbUrl } from '@/api/gallery'
 import { onRatingR18 } from '@/api/rating'
 import SearchResultPages from './SearchResultPages.vue'
 import ContextMeter from './ContextMeter.vue'
+import { usePrediction } from './usePrediction'
+import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue'
 import NonoArt from '@/components/nono/NonoArt.vue'
 import { useAssistantStore } from '@/stores/assistant'
 import { useLibraryStore } from '@/stores/library'
@@ -12,6 +14,12 @@ import { useToastStore } from '@/stores/toast'
 import { useViewerStore } from '@/stores/viewer'
 import { ICON } from '@/theme/icons'
 import AttachmentCard from './AttachmentCard.vue'
+import ImageReferences from './ImageReferences.vue'
+import type { AiImageReference, AiReferencePreview } from '@shared/api'
+import MarkdownBody from './MarkdownBody.vue'
+import BubbleEditor from './BubbleEditor.vue'
+import CategoryProposal from './CategoryProposal.vue'
+import { hasMarkdown, insideCodeFence } from './markdown'
 import { isMarkdownFile, readAttachment, readClipboardImage } from './readAttachment'
 
 // 结果图的高度和宽度范围（宽度按原图比例）
@@ -27,7 +35,7 @@ type DirOption =
 // 两位数
 const pad = (n: number): string => String(n).padStart(2, '0')
 
-// 对话记录里的日期：今天只写时间，今年写“11月20日”，更早的加年份
+// 对话记录与回复共用日期格式，按本地日历判断是否跨日、跨年。
 export function fmtDay(iso: string, now: Date = new Date()): string {
   const d = new Date(iso)
   if (d.toDateString() === now.toDateString()) {
@@ -37,25 +45,66 @@ export function fmtDay(iso: string, now: Date = new Date()): string {
   return d.getFullYear() === now.getFullYear() ? md : `${d.getFullYear()}年${md}`
 }
 
-// 回复底部的时间：今天只写时分，其他日子在前面加日期
-export function fmtMsg(iso: string, now: Date = new Date()): string {
-  const d = new Date(iso)
-  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
-  return d.toDateString() === now.toDateString() ? hm : `${fmtDay(iso, now)} ${hm}`
-}
+const percent = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 1 })
 
 // 诺诺助手页（照原型 ai:）：顶栏（标题、新对话、对话记录）、消息列表、输入框（范围、R-18 开关、发送）
 export default defineComponent({
   name: 'AssistantView',
-  components: { NonoArt, AttachmentCard, SearchResultPages, ContextMeter },
+  components: { NonoArt, AttachmentCard, ImageReferences, SearchResultPages, ContextMeter, MarkdownBody, BubbleEditor, CategoryProposal, ConfirmDialog },
   setup() {
     const store = useAssistantStore()
     const library = useLibraryStore()
     const viewer = useViewerStore()
+    const usedPercent = computed(() => {
+      const used = store.messages.findLast(m => m.contextUsage)?.contextUsage?.usedTokens ?? 0
+      const pct = Math.min(100, used * 100 / AI_CONTEXT_WINDOW)
+      return pct > 0 && pct < 1 ? '<1%' : Math.round(pct) + '%'
+    })
+    const compactCommand = '/compact'
+    const commandSelected = ref(false)
+    const hasCompactSuggestion = computed(() => !commandSelected.value && store.draft.startsWith('/') &&
+      compactCommand.startsWith(store.draft))
+    const showCompact = computed(() => store.compacting || hasCompactSuggestion.value)
+    watch(() => store.draft, draft => {
+      if (draft !== compactCommand) commandSelected.value = false
+    }, { flush: 'sync' })
+    watch(() => store.currentId, () => { commandSelected.value = false })
+    const selectCompact = (): void => {
+      if (store.compacting || store.waiting || store.changingTurn) return
+      store.draft = compactCommand
+      commandSelected.value = true
+      inputRef.value?.focus()
+    }
+    onBeforeUnmount(window.api.ai.onCompaction((id, active) => {
+      if (store.currentId === id) store.compacting = active
+    }))
     const toast = useToastStore()
+    const previews = ref(new Map<number, AiReferencePreview>())
+    const previewRevision = ref(0)
+    const previewIds = computed(() => [...new Set([
+      ...store.references.map((r) => r.imageId),
+      ...store.messages.flatMap((m) => m.references?.map((r) => r.imageId) ?? [])
+    ])].sort((a, b) => a - b).join(','))
+    watch([previewIds, previewRevision], async ([ids], _, onCleanup) => {
+      let active = true
+      onCleanup(() => { active = false })
+      if (!ids) { previews.value = new Map(); return }
+      const reply = await window.api.ai.referencePreviews(ids.split(',').map(Number)).catch(() => null)
+      if (active) previews.value = new Map(reply?.ok ? reply.data.map((r) => [r.imageId, r]) : [])
+    }, { immediate: true })
 
     const scroller = ref<HTMLElement | null>(null)
     const inputRef = ref<HTMLTextAreaElement | null>(null)
+    const previewDraft = ref(false)
+    const formattedDraft = computed(() => hasMarkdown(store.draft))
+    const toggleDraftPreview = async (): Promise<void> => {
+      previewDraft.value = !previewDraft.value
+      if (!previewDraft.value) {
+        await nextTick()
+        inputRef.value?.focus()
+      }
+    }
+    watch([formattedDraft, () => store.currentId], () => { previewDraft.value = false })
     const histList = ref<HTMLElement | null>(null)
     // 打开着的弹出：对话记录 / 范围下拉 / “+”菜单
     const menu = ref<'hist' | 'dir' | 'plus' | null>(null)
@@ -67,10 +116,18 @@ export default defineComponent({
     // 选中的结果图（消息 id:图片 id）和刚复制过的回复
     const picked = ref<string | null>(null)
     const copied = ref<number | null>(null)
+    const editingId = ref<number | null>(null)
+    const editedText = ref('')
+    const pendingRecall = ref<number | null>(null)
+    const lastQuestion = computed(() => store.messages.findLast((m) => m.role === 'user')?.id)
+    watch(lastQuestion, () => {
+      editingId.value = null
+      pendingRecall.value = null
+    })
     let copiedTimer: ReturnType<typeof setTimeout> | null = null
 
     const title = computed(() => (store.ready === false ? '诺诺助手' : (store.current?.title ?? '新对话')))
-    const isEmpty = computed(() => store.currentId === null && store.messages.length === 0 && !store.waiting)
+    const isEmpty = computed(() => store.messages.length === 0 && !store.waiting && !store.loadingMessages)
     const ctxPinned = computed(() => store.conversations.find((c) => c.id === ctx.value?.id)?.pinned ?? false)
 
     // 范围下拉：全部类目录及可单独选择的类目录
@@ -91,6 +148,8 @@ export default defineComponent({
     type FileKind = AiAttachment['kind']
     const pendingReads = ref(new Map<FileKind, symbol>())
     const reading = computed(() => pendingReads.value.size > 0)
+    const { prediction, composing, onPredictionKey } = usePrediction(() =>
+      reading.value || viewer.open || menu.value !== null || editingId.value !== null || pendingRecall.value !== null, () => previewRevision.value)
     const cancelRead = (): void => {
       pendingReads.value.clear()
     }
@@ -129,6 +188,19 @@ export default defineComponent({
         selected.set(kind, file)
       }
       for (const [kind, file] of selected) void selectAttachment(kind, () => readAttachment(file, file.name))
+    }
+    const overFiles = (event: DragEvent): void => {
+      if (!event.dataTransfer?.types.includes('Files')) return
+      event.preventDefault()
+      event.stopPropagation()
+      event.dataTransfer.dropEffect = 'copy'
+    }
+    const dropFiles = (event: DragEvent): void => {
+      const transfer = event.dataTransfer
+      if (!transfer?.files.length || Array.from(transfer.items).some(item => item.webkitGetAsEntry?.()?.isDirectory)) return
+      event.preventDefault()
+      event.stopPropagation()
+      selectFiles(transfer.files)
     }
     const pickFile = (): void => {
       menu.value = null
@@ -173,7 +245,7 @@ export default defineComponent({
     }
 
     const onNewChat = async (): Promise<void> => {
-      if (store.waiting) return
+      if (store.waiting || store.changingTurn) return
       cancelRead()
       closeMenus()
       picked.value = null
@@ -181,7 +253,7 @@ export default defineComponent({
       inputRef.value?.focus()
     }
     const openChat = async (id: number): Promise<void> => {
-      if (store.waiting) return
+      if (store.waiting || store.changingTurn) return
       if (store.currentId !== id) cancelRead()
       closeMenus()
       picked.value = null
@@ -228,11 +300,20 @@ export default defineComponent({
       }
     }
 
+    function submitComposer() {
+      if (reading.value) return
+      if (hasCompactSuggestion.value) selectCompact()
+      else void store.send()
+    }
+
     // 输入框：回车发送，Shift + 回车换行；输入法选字时的回车不算
     const onInputKey = (e: KeyboardEvent): void => {
+      if (e.isComposing || composing.value || e.keyCode === 229 || onPredictionKey(e)) return
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        const field = inputRef.value
+        if (field && !e.ctrlKey && !e.metaKey && insideCodeFence(field.value.slice(0, field.selectionStart))) return
         e.preventDefault()
-        if (!reading.value) void store.send()
+        if (!e.repeat) submitComposer()
       } else if (e.key === 'Escape') {
         closeMenus()
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'u') {
@@ -253,8 +334,34 @@ export default defineComponent({
       picked.value = picked.value === key ? null : key
       closeMenus()
     }
-    // 按住拖到别的软件：系统原生拖拽带出原文件（这里没有站内的拖放目标）
-    const dragOut = (e: DragEvent, messageId: number, p: GalleryItemVO): void => {
+    const draggingReference = ref(false)
+    let heldReference: AiImageReference | undefined
+    const releaseReference = (): void => {
+      heldReference = undefined
+      draggingReference.value = false
+    }
+    const overReference = (event: DragEvent): void => {
+      if (!draggingReference.value || !event.dataTransfer) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'copy'
+    }
+    const dropReference = (event: DragEvent): void => {
+      if (!draggingReference.value || !heldReference) return
+      event.preventDefault()
+      store.addReferences([heldReference])
+      releaseReference()
+      inputRef.value?.focus({ preventScroll: true })
+    }
+    const dragOut = (e: DragEvent, message: AiMessageVO, p: GalleryItemVO): void => {
+      const messageId = message.id
+      if (!e.altKey && e.dataTransfer) {
+        heldReference = { imageId: p.imageId, name: p.name, sourceMessageId: messageId,
+          groupId: 'result:' + messageId, position: message.images.findIndex(item => item.imageId === p.imageId) + 1 }
+        draggingReference.value = true
+        e.dataTransfer.effectAllowed = 'copy'
+        e.dataTransfer.setData('application/x-nono-image-reference', String(p.imageId))
+        return
+      }
       e.preventDefault()
       if (p.isR18 || p.missing || p.offline) return
       picked.value = pickKey(messageId, p.imageId)
@@ -283,7 +390,7 @@ export default defineComponent({
         renaming.value = null
         return
       }
-      const inField = (e.target as HTMLElement)?.closest('input, textarea')
+      const inField = (e.target as HTMLElement)?.closest('input, textarea, [contenteditable]')
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && !inField) {
         const item = pickedItem()
         if (item) {
@@ -318,6 +425,26 @@ export default defineComponent({
         el.scrollTop = el.scrollHeight
       }
     }
+    const editQuestion = (m: AiMessageVO): void => {
+      editingId.value = m.id
+      editedText.value = m.text
+    }
+    const submitEdit = async (id: number, event?: KeyboardEvent): Promise<void> => {
+      if (event?.isComposing) return
+      if (await store.revise(id, editedText.value)) editingId.value = null
+    }
+    const recallQuestion = async (id: number, confirmed = false): Promise<void> => {
+      if (!confirmed && (store.draft || store.attachments.length || store.references.length || reading.value)) {
+        pendingRecall.value = id
+        return
+      }
+      pendingRecall.value = null
+      cancelRead()
+      if (await store.revise(id)) {
+        await scrollToEnd()
+        inputRef.value?.focus({ preventScroll: true })
+      }
+    }
     watch(() => [store.messages.length, store.waiting, store.failure, store.currentId], scrollToEnd)
 
     onMounted(() => {
@@ -329,8 +456,13 @@ export default defineComponent({
         inputRef.value?.focus()
       })
     })
-    onBeforeUnmount(onRatingR18(() => store.refreshResults()))
+    onBeforeUnmount(onRatingR18(() => {
+      previews.value = new Map()
+      previewRevision.value++
+      void store.refreshResults()
+    }))
     onBeforeUnmount(() => {
+      releaseReference()
       cancelRead()
       document.removeEventListener('mousedown', onDocDown)
       window.removeEventListener('keydown', onKey)
@@ -340,16 +472,21 @@ export default defineComponent({
     })
 
     return {
-      store,
+      lastQuestion, editingId, editedText, pendingRecall, editQuestion, submitEdit, recallQuestion,
+      releaseReference, draggingReference, overReference, dropReference,
+      store, previews, previewRevision,
       scroller,
       inputRef,
+      previewDraft,
+      formattedDraft,
+      toggleDraftPreview,
       fileRef,
       reading,
       removeAttachment,
       pickFile,
       onFilePicked,
       pasteFromClipboard,
-      onPaste,
+      usedPercent, showCompact, commandSelected, selectCompact, onPaste, overFiles, dropFiles,
       histList,
       menu,
       ctx,
@@ -372,7 +509,7 @@ export default defineComponent({
       upPath: 'M7 10v12M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z',
       downPath: 'M17 14V2M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z',
       fmtDay,
-      fmtMsg,
+      cacheRate: (usage: AiMessageVO['cacheUsage']): string => usage ? percent.format(usage.cachedTokens / usage.inputTokens) : '—',
       toggleMenu,
       pickScope,
       onNewChat,
@@ -382,7 +519,9 @@ export default defineComponent({
       saveRename,
       ctxPin,
       ctxDelete,
-      onInputKey,
+      onInputKey, submitComposer,
+      prediction,
+      composing,
       picWidth,
       thumbUrl,
       pickKey,

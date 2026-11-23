@@ -1,14 +1,16 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
 import { aiEvent, aiJob, aiProfile, apiUsage } from '../../src/main/db/schema'
 import { findRecentUsage, insertApiUsage } from '../../src/main/repositories/apiUsageRepository'
 import { checkHitRate } from '../../src/main/services/ai/bailianClient'
+import { embed } from '../../src/main/services/ai/embeddingClient'
+import { EMBEDDING_CONFIG } from '../../src/main/config/cloudConfig'
 import { assertCacheMarks, buildMessages, countCacheMarks, stableStringify } from '../../src/main/services/ai/promptPrefix'
 import { collectSearchSources, keepToolSources } from '../../src/main/services/ai/searchSources'
-import { normalizeChatUsage, normalizeResponsesUsage, textHitRate } from '../../src/main/services/ai/usage'
+import { normalizeChatUsage, normalizeResponsesUsage, reportedChatCache, textHitRate } from '../../src/main/services/ai/usage'
 
 const MIGRATIONS = resolve('drizzle')
 
@@ -56,6 +58,13 @@ describe('四层前缀', () => {
 })
 
 describe('用量统一', () => {
+  it('回复只使用完整的百炼缓存统计，区分未报告与实际零命中', () => {
+    const report = (input: number, cached?: number) => reportedChatCache({ prompt_tokens: input, prompt_tokens_details: { cached_tokens: cached } })
+    expect(report(3019, 2048)).toEqual({ inputTokens: 3019, cachedTokens: 2048 })
+    expect(report(10, 0)).toEqual({ inputTokens: 10, cachedTokens: 0 })
+    for (const usage of [report(0, 0), report(10), report(10, 11), report(10, -1), reportedChatCache(undefined)]) expect(usage).toBeUndefined()
+  })
+
   // 下面两段是 2026-11-22 实测返回的结构
   it('Chat Completions：命中、写入、图片 token', () => {
     expect(
@@ -145,6 +154,32 @@ describe('AI 表和记账', () => {
     const [job] = await db.insert(aiJob).values({ kind: 'LOOK' }).returning()
     expect(job.status).toBe('QUEUED')
     expect(job.priority).toBe(0)
+  })
+
+  it('向量接口拒绝无效响应，限流不自动重试，恢复后只记录一次成功', async () => {
+    const send = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', send)
+    vi.stubEnv('DASHSCOPE_API_KEY', 'fixture')
+    const vector = Array<number>(EMBEDDING_CONFIG.dimension).fill(0)
+    const response = (embedding: unknown) => Response.json({ output: { embeddings: [{ embedding }] } })
+    try {
+      for (const invalid of [Response.json(null), response([]), response(vector), response(['1', ...vector.slice(1)]),
+        response([1e200, ...vector.slice(1)])]) {
+        send.mockResolvedValueOnce(invalid)
+        await expect(embed({ text: '配色' })).rejects.toThrow('无效向量')
+      }
+      send.mockResolvedValueOnce(Response.json({ code: 'TooManyRequests' }, { status: 429 }))
+      await expect(embed({ text: '配色' })).rejects.toThrow('429')
+      vector[0] = 1
+      send.mockResolvedValueOnce(response(vector))
+      expect(await embed({ text: '配色' })).toEqual(vector)
+      expect(send).toHaveBeenCalledTimes(7)
+      expect((await getDatabase().pg.query("select count(*)::int as total, count(error)::int as failed from api_usage where api='embed'")).rows)
+        .toEqual([{ total: 7, failed: 6 }])
+    } finally {
+      vi.unstubAllGlobals()
+      vi.unstubAllEnvs()
+    }
   })
 
   it('不够次数不算命中率；够了按文本 token 算，失败的调用不计入', async () => {

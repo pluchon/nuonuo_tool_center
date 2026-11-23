@@ -7,6 +7,7 @@ import { useGalleryStore } from './gallery'
 export const useViewerStore = defineStore('viewer', {
   state: () => ({
     open: false,
+    attachment: null as { name: string; dataUrl: string; preview?: string } | null,
     // 每换一张或重新打开加一（组件据此把缩放、旋转、平移还原）
     seq: 0,
     // 诺诺助手里打开时的图片列表和当前那张；为空表示看网格
@@ -16,10 +17,12 @@ export const useViewerStore = defineStore('viewer', {
   getters: {
     // 能切换的全部图
     items(s): GalleryItemVO[] {
+      if (s.attachment) return []
       return s.list ?? useGalleryStore().items
     },
     // 当前那张的 id
     currentId(s): number | null {
+      if (s.attachment) return null
       return s.list ? s.current : useGalleryStore().primary
     },
     // 当前那张
@@ -30,6 +33,7 @@ export const useViewerStore = defineStore('viewer', {
   actions: {
     // 打开：给了 id 就先单选它；没有选中的图就不开
     show(imageId?: number): void {
+      this.attachment = null
       const gallery = useGalleryStore()
       this.list = null
       this.current = null
@@ -47,18 +51,28 @@ export const useViewerStore = defineStore('viewer', {
       if (!items.some((i) => i.imageId === imageId)) {
         return
       }
+      this.attachment = null
       this.list = items
       this.current = imageId
       this.open = true
       this.seq++
     },
+    showAttachment(name: string, dataUrl: string, preview?: string): void {
+      this.list = null
+      this.current = null
+      this.attachment = { name: name || '图片', dataUrl, preview }
+      this.open = true
+      this.seq++
+    },
     close(): void {
+      this.attachment = null
       this.open = false
       this.list = null
       this.current = null
     },
     // 上一张（-1）/ 下一张（1）
     step(dir: -1 | 1): void {
+      if (this.attachment) return
       const order = this.items.map((i) => i.imageId)
       if (order.length === 0) {
         this.close()

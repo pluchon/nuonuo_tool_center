@@ -81,7 +81,9 @@ const CREDENTIAL_PLACEHOLDERS = { saved: '已保存', environment: '使用环境
 const emptyCredentials = (): Record<AiCredentialKey, string> => ({ dashscopeApiKey: '', aliyunAccessKeyId: '', aliyunAccessKeySecret: '' })
 
 // 设置弹窗（照原型 setDlg）：900×620 磨砂玻璃，左侧分类、右侧分组卡片
+import AiPolicySettings from './AiPolicySettings.vue'
 export default defineComponent({
+  components: { AiPolicySettings },
   name: 'SettingsDialog',
   setup() {
     const settings = useSettingsStore()

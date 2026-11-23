@@ -38,7 +38,7 @@ export default defineComponent({
 
     const item = computed(() => viewer.currentItem)
     const multi = computed(() => viewer.items.length > 1)
-    const title = computed(() => Array.from(item.value?.name ?? '').slice(0, TITLE_MAX).join(''))
+    const title = computed(() => Array.from(viewer.attachment?.name ?? item.value?.name ?? '').slice(0, TITLE_MAX).join(''))
     // 标题旁的“第几张 / 共几张”
     const position = computed(() => {
       const i = viewer.items.findIndex((x) => x.imageId === viewer.currentId)
@@ -48,6 +48,10 @@ export default defineComponent({
     // 显示什么：原图 / 缩略图（格式浏览器显示不了，或原图读不到）/ 都没有
     const source = computed<{ kind: 'original' | 'thumb' | 'none'; src: string }>(() => {
       const it = item.value
+      if (viewer.attachment) {
+        if (!originalFailed.value) return { kind: 'original', src: viewer.attachment.dataUrl }
+        if (!thumbFailed.value && viewer.attachment.preview) return { kind: 'thumb', src: viewer.attachment.preview }
+      }
       if (!it) {
         return { kind: 'none', src: '' }
       }
@@ -71,6 +75,7 @@ export default defineComponent({
 
     // 舞台上方的一行说明（只看得到缩略图时）
     const note = computed(() => {
+      if (source.value.kind === 'thumb' && viewer.attachment) return '原图无法显示，正在查看预览图'
       if (source.value.kind !== 'thumb' || !item.value) {
         return ''
       }
@@ -300,7 +305,7 @@ export default defineComponent({
 
     // 看着的图离开了列表（被删、被移走）就关掉
     watch(item, (it) => {
-      if (viewer.open && !it) {
+      if (viewer.open && !viewer.attachment && !it) {
         viewer.close()
       }
     })

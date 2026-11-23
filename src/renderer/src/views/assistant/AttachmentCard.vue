@@ -1,22 +1,49 @@
 <template>
   <div class="attachment-card">
-    <img v-if="file.kind === 'image'" class="attachment-card__preview" :src="file.dataUrl" alt="" draggable="false" />
-    <span v-else class="attachment-card__icon" aria-label="Markdown 文件">MD</span>
-    <div class="attachment-card__info">
-      <strong v-if="file.name" class="attachment-card__name" :title="file.name">{{ file.name }}</strong>
-      <span v-if="file.kind === 'image'" class="attachment-card__type">{{ fileType }}</span>
-    </div>
+    <button type="button" class="attachment-card__open" :aria-label="`查看附件 ${file.name || '图片'}`" @click="onActivate" @dblclick="file.kind === 'image' && !removable && openPreview()">
+      <img v-if="file.kind === 'image'" class="attachment-card__preview" :src="file.dataUrl" alt="" draggable="false" />
+      <span v-else class="attachment-card__icon" aria-label="Markdown 文件">MD</span>
+      <span class="attachment-card__info">
+        <strong v-if="file.name" class="attachment-card__name">{{ file.name }}</strong>
+        <span v-if="file.kind === 'image'" class="attachment-card__type">{{ fileType }}</span>
+      </span>
+    </button>
     <button v-if="removable" type="button" class="attachment-card__remove" :aria-label="`移除附件 ${file.name || '图片'}`" @click="$emit('remove')">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
     </button>
+    <Teleport to="body"><AttachmentPreview v-if="preview" :file="file" @close="preview = false" /></Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, onBeforeUnmount } from 'vue'
 import type { AiAttachment } from '@shared/api'
+import AttachmentPreview from './AttachmentPreview.vue'
 
-const props = defineProps<{ file: AiAttachment; removable?: boolean }>()
+import { useViewerStore } from '@/stores/viewer'
+
+const viewer = useViewerStore()
+function onActivate(event: MouseEvent) {
+  if (props.removable || props.file.kind === 'markdown' || event.detail === 0) openPreview()
+}
+let request = 0
+onBeforeUnmount(() => { request++ })
+async function openPreview() {
+  const file = props.file
+  if (file.kind === 'markdown') {
+    preview.value = true
+    return
+  }
+  const version = ++request
+  let url = file.dataUrl
+  if (props.messageId) {
+    const reply = await window.api.ai.attachmentOriginal(props.messageId).catch(() => null)
+    if (reply?.ok && reply.data) url = reply.data
+  }
+  if (version === request && props.file === file) viewer.showAttachment(file.name, url, url !== file.dataUrl ? file.dataUrl : undefined)
+}
+const preview = ref(false)
+const props = defineProps<{ file: AiAttachment; messageId?: number | null; removable?: boolean }>()
 defineEmits<{ remove: [] }>()
 const fileType = computed(() => props.file.kind === 'markdown'
   ? ''
@@ -34,8 +61,8 @@ const fileType = computed(() => props.file.kind === 'markdown'
   padding: 5px 10px 5px 5px;
   border: 1px solid var(--a-line2);
   border-radius: 12px;
-  background: var(--look-field-bg);
-  color: var(--c-i-3B3047);
+  background: var(--assistant-field);
+  color: var(--assistant-ink);
 }
 
 .attachment-card__icon, .attachment-card__preview {
@@ -45,6 +72,22 @@ const fileType = computed(() => props.file.kind === 'markdown'
   border-radius: 8px;
   background: var(--a-soft);
 }
+
+.attachment-card__open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.attachment-card__open:hover .attachment-card__name { color: var(--a-ink); }
 
 .attachment-card__icon {
   display: grid;

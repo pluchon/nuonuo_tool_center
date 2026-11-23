@@ -1,20 +1,20 @@
 <template>
-  <div class="assistant">
+  <div class="assistant" @dragover="overFiles" @drop="dropFiles">
     <section class="assistant__pane" aria-label="诺诺助手">
       <header class="assistant__head">
         <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" class="assistant__star">
           <defs>
             <linearGradient id="nnStarHead" x1="3" y1="3" x2="21" y2="21" gradientUnits="userSpaceOnUse">
-              <stop offset="0" stop-color="#5B8DEF" />
+              <stop offset="0" style="stop-color: var(--a-ink)" />
               <stop offset="0.55" style="stop-color: var(--a)" />
-              <stop offset="1" stop-color="#E07BA5" />
+              <stop offset="1" style="stop-color: var(--a-mid)" />
             </linearGradient>
           </defs>
           <path :d="starPath" fill="url(#nnStarHead)" />
         </svg>
         <h2 class="assistant__title">{{ title }}</h2>
-        <div v-if="store.ready" class="assistant__head-actions">
-          <button class="assistant__round" type="button" aria-label="新对话" :disabled="store.waiting" @click="onNewChat">
+        <div v-if="store.ready || store.usingGalleryReferences" class="assistant__head-actions">
+          <button class="assistant__round" type="button" aria-label="新对话" :disabled="store.waiting || store.changingTurn" @click="onNewChat">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
           </button>
           <button
@@ -22,7 +22,7 @@
             :class="{ 'assistant__round--on': menu === 'hist' }"
             type="button"
             aria-label="对话记录"
-            :disabled="store.waiting"
+            :disabled="store.waiting || store.changingTurn"
             aria-haspopup="dialog"
             :aria-expanded="menu === 'hist'"
             data-ai-menu
@@ -86,19 +86,19 @@
       </Transition>
 
       <!-- 没配云端凭证：整页只有诺诺出错插画、一句话和重试 -->
-      <div v-if="store.ready === false" class="assistant__nokey">
+      <div v-if="store.ready === false && !store.usingGalleryReferences" class="assistant__nokey">
         <NonoArt pose="error" />
         <span class="assistant__nokey-text">诺诺还没连上云端</span>
         <button class="assistant__nokey-retry" type="button" @click="store.enter()">重试</button>
       </div>
 
-      <template v-else-if="store.ready">
+      <template v-else-if="store.ready || store.usingGalleryReferences">
         <div ref="scroller" class="assistant__scroll nn-thin">
           <div class="assistant__thread">
             <!-- 新对话：诺诺插画、一句话、四个示例问题 -->
             <div v-if="isEmpty" class="assistant__welcome nn-appear">
               <NonoArt pose="welcome" size="small" />
-              <span class="assistant__welcome-text">想找什么图？说给诺诺听</span>
+              <span class="assistant__welcome-text">想聊什么？说给诺诺听</span>
               <div class="assistant__ideas">
                 <button v-for="q in store.ideas" :key="q" class="assistant__idea" type="button" @click="store.send(q)">{{ q }}</button>
               </div>
@@ -106,17 +106,34 @@
 
             <template v-for="m in store.messages" :key="m.id">
               <div v-if="m.role === 'user'" class="assistant__user">
+                <ImageReferences v-if="m.references?.length" :items="m.references" :previews="previews" />
                 <div v-if="m.attachments?.length" class="assistant__attachments">
-                  <AttachmentCard v-for="file in m.attachments" :key="file.kind" :file="file" />
+                  <AttachmentCard v-for="file in m.attachments" :key="file.kind" :file="file" :message-id="m.id" />
                 </div>
-                <div v-if="m.text" class="assistant__bubble">{{ m.text }}</div>
+                <form v-if="editingId === m.id" class="assistant__edit" @submit.prevent="submitEdit(m.id)">
+                  <BubbleEditor v-model="editedText" class="assistant__bubble" @keydown.esc.stop="editingId = null" @keydown.ctrl.enter.prevent="submitEdit(m.id, $event)" />
+                  <div class="assistant__edit-actions">
+                    <button type="button" @click="editingId = null">取消</button>
+                    <button type="submit" :disabled="store.changingTurn || store.waiting || (!editedText.trim() && !m.attachments?.length && !m.references?.length)">重新发送</button>
+                  </div>
+                </form>
+                <MarkdownBody v-else-if="m.text" class="assistant__bubble" :text="m.text" />
+                <div v-if="m.id === lastQuestion && editingId === null && !store.waiting && !store.loadingMessages" class="assistant__question-tools">
+                  <button class="assistant__tool" type="button" aria-label="编辑消息" :disabled="store.changingTurn" @click="editQuestion(m)">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 6.5l4 4M4 20l4.5-1 12-12a2.8 2.8 0 0 0-4-4l-12 12z" /></svg>
+                  </button>
+                  <button class="assistant__tool" type="button" aria-label="回撤到输入框" :disabled="store.changingTurn" @click="recallQuestion(m.id)">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 5-6 6 6 6M3 11h11a6 6 0 0 1 6 6v2" /></svg>
+                  </button>
+                </div>
               </div>
               <article v-else class="assistant__reply">
                 <div v-if="m.how" class="assistant__how">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-3.5-3.5" /></svg>
                   <span>{{ m.how }}</span>
                 </div>
-                <p v-if="m.text" class="assistant__text">{{ m.text }}</p>
+                <MarkdownBody v-if="m.text && (!m.categoryProposalId || m.proposalNote)" class="assistant__text" :text="m.text" />
+                <CategoryProposal v-if="m.categoryProposalId" :proposal-id="m.categoryProposalId" :message-id="m.id" :preview-revision="previewRevision" />
                 <SearchResultPages v-if="m.images.length" v-slot="{ pageImages }" :images="m.images">
                   <div class="assistant__pics">
                     <button
@@ -128,11 +145,12 @@
                       :style="{ width: `${picWidth(p)}px` }"
                       :aria-label="p.isR18 ? `${p.name}，R-18，双击查看` : p.name"
                       :aria-pressed="picked === pickKey(m.id, p.imageId)"
-                      :draggable="!p.isR18 && !p.missing && !p.offline"
+                      draggable="true"
                       @click="pick(m.id, p.imageId)"
                       @dblclick="openViewer(m.images, p.imageId)"
+                      @dragend="releaseReference"
                       @keydown.enter.prevent="openViewer(m.images, p.imageId)"
-                      @dragstart="dragOut($event, m.id, p)"
+                      @dragstart="dragOut($event, m, p)"
                     >
                       <img
                         v-if="p.thumb === 'READY'"
@@ -164,24 +182,31 @@
                   <button class="assistant__tool" :class="{ 'assistant__tool--down': m.vote === 'DOWN' }" type="button" aria-label="没帮助" :aria-pressed="m.vote === 'DOWN'" @click="store.vote(m.id, 'DOWN')">
                     <svg width="15" height="15" viewBox="0 0 24 24" :fill="m.vote === 'DOWN' ? 'var(--assistant-down-fill)' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="downPath" /></svg>
                   </button>
-                  <span class="assistant__time">{{ fmtMsg(m.createdAt) }}</span>
+                  <span class="assistant__cache">
+                    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                      <ellipse cx="10" cy="4.5" rx="6.5" ry="2.5" />
+                      <path d="M3.5 4.5v10c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5v-10M3.5 9.5C3.5 10.9 6.4 12 10 12s6.5-1.1 6.5-2.5" />
+                    </svg>
+                    缓存命中率 {{ cacheRate(m.cacheUsage) }}
+                  </span>
+                  <time class="assistant__time" :datetime="m.createdAt">{{ fmtDay(m.createdAt) }}</time>
                 </div>
               </article>
             </template>
 
             <!-- 等待回复：转动的星星和带流光的一行字 -->
-            <div v-if="store.waiting" class="assistant__busy" role="status">
+            <div v-if="store.waiting && !store.compacting" class="assistant__busy" role="status">
               <svg class="nn-gem" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
                 <defs>
                   <linearGradient id="nnStarBusy" x1="3" y1="3" x2="21" y2="21" gradientUnits="userSpaceOnUse">
-                    <stop offset="0" stop-color="#5B8DEF" />
+                    <stop offset="0" style="stop-color: var(--a-ink)" />
                     <stop offset="0.55" style="stop-color: var(--a)" />
-                    <stop offset="1" stop-color="#E07BA5" />
+                    <stop offset="1" style="stop-color: var(--a-mid)" />
                   </linearGradient>
                 </defs>
                 <path :d="starPath" fill="url(#nnStarBusy)" />
               </svg>
-              <span class="nn-shine assistant__busy-text">诺诺在翻图库…</span>
+              <span class="nn-shine assistant__busy-text">诺诺在想…</span>
             </div>
 
             <!-- 没回复成功：系统横幅，不当成诺诺说的话 -->
@@ -202,7 +227,13 @@
 
         <!-- 输入框（参照 Gemini）：大圆角白底，下面一行是范围、R-18 开关和发送 -->
         <div class="assistant__dock">
-          <div class="assistant__composer">
+          <button v-if="showCompact" class="assistant__compact" type="button" :disabled="store.compacting || store.waiting"
+            aria-label="精简对话上下文" @mousedown.prevent @click="selectCompact">
+            <span class="assistant__compact-ring" :class="{ spinning: store.compacting }" aria-hidden="true"></span>
+            <strong>{{ store.compacting ? '正在精简…' : '精简' }}</strong>
+            <span>对话上下文（已用 {{ usedPercent }}）</span>
+          </button>
+          <div class="assistant__composer" :class="{ 'assistant__composer--drop': draggingReference }" @dragover="overReference" @drop="dropReference">
             <Transition name="nn-pop">
               <div v-if="menu === 'dir'" class="assistant__dirs" role="listbox" aria-label="在哪里找" data-ai-menu>
                 <span class="assistant__caret assistant__caret--down" aria-hidden="true" />
@@ -243,21 +274,30 @@
               </div>
             </Transition>
             <input ref="fileRef" class="assistant__file" type="file" accept="image/*,.md,.markdown,text/markdown" multiple @change="onFilePicked" />
+            <ImageReferences v-if="store.references.length" :items="store.references" :previews="previews" removable @remove="store.removeReference" />
             <div v-if="store.attachments.length" class="assistant__attachments">
               <AttachmentCard v-for="file in store.attachments" :key="file.kind" class="assistant__attach" :file="file" removable @remove="removeAttachment(file.kind)" />
             </div>
-            <label class="assistant__input-wrap">
+            <MarkdownBody v-if="previewDraft && formattedDraft" class="assistant__draft-preview nn-thin" :text="store.draft" />
+            <label v-show="!previewDraft || !formattedDraft" class="assistant__input-wrap">
               <span class="assistant__sr">问诺诺</span>
               <textarea
                 ref="inputRef"
                 v-model="store.draft"
                 class="assistant__input"
-                rows="2"
-                placeholder="搜你所想..."
+                :class="{ 'assistant__input--command': commandSelected }"
+                rows="1"
+                :placeholder="prediction ? '' : '问问诺诺…'"
+                :aria-description="showCompact ? '按 Enter 选择精简命令' : commandSelected ? '按 Enter 执行精简命令' : prediction ? prediction + '，按 Tab 键生效' : undefined"
                 :maxlength="textMax"
                 @keydown="onInputKey"
+                @compositionstart="composing = true"
+                @compositionend="composing = false"
                 @paste="onPaste"
               />
+              <span v-if="prediction" class="assistant__prediction" aria-hidden="true">
+                {{ prediction }} <span class="assistant__prediction-key">按 Tab 键生效</span>
+              </span>
             </label>
             <div class="assistant__controls">
               <button
@@ -272,9 +312,10 @@
               >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
               </button>
+              <span class="assistant__vr" aria-hidden="true" />
               <button
                 class="assistant__dir"
-                :class="{ 'assistant__dir--on': menu === 'dir' || store.scope }"
+                :class="{ 'assistant__dir--on': menu === 'dir' }"
                 type="button"
                 aria-haspopup="listbox"
                 :aria-expanded="menu === 'dir'"
@@ -300,7 +341,9 @@
               </button>
               <span class="assistant__vr" aria-hidden="true" />
               <ContextMeter :messages="store.messages" />
-              <button class="nn-send assistant__send" :class="{ 'assistant__send--on': store.canSend && !reading }" type="button" aria-label="发送" :disabled="!store.canSend || reading" @click="store.send()">
+              <button v-if="formattedDraft" type="button" class="assistant__md-toggle" :aria-pressed="previewDraft"
+                :aria-label="previewDraft ? '继续编辑' : '预览 Markdown'" @click="toggleDraftPreview">MD</button>
+              <button class="assistant__send" :class="{ 'assistant__send--on': store.canSend && !reading }" type="button" aria-label="发送" :disabled="!store.canSend || reading" @click="submitComposer">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
               </button>
             </div>
@@ -308,6 +351,7 @@
         </div>
       </template>
     </section>
+    <ConfirmDialog :open="pendingRecall !== null" title="替换输入框中的草稿？" ok-label="替换" no-label="取消" tone="normal" @cancel="pendingRecall = null" @ok="pendingRecall !== null && recallQuestion(pendingRecall, true)" />
   </div>
 </template>
 

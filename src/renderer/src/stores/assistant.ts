@@ -1,7 +1,10 @@
 import { defineStore } from 'pinia'
-import type { AiAttachment, AiConversationVO, AiMessageVO, AiSearchScope } from '@shared/api'
+import type { AiAttachment, AiConversationVO, AiImageReference, AiMessageVO, AiRecalledDraft, AiSearchScope } from '@shared/api'
 import {
   askNono,
+  editMessage,
+  recallMessage,
+  fetchRecalledDraft,
   fetchAiStatus,
   fetchAnswer,
   fetchConversations,
@@ -22,6 +25,8 @@ function errText(err: unknown): string {
 
 let messagesVersion = 0
 
+type ComposerDraft = Omit<AiRecalledDraft, 'messageId'> & { messageId: number | null }
+
 // 诺诺助手：对话记录、当前对话的消息、输入框里的范围和 R-18 开关、等待回复和出错的状态
 export const useAssistantStore = defineStore('assistant', {
   state: () => ({
@@ -34,11 +39,17 @@ export const useAssistantStore = defineStore('assistant', {
     ideas: [] as string[],
     draft: '',
     attachments: [] as AiAttachment[],
+    references: [] as AiImageReference[],
+    usingGalleryReferences: false,
+    recalledMessageId: null as number | null,
+    draftsByChat: new Map<number | null, ComposerDraft>(),
+    changingTurn: false,
     // 在哪里找：空表示全部图库
     scope: null as AiSearchScope | null,
     includeR18: false,
     // 正在等回复
     waiting: false,
+    compacting: false,
     // 最后一句没回复成功：横幅显示的原因（如“网络异常”），点“重试”再取一次回复
     failure: null as string | null,
     loadingMessages: false
@@ -48,7 +59,7 @@ export const useAssistantStore = defineStore('assistant', {
       return s.conversations.find((c) => c.id === s.currentId) ?? null
     },
     canSend(s): boolean {
-      return (s.draft.trim() !== '' || s.attachments.length > 0) && !s.waiting && !s.loadingMessages
+      return (s.draft.trim() !== '' || s.attachments.length > 0 || s.references.length > 0) && !s.waiting && !s.loadingMessages && !s.changingTurn
     }
   },
   actions: {
@@ -56,13 +67,13 @@ export const useAssistantStore = defineStore('assistant', {
     async enter(): Promise<void> {
       try {
         const status = await fetchAiStatus()
-        this.ready = status.ready || status.localOnly === true
+        this.ready = status.ready
       } catch (err) {
         this.ready = false
         useToastStore().show(`诺诺状态读不出来：${errText(err)}`, 'error')
         return
       }
-      if (!this.ready) {
+      if (!this.ready && !this.usingGalleryReferences) {
         return
       }
       await this.loadConversations()
@@ -88,12 +99,21 @@ export const useAssistantStore = defineStore('assistant', {
     },
     // 新对话：清空当前对话，换一批示例问题
     async newChat(): Promise<void> {
-      if (this.waiting) return
+      if (this.waiting || this.changingTurn) return
+      const unsent = this.currentId !== null ? this.draftsByChat.get(null) : undefined
+      if (this.currentId !== null && !this.loadingMessages) this.keepDraft()
+      ++messagesVersion
+      this.loadingMessages = false
       this.currentId = null
       this.messages = []
       this.failure = null
       this.draft = ''
       this.attachments = []
+      this.recalledMessageId = null
+      this.references = []
+      this.usingGalleryReferences = false
+      if (unsent) this.restoreDraft(unsent)
+      this.draftsByChat.delete(null)
       await this.refreshIdeas()
     },
     // 返回助手时重新读取已有结果的分级与标签状态。
@@ -121,12 +141,18 @@ export const useAssistantStore = defineStore('assistant', {
     },
     // 打开一段对话
     async open(id: number): Promise<void> {
-      if (this.waiting) {
+      if (this.waiting || this.changingTurn) {
         return
       }
       const version = ++messagesVersion
-      if (this.currentId !== id) {
+      const switched = this.currentId !== id
+      if (switched) {
+        if (!this.loadingMessages) this.keepDraft()
         this.messages = []
+        this.draft = ''
+        this.attachments = []
+        this.recalledMessageId = null
+        this.references = []
       } else {
         for (const message of this.messages) message.images = []
       }
@@ -134,9 +160,14 @@ export const useAssistantStore = defineStore('assistant', {
       this.failure = null
       this.loadingMessages = true
       try {
-        const msgs = await fetchMessages(id)
+        const [msgs, recalled] = await Promise.all([fetchMessages(id), switched ? fetchRecalledDraft(id) : null])
         if (this.currentId === id && version === messagesVersion) {
           this.messages = msgs
+          if (switched) this.usingGalleryReferences = msgs.some((m) => !!m.references?.length)
+          const cached = this.draftsByChat.get(id)
+          if (cached && cached.messageId === (recalled?.messageId ?? null)) this.restoreDraft(cached)
+          else if (recalled) this.restoreDraft(recalled)
+          this.draftsByChat.delete(id)
           // 最后一句是你说的、还没有回复（上次出错或应用关了）：显示重试横幅
           const last = msgs[msgs.length - 1]
           this.failure = last && last.role === 'user' ? '上次没回复成功' : null
@@ -149,11 +180,38 @@ export const useAssistantStore = defineStore('assistant', {
         if (version === messagesVersion) this.loadingMessages = false
       }
     },
+    async compact(): Promise<void> {
+      if (this.waiting || this.changingTurn || this.loadingMessages) return
+      if (this.currentId === null) {
+        useToastStore().show('当前没有可精简的对话')
+        return
+      }
+      this.changingTurn = true
+      this.compacting = true
+      try {
+        const reply = await window.api.ai.compact(this.currentId)
+        if (!reply.ok) throw new Error(reply.message)
+        const checkpoint = reply.data.checkpoint
+        if (checkpoint) {
+          const message = this.messages.find(m => m.id === checkpoint.messageId)
+          if (message) message.contextUsage = checkpoint.usage
+        }
+        if (this.draft.trim() === '/compact') this.draft = ''
+        useToastStore().show(reply.data.changed ? '已精简对话上下文' : '没有新的对话需要精简')
+      } catch (error) {
+        useToastStore().show(errText(error), 'error')
+      } finally {
+        this.compacting = false
+        this.changingTurn = false
+      }
+    },
     // 发送：先存下这句话（新对话会出现在对话记录里），再等诺诺的回复
     async send(text?: string): Promise<void> {
       const q = (text ?? this.draft).trim()
+      if (q === '/compact') return this.compact()
       const attachments = text === undefined ? this.attachments : []
-      if ((!q && !attachments.length) || this.waiting || this.loadingMessages) {
+      const references = [...this.references]
+      if ((!q && !attachments.length && !references.length) || this.waiting || this.loadingMessages || this.changingTurn) {
         return
       }
       this.waiting = true
@@ -161,11 +219,15 @@ export const useAssistantStore = defineStore('assistant', {
       try {
         const res = await askNono({
           conversationId: this.currentId, text: q, scope: this.scope ? { ...this.scope } : null,
-          includeR18: this.includeR18, attachments: attachments.map((file) => ({ ...file }))
+          ...(this.recalledMessageId !== null ? { recalledMessageId: this.recalledMessageId } : {}),
+          includeR18: this.includeR18, attachments: attachments.map((file) => ({ ...file })), references: references.map((r) => ({ ...r }))
         })
         if (text === undefined && this.draft.trim() === q) this.draft = ''
         this.attachments = this.attachments.filter((file) => !attachments.includes(file))
+        const sent = new Set(references.map((r) => r.imageId))
+        this.references = this.references.filter((r) => !sent.has(r.imageId))
         this.currentId = res.conversation.id
+        this.recalledMessageId = null
         if (!this.conversations.some((c) => c.id === res.conversation.id)) {
           this.conversations = [res.conversation, ...this.conversations]
           this.messages = []
@@ -178,6 +240,59 @@ export const useAssistantStore = defineStore('assistant', {
         return
       }
       await this.fetchReply()
+    },
+    keepDraft(): void {
+      if (this.draft || this.attachments.length || this.references.length || this.recalledMessageId !== null) {
+        this.draftsByChat.set(this.currentId, { text: this.draft, attachments: this.attachments, references: this.references,
+          scope: this.scope, includeR18: this.includeR18, messageId: this.recalledMessageId })
+      } else {
+        this.draftsByChat.delete(this.currentId)
+      }
+    },
+    restoreDraft(draft: ComposerDraft): void {
+      this.draft = draft.text
+      this.attachments = draft.attachments
+      this.references = draft.references ?? []
+      if (this.references.length) this.usingGalleryReferences = true
+      this.scope = draft.scope
+      this.includeR18 = draft.includeR18
+      this.recalledMessageId = draft.messageId
+    },
+    addReferences(items: AiImageReference[]): void {
+      if (items.length) this.usingGalleryReferences = true
+      const seen = new Set(this.references.map((r) => r.imageId))
+      for (const item of items) {
+        if (seen.has(item.imageId)) continue
+        seen.add(item.imageId)
+        this.references.push(item)
+      }
+    },
+    removeReference(imageId: number): void {
+      this.references = this.references.filter((r) => r.imageId !== imageId)
+    },
+    async revise(messageId: number, replacement?: string): Promise<boolean> {
+      const id = this.currentId
+      if (id === null || this.waiting || this.changingTurn || this.loadingMessages) return false
+      this.changingTurn = true
+      try {
+        if (replacement === undefined) {
+          const draft = await recallMessage(id, messageId)
+          this.messages = this.messages.filter((m) => m.id < messageId)
+          this.restoreDraft(draft)
+        } else {
+          const revised = await editMessage(id, messageId, replacement)
+          this.messages = [...this.messages.filter((m) => m.id < messageId), revised]
+          this.touch(id, revised.createdAt)
+        }
+        this.failure = null
+      } catch (err) {
+        useToastStore().show(errText(err), 'error')
+        return false
+      } finally {
+        this.changingTurn = false
+      }
+      if (replacement !== undefined) await this.fetchReply()
+      return true
     },
     // 取回复；失败时显示横幅，点“重试”再取一次
     async fetchReply(): Promise<void> {
@@ -199,6 +314,7 @@ export const useAssistantStore = defineStore('assistant', {
         }
       } finally {
         this.waiting = false
+        this.compacting = false
       }
     },
     // 对话有了新消息：更新时间并排到置顶的后面第一个
@@ -249,6 +365,7 @@ export const useAssistantStore = defineStore('assistant', {
       if (this.currentId === id) {
         await this.newChat()
       }
+      this.draftsByChat.delete(id)
       useToastStore().show(`已删除对话「${c.title}」`, 'ok', async () => {
         try {
           await undoRemoveConversation(id)

@@ -26,7 +26,7 @@ import { ensureCategoryRoot } from './services/categoryHome'
 import { findActiveRootsByKind } from './repositories/libraryRootRepository'
 import { windowBackground } from './window/windowControl'
 import { loadWindowState, MIN_HEIGHT, MIN_WIDTH, trackWindowState } from './window/windowState'
-import { attachCloseBehavior, markQuitting } from './window/trayControl'
+import { attachCloseBehavior, markQuitting, showWindow } from './window/trayControl'
 import { applySystemSettings } from './window/systemSettings'
 import { pruneBackgrounds } from './services/systemService'
 
@@ -219,7 +219,7 @@ async function bootstrap(): Promise<void> {
   configureEmbedding({
     thumbsDir: paths.thumbs,
     tempDir: join(paths.root, 'tmp'),
-    canRun: () => getScanState().progress === null && !isRatingBusy() && queueingAfterRating === 0
+    canRun: () => getScanState().progress === null && !isRatingBusy() && !isAnswering() && queueingAfterRating === 0
   })
   // 诺诺看图：扫描进行中让路；队列变化和新建议推给界面
   configureLook({
@@ -305,12 +305,7 @@ async function bootstrap(): Promise<void> {
 if (app.requestSingleInstanceLock()) {
   app.on('second-instance', () => {
     const win = BrowserWindow.getAllWindows()[0]
-    if (win) {
-      if (win.isMinimized()) {
-        win.restore()
-      }
-      win.focus()
-    }
+    if (win) showWindow(win)
   })
   app.whenReady().then(bootstrap, (err: unknown) => log.error('应用启动失败', err))
 } else {

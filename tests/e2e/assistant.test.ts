@@ -1,11 +1,12 @@
 import { copyFileSync, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import sharp from 'sharp'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
+import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
 import { closeLeftoverApps, freshCase, launchApp, setAppearance, shot } from './support/app'
 import { importFolder } from './support/picker'
-import { bailianRequests, launchWithMockBailian } from './support/mockBailian'
+import { launchWithMockBailian } from './support/mockBailian'
 
 sharp.cache(false)
 
@@ -115,18 +116,30 @@ describe('诺诺助手', () => {
       // 明确按标签查询，始终在本地处理。
       await askAndWait(page, '找标签为猫的图')
       await expect(page.locator('.assistant__how').last().textContent()).resolves.toContain('找到 1 张')
+      expect(await page.locator('.assistant__cache').last().innerText()).toBe('缓存命中率 —')
       await expect(page.locator('.assistant__reply').last().locator('.assistant__pic').count()).resolves.toBe(1)
 
       // 受保护结果在悬停、单击和历史会话中都保持模糊，双击才加载原图。
       await page.click('.assistant__r18')
       await askAndWait(page, '找标签为猫的图')
       const results = page.locator('.assistant__reply').last()
-      expect(await results.locator('.assistant__text').count()).toBe(0)
+      expect(await results.locator('.assistant__text').innerText()).toBeTruthy()
+      const cardGap = await results.evaluate((el) => el.querySelector('.assistant__pic')!.getBoundingClientRect().top -
+        el.querySelector('.assistant__text')!.getBoundingClientRect().bottom)
+      expect(cardGap).toBeGreaterThanOrEqual(0)
+      expect(cardGap).toBeLessThan(16)
       const protectedCard = results.locator('.assistant__pic:has(.assistant__pic-r18)')
       const normalCard = results.locator('.assistant__pic:not(:has(.assistant__pic-r18))')
       const thumb = protectedCard.locator('.assistant__thumbnail')
       await expect.poll(() => thumb.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
-      expect(await protectedCard.getAttribute('draggable')).toBe('false')
+      expect(await protectedCard.getAttribute('draggable')).toBe('true')
+      const externalDrag = await protectedCard.evaluate(el => {
+        const dataTransfer = new DataTransfer()
+        const event = new DragEvent('dragstart', { bubbles: true, cancelable: true, altKey: true, dataTransfer })
+        el.dispatchEvent(event)
+        return { cancelled: event.defaultPrevented, types: dataTransfer.types }
+      })
+      expect(externalDrag).toEqual({ cancelled: true, types: [] })
       const placement = await protectedCard.evaluate((el) => {
         const card = el.getBoundingClientRect()
         const lock = el.querySelector('.assistant__pic-r18')!.getBoundingClientRect()
@@ -179,6 +192,10 @@ describe('诺诺助手', () => {
 
       // 交给模型，通过模拟百炼响应检索图库。
       await askAndWait(page, '有没有适合当电脑壁纸的风景照，横的那种')
+      if (mode === 'light') {
+        expect(await page.locator('.assistant__cache').last().innerText()).toBe('缓存命中率 60%')
+        expect(await page.locator('.assistant__time').last().innerText()).toMatch(/^\d{2}:\d{2}$/u)
+      }
       await s('02-chat')
       await expect(page.locator('.assistant__banner').count()).resolves.toBe(0)
 
@@ -220,8 +237,15 @@ describe('诺诺助手', () => {
       await page.waitForSelector('.assistant__welcome')
     }
     expect(errors).toEqual([])
-    expect((await bailianRequests(app)).filter((route) => route === 'completions')).toHaveLength(2)
     await app.close()
+    // 指令预测也使用同一接口；两次语义检索分别只应产生一次聊天请求。
+    await openDatabase(join(dirs.data, 'pgdata'), resolve('drizzle'))
+    try {
+      const { rows } = await getDatabase().pg.query<{ count: number }>("select count(*)::int as count from api_usage where api='chat'")
+      expect(rows[0].count).toBe(2)
+    } finally {
+      await closeDatabase()
+    }
 
     // 没有凭证：整页显示“诺诺还没连上云端”
     const second = await launchApp(dirs)

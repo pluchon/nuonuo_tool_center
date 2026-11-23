@@ -16,8 +16,8 @@ export function markQuitting(): void {
   quitting = true
 }
 
-// 把窗口找回来
-function showWindow(win: BrowserWindow): void {
+// 从托盘或桌面快捷方式重新打开主窗口。
+export function showWindow(win: BrowserWindow): void {
   if (win.isDestroyed()) {
     return
   }

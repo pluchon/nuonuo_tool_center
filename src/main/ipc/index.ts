@@ -2,9 +2,11 @@ import { app, BrowserWindow, dialog, shell, type IpcMainInvokeEvent } from 'elec
 import { join } from 'node:path'
 import {
   IpcChannel,
+  IpcEvent,
   organizeUsesLookQueue,
   type AddTagDTO,
   type AiAskDTO,
+  type AiPredictionDTO,
   type CreateTagDTO,
   type FolderRefDTO,
   type GalleryQueryDTO,
@@ -17,6 +19,8 @@ import { bootDatabase, getDbBootState, type DatabaseLocation } from '../services
 import { deleteImages, recoverFileOps, undoDelete } from '../services/fileOps/fileOpsService'
 import { copyImages, moveImages, undoTransfer } from '../services/fileOps/transferService'
 import { createFolder, deleteCategoryFolder, removeSource, renameCategoryFolder } from '../services/fileOps/folderOpsService'
+import { getCategoryProposal, decideCategoryProposal } from '../services/ai/categoryProposalService'
+import { predictNext } from '../services/ai/nextPrediction'
 import { dirChildren, listFolders, openFolder, transferRoots } from '../services/folderService'
 import {
   copyImageToClipboard,
@@ -47,8 +51,12 @@ import { syncWatching } from '../services/scan/watchService'
 import { applyWindowTheme, toggleMaximize } from '../window/windowControl'
 import {
   answer,
+  compactConversation,
   ask,
   deleteConversation,
+  editMessage,
+  recallMessage,
+  getRecalledDraft,
   getAiStatus,
   listConversations,
   listMessages,
@@ -60,6 +68,9 @@ import {
 } from '../services/ai/assistantService'
 import { cancelAllLooks, getLookState, lookNow, retryLook } from '../services/ai/lookService'
 import { scheduleEmbedding } from '../services/ai/embeddingService'
+import { changePreference, getAiPolicy, setEmbeddingLimit, resetOrganizeRules } from '../services/ai/aiPolicy'
+import { attachmentOriginal } from '../repositories/aiConversationRepository'
+import { referencePreviews } from '../repositories/aiReferenceRepository'
 import { startNativeDrag } from '../services/fileOps/nativeDragService'
 import { acceptAllSuggestions, assistPrompt, decideMany, decideSuggestion, importAssist, listSuggestions } from '../services/ai/suggestionService'
 import { approveOrganize, cancelOrganize, estimateOrganize, getOrganizeState, startOrganize } from '../services/ai/organizeService'
@@ -137,8 +148,7 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
     if (picked.canceled || picked.filePaths.length === 0) {
       return null
     }
-    const name = await importCustomBackground(picked.filePaths[0], paths.backgrounds)
-    return updateSettings({ background: 'custom', customBackground: name })
+    return importCustomBackground(picked.filePaths[0], paths.backgrounds)
   })
 
   handle(IpcChannel.systemDataInfo, async () => {
@@ -347,6 +357,10 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   handle(IpcChannel.scanGetState, async () => getScanState())
 
   handle(IpcChannel.aiStatus, async () => getAiStatus())
+  handle(IpcChannel.aiPredict, async (_event, dto: AiPredictionDTO) => {
+    requireDatabase()
+    return predictNext(dto)
+  })
   handle(IpcChannel.aiIdeas, async () => {
     requireDatabase()
     return suggestIdeas()
@@ -359,13 +373,57 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
     requireDatabase()
     return listMessages(conversationId)
   })
+  handle(IpcChannel.aiAttachmentOriginal, async (_event, messageId: number) => {
+    requireDatabase()
+    return attachmentOriginal(messageId)
+  })
   handle(IpcChannel.aiAsk, async (_event, dto: AiAskDTO) => {
     requireDatabase()
     return ask(dto)
   })
-  handle(IpcChannel.aiAnswer, async (_event, conversationId: number) => {
+  handle(IpcChannel.categoryProposal, async (_event, id: number, messageId: number) => {
     requireDatabase()
-    return answer(conversationId)
+    return getCategoryProposal(id, messageId)
+  })
+  handle(IpcChannel.categoryProposalDecide, async (_event, id: number, messageId: number, apply: boolean) => {
+    requireDatabase()
+    return decideCategoryProposal(id, messageId, apply)
+  })
+  handle(IpcChannel.aiCompact, async (_event, id: number) => {
+    requireDatabase()
+    return compactConversation(id)
+  })
+  handle(IpcChannel.aiAnswer, async (event, conversationId: number) => {
+    requireDatabase()
+    try {
+      return await answer(conversationId, active => {
+        if (!event.sender.isDestroyed()) event.sender.send(IpcEvent.aiCompaction, conversationId, active)
+      })
+    } finally { scheduleEmbedding() }
+  })
+  handle(IpcChannel.aiPolicy, async () => { requireDatabase(); return getAiPolicy() })
+  handle(IpcChannel.aiReferencePreviews, async (_event, ids: number[]) => { requireDatabase(); return referencePreviews(ids) })
+  handle(IpcChannel.aiResetRules, async () => { requireDatabase(); await resetOrganizeRules() })
+  handle(IpcChannel.aiEmbeddingLimit, async (_event, limit: number) => {
+    requireDatabase()
+    await setEmbeddingLimit(limit)
+    scheduleEmbedding()
+  })
+  handle(IpcChannel.aiPreference, async (_event, id: number, content: string | null) => {
+    requireDatabase()
+    await changePreference(id, content)
+  })
+  handle(IpcChannel.aiEditMessage, async (_event, id: number, messageId: number, text: string) => {
+    requireDatabase()
+    return editMessage(id, messageId, text)
+  })
+  handle(IpcChannel.aiRecallMessage, async (_event, id: number, messageId: number) => {
+    requireDatabase()
+    return recallMessage(id, messageId)
+  })
+  handle(IpcChannel.aiRecalledDraft, async (_event, id: number) => {
+    requireDatabase()
+    return getRecalledDraft(id)
   })
   handle(IpcChannel.aiRename, async (_event, id: number, title: string) => {
     requireDatabase()

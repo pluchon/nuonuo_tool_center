@@ -62,8 +62,8 @@
                       autocomplete="off"
                       spellcheck="false"
                       :aria-label="r.label"
-                      :placeholder="credentialStatus?.localOnly && r.key === 'dashscopeApiKey' ? '套餐本地模式' : credentialStatus ? credentialPlaceholders[credentialStatus[r.key]] : ''"
-                      :disabled="!credentialStatus || (credentialStatus.localOnly && r.key === 'dashscopeApiKey')"
+                      :placeholder="credentialStatus ? credentialPlaceholders[credentialStatus[r.key]] : ''"
+                      :disabled="!credentialStatus"
                       @keydown.enter.stop.prevent="persistCredentials()"
                     />
                     <button
@@ -162,7 +162,7 @@
                   </template>
 
                   <template v-else-if="r.type === 'path'">
-                    <span class="set-dlg__path" :title="r.path">{{ r.path || '…' }}</span>
+                    <span class="set-dlg__path">{{ r.path || '…' }}</span>
                     <button class="set-dlg__btn" type="button" :disabled="r.disabled" @click="r.run()">{{ r.btn }}</button>
                   </template>
 
@@ -191,6 +191,7 @@
                 </div>
               </div>
             </section>
+            <AiPolicySettings v-if="settings.tab === 'ai'" />
           </div>
         </div>
       </section>
@@ -199,4 +200,4 @@
 </template>
 
 <script lang="ts" src="./SettingsDialog.ts"></script>
-<style lang="scss" scoped src="./SettingsDialog.scss"></style>
+<style lang="scss" src="./SettingsDialog.scss"></style>

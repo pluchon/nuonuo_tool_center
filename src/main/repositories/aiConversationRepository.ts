@@ -1,7 +1,8 @@
-import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, isNull, sql } from 'drizzle-orm'
+import { BizError } from '../common/bizError'
 import { getDatabase } from '../db/client'
 import { col } from '../db/sqlUtil'
-import { aiConversation, aiMemory, aiMessage } from '../db/schema'
+import { aiConversation, aiImageOriginal, aiMemory, aiMessage } from '../db/schema'
 
 export type AiConversationEntity = typeof aiConversation.$inferSelect
 export type AiMessageEntity = typeof aiMessage.$inferSelect
@@ -46,10 +47,68 @@ export async function updateConversation(id: number, patch: Partial<Pick<AiConve
 }
 
 // 存一条消息
-export async function insertMessage(conversationId: number, role: AiMessageEntity['role'], content: unknown): Promise<AiMessageEntity> {
+export async function insertMessage(conversationId: number, role: AiMessageEntity['role'], content: unknown,
+  original?: { hash: string; bytes: Buffer }): Promise<AiMessageEntity> {
   const { db } = getDatabase()
+  if (role === 'USER') {
+    return db.transaction(async (tx) => {
+      if (original) await tx.insert(aiImageOriginal).values(original).onConflictDoNothing()
+      await tx.update(aiMessage).set({ deleteState: 1 }).where(and(eq(aiMessage.conversationId, conversationId), eq(aiMessage.deleteState, RECALLED)))
+      const [row] = await tx.insert(aiMessage).values({ conversationId, role, content }).returning()
+      return row
+    })
+  }
   const [row] = await db.insert(aiMessage).values({ conversationId, role, content }).returning()
   return row
+}
+
+// 原图只按仍可查看的消息读取，包含撤回到输入框的草稿。
+export async function attachmentOriginal(messageId: number): Promise<string | null> {
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) throw new BizError('BAD_REQUEST', '无效的消息编号')
+  const { rows } = await getDatabase().pg.query<{ bytes: Uint8Array; mime: string }>(
+    `select o.bytes, a->>'mimeType' as mime from ai_message m
+       join ai_conversation c on c.id = m.conversation_id and c.delete_state = 0
+       cross join lateral jsonb_array_elements(m.content->'attachments') a
+       join ai_image_original o on o.hash = a->>'originalHash'
+       where m.id = $1 and m.role = 'USER' and m.delete_state in (0, 2) and a->>'kind' = 'image' limit 1`, [messageId])
+  return rows[0] ? `data:${rows[0].mime};base64,${Buffer.from(rows[0].bytes).toString('base64')}` : null
+}
+
+// 这条用户消息已经移出对话，原文作为输入框草稿保留，直到下一次发送。
+const RECALLED = 2
+
+export async function findRecalledMessage(conversationId: number): Promise<AiMessageEntity | undefined> {
+  const [row] = await getDatabase().db.select().from(aiMessage).where(and(
+    eq(aiMessage.conversationId, conversationId), eq(aiMessage.deleteState, RECALLED), eq(aiMessage.role, 'USER')
+  )).limit(1)
+  return row
+}
+
+export async function reviseLastUserMessage(
+  conversationId: number, messageId: number, replace?: (row: AiMessageEntity) => unknown
+): Promise<AiMessageEntity> {
+  return getDatabase().db.transaction(async (tx) => {
+    const [last] = await tx.select().from(aiMessage).where(and(
+      eq(aiMessage.conversationId, conversationId), eq(aiMessage.role, 'USER'), eq(aiMessage.deleteState, 0)
+    )).orderBy(desc(aiMessage.id)).limit(1)
+    if (last?.id !== messageId) throw new BizError('CONFLICT', '只能修改最后一条用户消息')
+    const replacement = replace?.(last)
+    if (!replace) {
+      await tx.update(aiMessage).set({ deleteState: 1 }).where(and(
+        eq(aiMessage.conversationId, conversationId), eq(aiMessage.deleteState, RECALLED)
+      ))
+    }
+    await tx.update(aiMessage).set({ deleteState: 1 }).where(and(
+      eq(aiMessage.conversationId, conversationId), gte(aiMessage.id, messageId), eq(aiMessage.deleteState, 0)
+    ))
+    await tx.update(aiMemory).set({ validTo: new Date() }).where(and(eq(aiMemory.sourceMessageId, messageId), isNull(aiMemory.validTo)))
+    if (replace) {
+      const [row] = await tx.insert(aiMessage).values({ conversationId, role: 'USER', content: replacement }).returning()
+      return row
+    }
+    await tx.update(aiMessage).set({ deleteState: RECALLED }).where(eq(aiMessage.id, messageId))
+    return last
+  })
 }
 
 // 一段对话的全部消息，按先后

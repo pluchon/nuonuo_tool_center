@@ -1,11 +1,11 @@
 <template>
   <Transition name="nn-dlg">
-    <div v-if="viewer.open && item" class="viewer" @mousedown="onMaskDown" @click="onMaskClick">
+    <div v-if="viewer.open && (item || viewer.attachment)" class="viewer" @mousedown="onMaskDown" @click="onMaskClick">
       <div class="viewer__frame nn-dlg-panel" role="dialog" aria-modal="true" aria-label="查看大图">
         <div class="viewer__card">
           <div class="viewer__head">
             <span class="viewer__dot" aria-hidden="true"></span>
-            <h2 class="viewer__title" :title="item.name">{{ title }}</h2>
+            <h2 class="viewer__title">{{ title }}</h2>
             <span v-if="position" class="viewer__pos">{{ position }}</span>
             <button ref="closeRef" class="viewer__close" type="button" aria-label="关闭" @click="viewer.close()">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M8.5 8.5l7 7M15.5 8.5l-7 7" /></svg>
@@ -40,7 +40,7 @@
             <div v-else class="viewer__empty">
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>
               <span class="viewer__empty-text">无法预览</span>
-              <button class="viewer__empty-btn" type="button" @click="onOpenDefault">用默认程序打开</button>
+              <button v-if="item" class="viewer__empty-btn" type="button" @click="onOpenDefault">用默认程序打开</button>
             </div>
 
             <span v-if="note" class="viewer__note">{{ note }}</span>

@@ -1,14 +1,17 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { attachmentOriginal } from '../../src/main/repositories/aiConversationRepository'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import sharp from 'sharp'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AI_MARKDOWN_MAX_BYTES, type AiAskDTO } from '../../src/shared/api'
+import { AI_MARKDOWN_MAX_BYTES, type AiAskDTO, type AiReplyCacheUsage } from '../../src/shared/api'
+import { normalizeChatUsage } from '../../src/main/services/ai/usage'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
 import { routeLocally, routeTagRequest, type DictDir, type DictTag } from '../../src/main/services/ai/localRouter'
 
 // 模型调用换成脚本：每次调用从队列里取一个预设的回复，并记下发出去的消息
 const calls: Array<{ messages: unknown[]; tools: unknown[] }> = []
-const script: Array<{ content?: string; tool_calls?: unknown[] }> = []
+const script: Array<{ content?: string; tool_calls?: unknown[]; cacheUsage?: AiReplyCacheUsage }> = []
 vi.mock('../../src/main/services/ai/embeddingClient', () => ({
   embed: vi.fn(async () => { throw new Error('测试向量服务不可用') })
 }))
@@ -16,17 +19,21 @@ vi.mock('../../src/main/services/ai/bailianClient', () => ({
   chatCall: vi.fn(async (input: { messages: unknown[]; tools: unknown[] }) => {
     calls.push({ messages: JSON.parse(JSON.stringify(input.messages)), tools: input.tools })
     const next = script.shift() ?? { content: '好的' }
-    return { message: { role: 'assistant', content: next.content ?? '', tool_calls: next.tool_calls }, finishReason: 'stop', usage: {} }
+    return { message: { role: 'assistant', content: next.content ?? '', tool_calls: next.tool_calls }, finishReason: 'stop', usage: {}, cacheUsage: next.cacheUsage }
   })
 }))
 
 const {
   answer,
   ask,
+  compactConversation,
   deleteConversation,
+  editMessage,
+  getRecalledDraft,
   listConversations,
   listMessages,
   pinConversation,
+  recallMessage,
   renameConversation,
   suggestIdeas,
   undoDeleteConversation,
@@ -121,6 +128,106 @@ describe('诺诺助手', () => {
     script.length = 0
   })
 
+  it('按原始顺序解释标签命中，区分本轮排除和可忘记的长期排除', async () => {
+    const params = { scope: null, includeR18: false }
+    const start = await ask({ ...params, conversationId: null, text: '找标签为甘雨的图' })
+    const conversationId = start.conversation.id
+    const original = await answer(conversationId)
+    const ids = original.images.map((item) => item.imageId)
+    expect(ids.slice().sort()).toEqual([1, 2])
+    const next = async (text: string) => {
+      await ask({ ...params, conversationId, text })
+      return answer(conversationId)
+    }
+    expect((await next('第二张为什么符合条件？')).text).toContain('已确认的标签条件「甘雨」')
+    expect((await next('这次排除第二张，以后照常')).images.map((item) => item.imageId)).toEqual(ids.slice(0, 1))
+    expect((await next('找标签为甘雨的图')).images.map((item) => item.imageId)).toEqual(ids)
+    try {
+      await next('以后不要第二张')
+      const fresh = await ask({ ...params, conversationId: null, text: '找标签为甘雨的图' })
+      expect((await answer(fresh.conversation.id)).images.map((item) => item.imageId)).toEqual(ids.slice(0, 1))
+      expect(calls).toHaveLength(0)
+      const { changePreference, getAiPolicy } = await import('../../src/main/services/ai/aiPolicy')
+      const preference = (await getAiPolicy()).preferences.find((p) => p.content === '以后检索时排除图片 #' + ids[1])!
+      await changePreference(preference.id, null)
+      expect((await next('找标签为甘雨的图')).images.map((item) => item.imageId)).toEqual(ids)
+      await getDatabase().pg.query('delete from ai_memory where id = $1', [preference.id])
+    } finally {
+      await getDatabase().pg.query('delete from ai_memory where content = $1', ['以后检索时排除图片 #' + ids[1]])
+    }
+  })
+
+  it('只允许编辑末轮消息，并发和过期编辑只生成一份新记录', async () => {
+    const params = { scope: null, includeR18: false }
+    const first = await ask({ ...params, conversationId: null, text: '第一次提问' })
+    const conversationId = first.conversation.id
+    const firstReply = await answer(conversationId)
+    const last = await ask({ ...params, conversationId, text: '第二次提问' })
+    await answer(conversationId)
+    await expect(recallMessage(conversationId, first.message.id)).rejects.toThrow('最后一条')
+    await expect(editMessage(conversationId, last.message.id, ' ')).rejects.toThrow('说点什么')
+    expect(await listMessages(conversationId)).toHaveLength(4)
+    const results = await Promise.allSettled(['新问题', '重复操作'].map((text) => editMessage(conversationId, last.message.id, text)))
+    expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected'])
+    const edited = (await listMessages(conversationId)).at(-1)!
+    expect(edited.text).toBe('新问题')
+    await expect(recallMessage(conversationId, last.message.id)).rejects.toThrow('最后一条')
+    const { chatCall } = await import('../../src/main/services/ai/bailianClient')
+    vi.mocked(chatCall).mockRejectedValueOnce(new Error('socket hang up'))
+    await expect(answer(conversationId)).rejects.toThrow()
+    expect((await listMessages(conversationId)).map((m) => m.id)).toEqual([first.message.id, firstReply.id, edited.id])
+    const pending = answer(conversationId)
+    await expect(recallMessage(conversationId, edited.id)).rejects.toThrow('正在处理')
+    const reply = await pending
+    expect((await listMessages(conversationId)).map((m) => m.id)).toEqual([first.message.id, firstReply.id, edited.id, reply.id])
+    expect(JSON.stringify(calls.at(-1)?.messages)).not.toContain('第二次提问')
+    await recallMessage(conversationId, edited.id)
+    expect((await listMessages(conversationId)).map((m) => m.id)).toEqual([first.message.id, firstReply.id])
+    expect(await getRecalledDraft(conversationId)).toMatchObject({ text: '新问题' })
+  })
+
+  it('撤回后恢复附件、范围和 R-18 开关，重发复用原图哈希且只能提交一次', async () => {
+    const bytes = await sharp({ create: { width: 64, height: 64, channels: 3, background: '#4c8acc' } }).png().toBuffer()
+    const png = { kind: 'image' as const, name: '蓝.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,' + bytes.toString('base64') }
+    const md = { kind: 'markdown' as const, name: '提示.md', text: '# 观察颜色' }
+    const scope = { kind: 'category' as const, name: '二次元' }
+    const original = await ask({ conversationId: null, scope, includeR18: true, text: '', attachments: [md, png] })
+    const conversationId = original.conversation.id
+    const savedImage = async (id: number) => (await getDatabase().pg.query<{ image: { originalHash: string; dataUrl: string } }>(
+      "select content->'attachments'->1 as image from ai_message where id = $1", [id]
+    )).rows[0].image
+    const stored = await savedImage(original.message.id)
+    expect(stored.originalHash).toBeTruthy()
+    expect(await attachmentOriginal(original.message.id)).toBe(png.dataUrl)
+    const draft = await recallMessage(conversationId, original.message.id)
+    expect(await listMessages(conversationId)).toEqual([])
+    expect(await getRecalledDraft(conversationId)).toEqual(draft)
+    expect(draft).toMatchObject({ scope, includeR18: true, attachments: [md, { kind: 'image', name: png.name }] })
+    expect(draft.attachments[1]).not.toHaveProperty('originalHash')
+    const resend = { ...draft, conversationId, text: '再看一次', recalledMessageId: draft.messageId }
+    const other = await ask({ conversationId: null, scope: null, includeR18: false, text: '另一段对话' })
+    await expect(ask({ ...resend, conversationId: other.conversation.id })).rejects.toThrow('草稿')
+    const sent = await ask(resend)
+    expect(await savedImage(sent.message.id)).toEqual(stored)
+    expect(await attachmentOriginal(original.message.id)).toBeNull()
+    expect(await attachmentOriginal(sent.message.id)).toBe(png.dataUrl)
+    const archived = await getDatabase().pg.query('select hash from ai_image_original where hash = $1', [stored.originalHash])
+    expect(archived.rows).toHaveLength(1)
+    expect(await getRecalledDraft(conversationId)).toBeNull()
+    await expect(ask(resend)).rejects.toThrow('草稿')
+  })
+
+  it('类目录没有可检索图片时说明归档条件，直接输入猫娘和完整问句都不调用模型', async () => {
+    for (const text of ['猫娘', '有没有猫娘的图片']) {
+      const q = await ask({ conversationId: null, text, scope: { kind: 'category', name: '空目录' }, includeR18: false })
+      const reply = await answer(q.conversation.id)
+      expect(reply.text).toContain('归入类目录')
+      expect(reply.images).toEqual([])
+      expect(reply.how).toBeNull()
+    }
+    expect(calls).toHaveLength(0)
+  })
+
   it('只发 Markdown 仍可建立对话，附件正文和文件名在重试及追问中保留', async () => {
     const attachment = { kind: 'markdown' as const, name: 'landscape-prompt.MD', text: '# 提示词\n\n保留  缩进和 **粗体**。' }
     const q = await ask({ conversationId: null, text: '', scope: null, includeR18: false, attachment })
@@ -179,9 +286,11 @@ describe('诺诺助手', () => {
     expect(first.conversation.title).toBe('找甘雨的图')
     const reply = await answer(first.conversation.id)
     expect(calls).toHaveLength(0)
+    expect(reply.cacheUsage).toBeUndefined()
     expect(reply.images.map((i) => i.name)).toEqual(['甘雨-好椰', '甘雨夜景'])
     expect(reply.how).toBe('搜索了图库：角色「甘雨」，找到 2 张')
-    expect(reply.text).toBe('')
+    expect(reply.text).toBeTruthy()
+    expect(reply.text).not.toMatch(/找到\s*\d|甘雨/)
 
     await ask({ conversationId: first.conversation.id, text: '椰羊的竖图', scope: { kind: 'category', name: '二次元' }, includeR18: true })
     const r18 = await answer(first.conversation.id)
@@ -191,12 +300,14 @@ describe('诺诺助手', () => {
 
   it('对不上的进对话循环：工具往返，前缀固定，R-18 图只给数量', async () => {
     script.push(
-      { tool_calls: [{ id: 'c1', type: 'function', function: { name: 'search_images', arguments: '{"character":"椰羊","keywordGroups":[["夜景","晚上"]],"answerFromResults":true}' } }] },
-      { content: '找到一张夜景，「甘雨夜景」。' }
+      { cacheUsage: { inputTokens: 100, cachedTokens: 0 }, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'search_images', arguments: '{"character":"椰羊","keywordGroups":[["夜景","晚上"]],"answerFromResults":true}' } }] },
+      { content: '找到一张夜景，「甘雨夜景」。', cacheUsage: { inputTokens: 900, cachedTokens: 800 } }
     )
     const q = await ask({ conversationId: null, text: '甘雨在晚上的照片', scope: null, includeR18: true })
     const reply = await answer(q.conversation.id)
     expect(calls).toHaveLength(2)
+    expect(reply.cacheUsage).toEqual({ inputTokens: 1000, cachedTokens: 800 })
+    expect((await listMessages(q.conversation.id)).at(-1)?.cacheUsage).toEqual(reply.cacheUsage)
     expect(reply.text).toBe('找到一张夜景，「甘雨夜景」。')
     expect(reply.images.map((i) => i.name)).toEqual(['甘雨夜景'])
     // 关键词是“任一”：同义词里有一个对不上也能找到
@@ -211,7 +322,8 @@ describe('诺诺助手', () => {
     expect(sys).toContain('甘雨')
     // 只用在 R-18 图上的标签不进词表
     expect(sys).not.toContain('只在R18')
-    expect(String(firstMsgs[firstMsgs.length - 1].content)).toContain('包含 R-18')
+    expect(String(firstMsgs.at(-2)?.content)).toContain('包含 R-18')
+    expect(firstMsgs.at(-1)?.content).toBe('甘雨在晚上的照片')
     // 第二次请求：工具结果只给 R-18 的数量，不给名字
     const toolMsg = (calls[1].messages as Array<{ role: string; content: string }>).find((m) => m.role === 'tool')
     expect(toolMsg?.content).toContain('"r18Total":0')
@@ -221,10 +333,10 @@ describe('诺诺助手', () => {
     // 下一轮：历史是上一轮的话和回复，最后一条历史打了标记；前缀和上一轮一致
     script.push({ content: '好的。' })
     await ask({ conversationId: q.conversation.id, text: '谢谢诺诺', scope: null, includeR18: false })
-    await answer(q.conversation.id)
+    expect((await answer(q.conversation.id)).cacheUsage).toBeUndefined()
     const third = calls[2].messages as Array<{ role: string; content: unknown }>
     expect(JSON.stringify(third[0])).toBe(JSON.stringify(firstMsgs[0]))
-    expect(third.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user'])
+    expect(third.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'system', 'user'])
     expect(JSON.stringify(third[2].content)).toContain('ephemeral')
     expect(JSON.stringify(third[2].content)).not.toMatch(/#2|甘雨夜景|给用户看了/)
   })
@@ -269,39 +381,121 @@ describe('诺诺助手', () => {
     await pg.exec('UPDATE image SET is_r18 = true WHERE id = 1')
     try {
       await ask({ conversationId: q.conversation.id, text: '刚才第二张图叫什么？', scope: null, includeR18: true })
-      script.push({ tool_calls: [{ id: 'g', type: 'function', function: { name: 'get_image', arguments: '{"position":2}' } }] }, { content: '叫甘雨夜景。' })
-      expect((await answer(q.conversation.id)).text).toBe('叫甘雨夜景。')
-      const sent = JSON.stringify(calls[1].messages)
-      expect(sent).toContain('甘雨夜景')
-      expect(sent).not.toContain('2=2')
-      expect(sent).not.toMatch(/1=1|3=3|甘雨私房|甘雨-好椰/)
+      expect((await answer(q.conversation.id)).text).toContain('甘雨夜景')
+      expect(calls).toHaveLength(0)
 
       await ask({ conversationId: q.conversation.id, text: '再看看刚才的图', scope: { kind: 'category', name: '其他目录' }, includeR18: true })
       script.push({ tool_calls: [{ id: 'x', type: 'function', function: { name: 'get_image', arguments: '{"id":2}' } }] }, { content: '当前目录没有这张图。' })
       await answer(q.conversation.id)
-      expect(JSON.stringify(calls[3].messages.filter((m) => (m as { role: string }).role === 'tool'))).toContain('没有这张图')
-      expect(JSON.stringify(calls[2].messages)).not.toMatch(/2=2|甘雨夜景/)
+      expect(JSON.stringify(calls[1].messages.filter((m) => (m as { role: string }).role === 'tool'))).toContain('没有这张图')
+      expect(JSON.stringify(calls[0].messages)).not.toMatch(/2=2|甘雨夜景/)
     } finally {
       await pg.exec('UPDATE image SET is_r18 = false WHERE id = 1')
     }
+  })
+
+  it('查询标签后连续闲聊保持图片身份，改为受限后不再发送旧标签或基于它的回复', async () => {
+    const base = { scope: null, includeR18: false }
+    const start = await ask({ ...base, conversationId: null, text: '这张图有哪些已确认的标签？',
+      references: [{ imageId: 2, position: 1, name: '', groupId: 'gallery:focus' }] })
+    const id = start.conversation.id
+    expect((await answer(id)).text).toContain('甘雨夜景')
+    const follow = async (text: string) => {
+      await ask({ ...base, conversationId: id, text })
+      script.push({ content: '这张画的夜色挺有趣。' })
+      await answer(id)
+      return JSON.stringify(calls.at(-1)?.messages)
+    }
+    const first = await follow('是不是很有趣呢？')
+    expect(first).toContain('这张图有哪些已确认的标签')
+    expect(first).toContain('甘雨夜景')
+    expect(first).not.toContain('data:image')
+    script.push({ content: '用户引用了一张图库图片并询问标签。' })
+    expect((await compactConversation(id)).changed).toBe(true)
+    expect(await follow('这个图片')).toContain('这张画的夜色挺有趣')
+    expect(await follow('之前给你发的那一张')).toContain('甘雨夜景')
+    const { pg } = getDatabase()
+    await pg.exec('update image set is_r18=true where id=2')
+    try {
+      expect(await follow('再聊一句')).not.toMatch(/甘雨夜景|这张画的夜色挺有趣/)
+    } finally { await pg.exec('update image set is_r18=false where id=2') }
+  })
+
+  it('图库引用按组保留原序，只比较已确认标签，撤回和重发保持图片身份', async () => {
+    const ref = (imageId: number, position: number, groupId = 'gallery:fixture') => ({ imageId, position, groupId, name: '过期图名' })
+    const params = { scope: null, includeR18: false }
+    const q = await ask({ ...params, conversationId: null, text: '比较这几张图片的共同标签',
+      references: [ref(3, 1), ref(1, 2), ref(3, 3), ref(2, 2, 'gallery:another')] })
+    const id = q.conversation.id
+    expect(q.message.references?.map((r) => r.imageId)).toEqual([3, 1, 2])
+    expect(q.message.references?.map((r) => r.name)).not.toContain('过期图名')
+    expect((await answer(id)).text).toBe('共同标签：甘雨。')
+    await ask({ ...params, conversationId: id, text: '第一组第二张图叫什么？' })
+    expect((await answer(id)).text).toContain('甘雨-好椰')
+    await ask({ ...params, conversationId: id, text: '第二组第二张有哪些标签？' })
+    expect((await answer(id)).text).toContain('甘雨夜景')
+    expect(calls).toHaveLength(0)
+    const direct = await ask({ ...params, conversationId: id, text: '解释这张图片', references: [ref(3, 1)] })
+    expect((await answer(id)).text).toContain('本地')
+    expect(calls).toHaveLength(0)
+    const edit = await editMessage(id, direct.message.id, '这张图片有哪些已确认的标签？')
+    expect(edit.references).toEqual(direct.message.references)
+    expect((await answer(id)).text).toContain('只在R18')
+    const draft = await recallMessage(id, edit.id)
+    expect(draft.references).toEqual(edit.references)
+    const again = await ask({ ...params, conversationId: id, text: draft.text, references: draft.references, recalledMessageId: draft.messageId })
+    expect(again.message.references).toEqual(draft.references)
+    await expect(ask({ ...params, conversationId: id, text: '无效来源', references:
+      [{ ...ref(1, 1), sourceMessageId: q.message.id, groupId: 'result:' + q.message.id }] })).rejects.toThrow('结果已经变更')
+    await ask({ ...params, includeR18: true, conversationId: id, text: '找标签为甘雨的图' })
+    const result = await answer(id)
+    const fromResult = (imageId: number, position: number) =>
+      ({ ...ref(imageId, position, 'result:' + result.id), sourceMessageId: result.id })
+    const normal = { ...params, conversationId: id, text: '第二张图叫什么？' }
+    await expect(ask({ ...normal, includeR18: true, references: [fromResult(2, 1)] })).rejects.toThrow('范围已经变更')
+    await expect(ask({ ...normal, references: [fromResult(3, 3)] })).rejects.toThrow('范围已经变更')
+    await expect(ask({ ...normal, scope: { kind: 'category', name: '未选择的目录' },
+      references: [fromResult(2, 2)] })).rejects.toThrow('范围已经变更')
+    await ask({ ...normal, references: [fromResult(2, 2)] })
+    expect((await answer(id)).text).toContain('甘雨夜景')
+    expect(calls).toHaveLength(0)
+    const mixed = await ask({ ...params, conversationId: null, references: [ref(3, 1), ref(2, 2)], text: '给这幅画起一个名字，并说说为什么会出现彩虹' })
+    script.push({ content: '夜色中的甘雨。' })
+    await answer(mixed.conversation.id)
+    expect(calls).toHaveLength(1)
+    const sent = JSON.stringify(calls[0].messages)
+    expect(sent).toContain('甘雨夜景')
+    expect(sent).not.toMatch(/甘雨私房|只在R18|data:image|image_url/)
+    await ask({ ...params, includeR18: true, conversationId: mixed.conversation.id,
+      text: '看看第二张的配色', references: [ref(3, 1), ref(2, 2)] })
+    script.push({ tool_calls: [
+      { id: 's', type: 'function', function: { name: 'search_images', arguments: '{"character":"甘雨"}' } },
+      { id: 'g', type: 'function', function: { name: 'get_image', arguments: '{"id":3}' } }
+    ] }, { content: '参考图中的角色是甘雨。' })
+    const restricted = await answer(mixed.conversation.id)
+    expect(restricted.images.map((r) => r.imageId)).toEqual([2])
+    const scoped = JSON.stringify(calls.at(-1)?.messages)
+    expect(scoped).toContain('甘雨夜景')
+    expect(scoped).not.toMatch(/甘雨-好椰|甘雨私房|只在R18/)
   })
 
   it('remember 记下偏好；不认识的工具和坏参数返回错误给模型', async () => {
     script.push(
       {
         tool_calls: [
-          { id: 'a', type: 'function', function: { name: 'remember', arguments: '{"content":"角色名用中文"}' } },
+          { id: 'a', type: 'function', function: { name: 'remember', arguments: '{"content":"角色名用中文","evidence":"以后角色名都用中文"}' } },
           { id: 'b', type: 'function', function: { name: 'delete_all', arguments: '{}' } },
           { id: 'c', type: 'function', function: { name: 'get_image', arguments: '{bad' } },
           { id: 'd', type: 'function', function: { name: 'get_image', arguments: '{"id":3}' } },
           { id: 'e', type: 'function', function: { name: 'list_tags', arguments: '{}' } }
         ]
       },
-      { content: '记住啦。' }
+      { content: '记住啦。', cacheUsage: { inputTokens: 100, cachedTokens: 90 } }
     )
     const q = await ask({ conversationId: null, text: '以后角色名都用中文', scope: null, includeR18: false })
     const reply = await answer(q.conversation.id)
     expect(reply.how).toBeNull()
+    expect(reply.cacheUsage).toBeUndefined()
     const tools = (calls[1].messages as Array<{ role: string; content: string }>).filter((m) => m.role === 'tool').map((m) => m.content)
     expect(tools[0]).toBe('{"ok":true}')
     expect(tools[1]).toContain('没有 delete_all')
@@ -314,11 +508,11 @@ describe('诺诺助手', () => {
   })
 
   it('纯检索命中后直接返回卡片；云端出错报“网络异常”，这句话留着可以重试', async () => {
-    script.push({ tool_calls: [{ id: 's', type: 'function', function: { name: 'search_images', arguments: '{"tags":["猫"]}' } }] })
+    script.push({ tool_calls: [{ id: 's', type: 'function', function: { name: 'search_images', arguments: '{"tags":["猫"],"onMatch":"耳朵竖好，给你看喵 ฅ^•ﻌ•^ฅ"}' } }] })
     const q = await ask({ conversationId: null, text: '有没有毛茸茸的', scope: null, includeR18: false })
     const reply = await answer(q.conversation.id)
     expect(calls).toHaveLength(1)
-    expect(reply.text).toBe('')
+    expect(reply.text).toBe('耳朵竖好，给你看喵 ฅ^•ﻌ•^ฅ')
 
     const { chatCall } = await import('../../src/main/services/ai/bailianClient')
     vi.mocked(chatCall).mockRejectedValueOnce(new Error('socket hang up'))
@@ -326,17 +520,37 @@ describe('诺诺助手', () => {
     await expect(answer(again.conversation.id)).rejects.toThrow('网络异常')
     const msgs = await listMessages(q.conversation.id)
     expect(msgs[msgs.length - 1]).toMatchObject({ role: 'user', text: '再找找狗狗的' })
-    script.push({ content: '没有狗狗的图。' })
+    script.push({ tool_calls: [{ id: 'retry', type: 'function', function: { name: 'search_images', arguments: '{"semantic":"狗狗"}' } }] })
     const fallback = await answer(q.conversation.id)
-    expect(fallback).toMatchObject({ text: '没找到符合条件的图片。', images: [] })
-    expect(fallback.how).toContain('找到 0 张')
+    expect(fallback).toMatchObject({ text: '目前只完成了部分检索。', images: [] })
+    expect(fallback.how).toContain('目前显示 0 张，画面相似度检索暂不可用')
     await expect(answer(q.conversation.id)).rejects.toThrow('没有要回复的话')
   })
 
-  it('模糊检索缺少工具调用和数量时仍查库，同一句作为 Markdown 内容时保留模型答复', async () => {
-    script.push({ content: '这几张都挺像的。' })
+  it('补充视觉对照时断线，仍返回已匹配的标签卡片', async () => {
+    const { chatCall } = await import('../../src/main/services/ai/bailianClient')
+    vi.mocked(chatCall).mockResolvedValueOnce({
+      message: { role: 'assistant', content: '', refusal: null, tool_calls: [{
+        id: 'partial', type: 'function', function: { name: 'search_images', arguments: JSON.stringify({ tags: ['甘雨'], semantic: '甘雨' }) }
+      }] }, finishReason: 'tool_calls', usage: normalizeChatUsage({})
+    }).mockRejectedValueOnce(new Error('socket hang up'))
+    const q = await ask({ conversationId: null, text: '找一幅椰羊在林间的画', scope: null, includeR18: false })
+    const reply = await answer(q.conversation.id)
+    expect(reply.images.map((i) => i.imageId).sort()).toEqual([1, 2])
+    expect(reply.how).toContain('目前显示 2 张，画面相似度检索暂不可用')
+  })
+
+  it('模型用结构化工具找图，普通对话和 Markdown 正文中的搜索词不触发检索', async () => {
+    script.push({ tool_calls: [{ id: 'find', type: 'function', function: { name: 'search_images', arguments: '{"keywordGroups":[["落叶小猫"]]}' } }] })
     const query = await ask({ conversationId: null, text: '帮我找落叶小猫的图片', scope: null, includeR18: false })
     expect((await answer(query.conversation.id)).images.map((i) => i.imageId)).toEqual([4])
+    for (const question of ['你最喜欢什么', '为什么会出现彩虹', '帮我找出这句话的语病', '你会创建类目录吗', '聊聊把类目录 A 移动到 B 的利弊', '猫']) {
+      const content = '我找到了两张纸，画在上面讲给你听。'
+      script.push({ content })
+      await ask({ conversationId: query.conversation.id, text: question, scope: null, includeR18: false })
+      expect(await answer(query.conversation.id)).toMatchObject({ text: content, images: [], how: null })
+      expect(JSON.stringify(calls.at(-1)?.messages)).not.toContain('已查询图库。')
+    }
     script.push({ content: '找到 2 张。' })
     const file = await ask({ conversationId: null, text: '找出下面句子', scope: null, includeR18: false,
       attachment: { kind: 'markdown', name: '原文.md', text: '请原样复述：找到 2 张。' } })

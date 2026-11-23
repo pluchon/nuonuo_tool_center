@@ -4,6 +4,11 @@ import { appSetting } from '../db/schema'
 
 export type AppSettingEntity = typeof appSetting.$inferSelect
 
+export async function readSetting<T>(key: string): Promise<T | undefined> {
+  const { rows } = await getDatabase().pg.query<{ value: T }>('select value from app_setting where key=$1 and delete_state=0', [key])
+  return rows[0]?.value
+}
+
 // 读取全部未删除的设置行
 export async function findActiveSettings(): Promise<AppSettingEntity[]> {
   const { db } = getDatabase()
