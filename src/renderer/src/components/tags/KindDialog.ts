@@ -42,12 +42,13 @@ export default defineComponent({
     }
     // 回车：离开输入框，由 blur 保存
     const onEnter = (e: KeyboardEvent): void => {
-      if (!e.isComposing) {
+      if (!e.isComposing && e.keyCode !== 229) {
         ;(e.target as HTMLInputElement).blur()
       }
     }
     // Esc：放弃这一行的修改
     const onEsc = (id: number, e: KeyboardEvent): void => {
+      if (e.isComposing || e.keyCode === 229) return
       delete drafts[id]
       ;(e.target as HTMLInputElement).blur()
     }

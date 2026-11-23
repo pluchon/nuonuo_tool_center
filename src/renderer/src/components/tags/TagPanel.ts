@@ -56,10 +56,13 @@ export default defineComponent({
       mergeOpen.value = false
     }
     watch(
-      () => [props.creating, props.tag?.id, props.tag?.name, props.tag?.categoryId, props.tag?.aliases.join('\n')],
+      [() => props.creating, () => props.tag?.id, () => props.tag?.name, () => props.tag?.categoryId, () => props.tag?.aliases.join('\n')],
       reset,
       { immediate: true }
     )
+    watch(() => props.defaultCategoryId, (id) => {
+      if (props.creating && !categoryId.value) categoryId.value = id
+    })
 
     const color = computed(() => tagsStore.colorOf(categoryId.value))
     const categoryName = computed(() => tagsStore.categoryById(categoryId.value)?.name ?? '')
@@ -95,6 +98,12 @@ export default defineComponent({
       }
     })
 
+    const pendingAlias = computed(() => {
+      const word = tidy(aliasDraft.value)
+      const lower = word.toLowerCase()
+      return lower !== tidy(name.value).toLowerCase() && !aliases.value.some(a => a.toLowerCase() === lower) ? word : ''
+    })
+
     // 有没有改动：名字、分类、别名，或选了要合并的标签
     const dirty = computed(() => {
       const t = props.tag
@@ -104,6 +113,7 @@ export default defineComponent({
       return (
         tidy(name.value) !== t.name ||
         categoryId.value !== t.categoryId ||
+        !!pendingAlias.value ||
         aliases.value.join('\n') !== t.aliases.join('\n') ||
         chosen.value.length > 0
       )
@@ -137,23 +147,20 @@ export default defineComponent({
     const onAliasInput = (e: Event): void => {
       aliasDraft.value = (e.target as HTMLInputElement).value
     }
-    const onAliasKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Enter' || e.isComposing) {
-        return
-      }
-      const word = tidy(aliasDraft.value)
-      if (!word) {
-        return
-      }
+    const commitAlias = (): boolean => {
+      const word = pendingAlias.value
       if (charCount(word) > TAG_NAME_MAX) {
         toast.show(`别名最多 ${TAG_NAME_MAX} 个字`, 'error')
-        return
+        return false
       }
-      const lower = word.toLowerCase()
-      if (lower !== tidy(name.value).toLowerCase() && !aliases.value.some((a) => a.toLowerCase() === lower)) {
+      if (word) {
         aliases.value = [...aliases.value, word]
       }
       aliasDraft.value = ''
+      return true
+    }
+    const onAliasKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Enter' && !e.isComposing) commitAlias()
     }
     const removeAlias = (a: string): void => {
       aliases.value = aliases.value.filter((x) => x !== a)
@@ -179,7 +186,7 @@ export default defineComponent({
     }
 
     const save = async (): Promise<void> => {
-      if (!canSave.value) {
+      if (!canSave.value || !commitAlias()) {
         return
       }
       busy.value = true

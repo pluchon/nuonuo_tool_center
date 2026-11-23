@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 
-// 顶部提示条：成功提示 5 秒后自动消失（可带“撤销”）；失败提示不消失，点“知道了”关闭
+// 顶部提示条：成功提示 5 秒后自动消失（可带“撤销”）；错误提示也自动消失，可提前关闭
 export type ToastKind = 'ok' | 'error'
 
 // 自动消失的时间（毫秒）
@@ -33,9 +33,7 @@ export const useToastStore = defineStore('toast', {
       undoAction = kind === 'ok' ? (undo ?? null) : null
       this.undoable = undoAction !== null
       this.seq += 1
-      if (kind !== 'error') {
-        hideTimer = setTimeout(() => this.close(), AUTO_HIDE_MS)
-      }
+      hideTimer = setTimeout(() => this.close(), AUTO_HIDE_MS)
     },
     // 点“撤销”：先关提示条，再执行撤销
     async undo(): Promise<void> {

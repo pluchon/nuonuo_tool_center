@@ -89,12 +89,11 @@
     <div class="tag-panel__section tag-panel__section--col">
       <span class="tag-panel__title">别名</span>
       <div class="tag-panel__alias-box">
-        <div class="tag-panel__aliases">
+        <div v-if="aliases.length" class="tag-panel__aliases">
           <span v-for="a in aliases" :key="a" class="tag-panel__alias">
             {{ a }}
             <button class="tag-panel__alias-x" type="button" aria-label="删除别名" @click="removeAlias(a)">✕</button>
           </span>
-          <span v-if="aliases.length === 0" class="tag-panel__none">还没有别名</span>
         </div>
         <label class="tag-panel__alias-add">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
@@ -104,7 +103,7 @@
       </div>
     </div>
 
-    <div v-if="!creating && tag" class="tag-panel__section tag-panel__section--col tag-panel__section--merge">
+    <div v-if="!creating && tag && tagsStore.tags.length > 1" class="tag-panel__section tag-panel__section--col tag-panel__section--merge">
       <div class="tag-panel__row">
         <span class="tag-panel__title">合并</span>
         <div class="tag-panel__modes" role="tablist" aria-label="合并方向">
@@ -165,7 +164,6 @@
               <span class="tag-panel__mname">{{ o.tag.name }}</span>
               <span class="tag-panel__mcount">{{ o.tag.count }} 张</span>
             </button>
-            <span v-if="mergeOptions.length === 0" class="tag-panel__none tag-panel__none--pad">没有别的标签</span>
           </div>
         </Transition>
       </div>

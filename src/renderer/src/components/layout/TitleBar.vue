@@ -20,7 +20,7 @@
 
     <div class="title-bar__controls">
       <button v-if="hasPanel" class="title-bar__panel-toggle" type="button" :aria-expanded="view.panelOpen" aria-controls="right-panel"
-        :aria-label="panelLabel" :title="panelLabel" @click="view.setPanelOpen(!view.panelOpen)">
+        :aria-label="panelLabel" @click="view.setPanelOpen(!view.panelOpen)">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
           <rect x="3" y="4" width="18" height="16" rx="3" /><path d="M15 4v16" />
         </svg>

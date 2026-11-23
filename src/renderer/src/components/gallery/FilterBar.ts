@@ -1,6 +1,6 @@
 import { computed, defineComponent, onBeforeUnmount, ref, watch } from 'vue'
 import { FILTER_MAX, type DirCountVO, type DirKeyDTO, type MoreFilterDTO } from '@shared/api'
-import type { SortKey } from '@shared/settings'
+import { SCAN_FORMATS, type SortKey } from '@shared/settings'
 import { fetchUntaggedDirs } from '@/api/edit'
 import { useFoldersStore } from '@/stores/folders'
 import { useGalleryStore } from '@/stores/gallery'
@@ -22,7 +22,7 @@ type MoreKey = keyof MoreFilterDTO
 
 // 更多筛选的分组和选项（照原型 MF）
 const MORE_SECTIONS: Array<{ key: MoreKey; title: string; opts: Array<{ value: string; label: string }> }> = [
-  { key: 'fmt', title: '格式', opts: ['JPG', 'PNG', 'GIF', 'WEBP', 'RAW', 'HEIC'].map((v) => ({ value: v, label: v })) },
+  { key: 'fmt', title: '格式', opts: SCAN_FORMATS.map((value) => ({ value, label: value })) },
   {
     key: 'ori',
     title: '方向',
@@ -100,6 +100,7 @@ export default defineComponent({
     const folders = useFoldersStore()
     const tagsStore = useTagsStore()
     const draft = ref(gallery.q)
+    const searchInput = ref<HTMLInputElement | null>(null)
     const open = ref<'tag' | 'dir' | 'more' | 'sort' | null>(null)
     const untaggedDirs = ref<DirCountVO[]>([])
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -117,7 +118,7 @@ export default defineComponent({
     })
 
     const isCategory = computed(() => viewStore.view === 'dir' && viewStore.dir?.kind === 'category')
-    const placeholder = computed(() => (gallery.nameOnly ? '按图片名找' : '来找找你想要的标签与图片名'))
+    const placeholder = computed(() => (gallery.nameOnly ? '搜索图片名' : '搜索标签或图片名'))
     const sortLabel = computed(() => SORT_OPTIONS.find((o) => o.key === gallery.sort)?.label ?? '')
     const showR18 = computed(() => !gallery.nameOnly && viewStore.view !== 'r18')
     const showTags = computed(() => !gallery.nameOnly)
@@ -194,22 +195,38 @@ export default defineComponent({
     const toggle = (key: 'tag' | 'dir' | 'more' | 'sort'): void => {
       open.value = open.value === key ? null : key
     }
-
-    const onInput = (e: Event): void => {
-      draft.value = (e.target as HTMLInputElement).value
-      if (timer) {
-        clearTimeout(timer)
-      }
-      timer = setTimeout(() => {
-        gallery.q = draft.value
-        reload()
-      }, SEARCH_DELAY)
+    const closeMenu = (event: KeyboardEvent): void => {
+      if (!open.value) return
+      const trigger = (event.target as HTMLElement).closest('[data-dd]')?.querySelector<HTMLButtonElement>('.filter-bar__btn')
+      event.stopPropagation()
+      open.value = null
+      trigger?.focus()
     }
-    const clearSearch = (): void => {
-      if (timer) {
-        clearTimeout(timer)
+    const onFocusOut = (event: FocusEvent): void => {
+      const group = (event.target as HTMLElement).closest('[data-dd]')
+      if (group && !group.contains(event.relatedTarget as Node | null)) open.value = null
+    }
+
+    const cancelSearchTimer = (): void => {
+      if (timer) clearTimeout(timer)
+      timer = null
+    }
+    const searchText = computed({
+      get: () => draft.value,
+      set: (value: string) => {
+        draft.value = value
+        cancelSearchTimer()
+        if (value === gallery.q) return
+        timer = setTimeout(() => {
+          gallery.q = value
+          reload()
+        }, SEARCH_DELAY)
       }
+    })
+    const clearSearch = (): void => {
+      cancelSearchTimer()
       draft.value = ''
+      searchInput.value?.focus()
       if (gallery.q) {
         gallery.q = ''
         reload()
@@ -318,6 +335,7 @@ export default defineComponent({
     return {
       gallery,
       draft,
+      searchInput,
       open,
       placeholder,
       sortLabel,
@@ -336,7 +354,10 @@ export default defineComponent({
       colorOf,
       categoryName,
       toggle,
-      onInput,
+      closeMenu,
+      onFocusOut,
+      searchText,
+      cancelSearchTimer,
       clearSearch,
       pickSort,
       toggleR18,

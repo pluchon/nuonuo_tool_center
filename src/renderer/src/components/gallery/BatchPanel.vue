@@ -46,6 +46,10 @@
       <button class="batch-panel__act batch-panel__act--main" type="button" :disabled="suggest.busy" @click="suggest.decide(gallery.selected, true)">建议全部采用</button>
     </div>
 
+    <div class="batch-panel__row-head">
+      <span class="batch-panel__label">AI</span>
+      <button class="batch-panel__ask" type="button" @click="askNono">问诺诺</button>
+    </div>
     <div class="batch-panel__r18">
       <button class="batch-panel__r18-btn batch-panel__r18-btn--on" type="button" :disabled="busy" @click="onR18(true)">全部标 R-18</button>
       <button class="batch-panel__r18-btn" type="button" :disabled="busy" @click="onR18(false)">全部取消 R-18</button>

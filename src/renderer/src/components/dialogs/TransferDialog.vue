@@ -61,7 +61,6 @@
                 type="button"
                 :role="isCopy ? 'checkbox' : 'radio'"
                 :aria-checked="transfer.picked.includes(p) ? 'true' : 'false'"
-                :title="p"
                 @click="transfer.toggle(p)"
               >
                 <span class="transfer-dlg__mark" :class="{ 'transfer-dlg__mark--box': isCopy }" aria-hidden="true">{{ transfer.picked.includes(p) ? '✓' : '' }}</span>

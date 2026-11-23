@@ -1,6 +1,7 @@
 import { computed, defineComponent, ref } from 'vue'
 import { thumbUrl } from '@/api/gallery'
 import { useGalleryStore } from '@/stores/gallery'
+import { useAssistantStore } from '@/stores/assistant'
 import { useSettingsStore } from '@/stores/settings'
 import { useTagsStore } from '@/stores/tags'
 import { useTransferStore } from '@/stores/transfer'
@@ -68,6 +69,16 @@ export default defineComponent({
     }
 
     const transfer = useTransferStore()
-    return { gallery, suggest, aiView, transfer, thumbs, more, blurR18, draft, busy, colorOf, thumbUrl, onInput, onEnter, onRemove, onR18 }
+    const assistant = useAssistantStore()
+    const askNono = (): void => {
+      const byId = new Map(gallery.items.map((item) => [item.imageId, item]))
+      const groupId = 'gallery:' + crypto.randomUUID()
+      assistant.addReferences(gallery.selected.flatMap((id, i) => {
+        const item = byId.get(id)
+        return item ? [{ imageId: id, name: item.name, groupId, position: i + 1 }] : []
+      }))
+      viewStore.showAssistant()
+    }
+    return { gallery, suggest, aiView, transfer, thumbs, more, blurR18, draft, busy, colorOf, thumbUrl, onInput, onEnter, onRemove, onR18, askNono }
   }
 })

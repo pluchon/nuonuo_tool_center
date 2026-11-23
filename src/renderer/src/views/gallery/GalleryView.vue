@@ -32,9 +32,9 @@
         <button v-if="showUntaggedLink" class="gallery__untagged" type="button" @click="showUntagged">查看未打标签的图片</button>
       </div>
       <!-- 换视图或筛选条件时网格整体淡入（扫描中的刷新不换 key，不闪） -->
-      <ImageGrid v-else-if="gallery.items.length > 0" :key="gallery.queryKey" class="nn-appear" />
+      <ImageGrid v-else-if="gallery.items.length > 0" ref="imageGrid" :key="gallery.queryKey" class="nn-appear" />
     </main>
-    <RightPanel v-if="gallery.items.length" :key="viewStore.panelKey" class="gallery__side" :open="viewStore.panelOpen">
+    <RightPanel v-if="gallery.items.length" :key="viewStore.panelKey" class="gallery__side" :open="viewStore.panelOpen" :sync-grid="imageGrid?.syncPanelLayout">
       <DetailPanel />
     </RightPanel>
     <ConfirmDialog

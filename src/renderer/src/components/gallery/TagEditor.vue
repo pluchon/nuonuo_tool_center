@@ -51,7 +51,7 @@
           :value="draft"
           @input="onInput"
           @keydown.enter="onEnter"
-          @keydown.esc.stop="draft = ''"
+          @keydown.esc.stop="!$event.isComposing && $event.keyCode !== 229 && (draft = '')"
         />
         <Transition name="nn-pop">
           <div v-if="suggestions.length > 0 && !kindOpen" class="tag-editor__pop tag-editor__pop--sugg" role="listbox" aria-label="匹配的标签">

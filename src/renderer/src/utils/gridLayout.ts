@@ -1,6 +1,4 @@
-// 图片网格排版（照原型 gridGroups）：每行同一高度，宽度按长宽比；行末“整行压窄”或“把最后一张挪到下一行、整行撑宽”取变形小的；最后一行不拉伸
-
-// 5 档缩略图高度（Ctrl + 滚轮切换），大约每行 3 到 8 张
+// 五档目标行高，实际行高由容器宽度和图片比例决定。
 export const ROW_HEIGHTS = [210, 170, 140, 115, 92] as const
 export const DEFAULT_ZOOM = 2
 // 同一行相邻两张之间的空隙
@@ -26,6 +24,7 @@ export interface LayoutTile {
 }
 
 export interface LayoutRow {
+  height: number
   tiles: LayoutTile[]
 }
 
@@ -34,51 +33,41 @@ function availFor(width: number, n: number): number {
   return width - n * TILE_CHROME - (n - 1) * TILE_GAP
 }
 
-// 把一组图排成行。width 是行的可用宽度，height 是图片区高度
-export function layoutRows(items: LayoutInput[], width: number, height: number): LayoutRow[] {
+export function layoutRows(items: LayoutInput[], width: number, targetHeight: number): LayoutRow[] {
   const rows: LayoutRow[] = []
-  let cur: Array<{ id: number; r: number; crop: LayoutTile['crop'] }> = []
-  const sum = (arr: typeof cur): number => arr.reduce((m, c) => m + c.r * height, 0)
+  if (width <= TILE_CHROME || targetHeight <= 0) return rows
+  let pending: Array<{ id: number; ratio: number; crop: LayoutTile['crop'] }> = []
+  let ratioSum = 0
 
-  // 按缩放系数 f 定下一行；f 不是 1 时最后一张补齐剩余宽度，保证右边对齐
-  const flush = (arr: typeof cur, f: number): void => {
-    const avail = availFor(width, arr.length)
-    let used = 0
-    const tiles = arr.map((c, k) => {
-      const w = k === arr.length - 1 && f !== 1 ? Math.max(1, avail - used) : Math.max(1, Math.floor(c.r * height * f))
-      used += w
-      return { id: c.id, width: w + TILE_CHROME, imageWidth: w, crop: c.crop }
+  const finishRow = (height: number): void => {
+    // 按累计位置取整，把像素误差分散到各张图片。
+    let edge = 0
+    const tiles = pending.map(({ id, ratio, crop }) => {
+      const left = Math.round(edge)
+      edge += ratio * height
+      const imageWidth = Math.round(edge) - left
+      return { id, width: imageWidth + TILE_CHROME, imageWidth, crop }
     })
-    rows.push({ tiles })
+    rows.push({ height, tiles })
+    pending = []
+    ratioSum = 0
   }
 
   for (const it of items) {
     const raw = Number.isFinite(it.ratio) && it.ratio > 0 ? it.ratio : 1
-    const r = Math.min(MAX_RATIO, Math.max(MIN_RATIO, raw))
-    cur.push({ id: it.id, r, crop: raw > MAX_RATIO ? '全景' : raw < MIN_RATIO ? '长图' : '' })
-    const n = cur.length
-    if (sum(cur) <= availFor(width, n)) {
-      continue
+    const ratio = Math.min(MAX_RATIO, Math.max(MIN_RATIO, raw))
+    const nextHeight = availFor(width, pending.length + 1) / (ratioSum + ratio)
+    if (pending.length && nextHeight < targetHeight) {
+      const currentHeight = availFor(width, pending.length) / ratioSum
+      // 比较两种换行位置相对目标行高的缩放倍数。
+      if (currentHeight * nextHeight < targetHeight * targetHeight) finishRow(currentHeight)
     }
-    if (n === 1) {
-      flush(cur, availFor(width, 1) / sum(cur))
-      cur = []
-      continue
-    }
-    const without = cur.slice(0, -1)
-    const shrink = availFor(width, n) / sum(cur)
-    const grow = availFor(width, n - 1) / sum(without)
-    if (Math.abs(Math.log(shrink)) <= Math.abs(Math.log(grow))) {
-      flush(cur, shrink)
-      cur = []
-    } else {
-      flush(without, grow)
-      cur = [cur[n - 1]]
-    }
+    pending.push({ id: it.id, ratio, crop: raw > MAX_RATIO ? '全景' : raw < MIN_RATIO ? '长图' : '' })
+    ratioSum += ratio
+    const fittedHeight = availFor(width, pending.length) / ratioSum
+    if (fittedHeight <= targetHeight) finishRow(fittedHeight)
   }
-  if (cur.length > 0) {
-    flush(cur, 1)
-  }
+  if (pending.length) finishRow(targetHeight)
   return rows
 }
 

@@ -172,6 +172,12 @@
       background: color-mix(in srgb, var(--a) 8%, transparent);
     }
 
+    &:disabled {
+      opacity: 0.5;
+      cursor: default;
+      background: transparent;
+    }
+
     &--on {
       background: var(--a08);
 

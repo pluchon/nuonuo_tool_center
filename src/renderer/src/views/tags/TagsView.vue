@@ -2,11 +2,11 @@
   <div class="tags-view">
     <section class="tags-view__main">
       <div class="tags-view__bar">
-        <label class="tags-view__search">
+        <div class="tags-view__search">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
-          <span class="tags-view__sr">搜索标签</span>
-          <input v-model="query" class="tags-view__input" placeholder="搜标签名或别名" />
-        </label>
+          <input ref="searchInput" v-model="query" class="tags-view__input" aria-label="搜索标签" placeholder="搜标签名或别名" @keydown.esc.stop="clearSearch" />
+          <button v-if="query" class="tags-view__clear" type="button" aria-label="清空标签搜索" @click="clearSearch">✕</button>
+        </div>
         <button class="tags-view__kinds" type="button" aria-label="管理分类" @click="kindOpen = true">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1" /><circle cx="15" cy="6" r="2" /><circle cx="9" cy="12" r="2" /><circle cx="17" cy="18" r="2" /></svg>
         </button>
@@ -16,6 +16,7 @@
       </div>
 
       <div class="tags-view__list">
+        <p v-if="query.trim() && !groups.length" class="tags-view__empty" role="status">没有匹配的标签</p>
         <div v-for="g in groups" :key="g.id" class="tags-view__card" :class="{ 'tags-view__card--pal': palFor === g.id }">
           <div class="tags-view__head">
             <span class="tags-view__kind"><span class="tags-view__dot" :style="{ background: g.color.dot }" aria-hidden="true" />{{ g.name }}</span>
@@ -40,7 +41,7 @@
               </div>
             </span>
           </div>
-          <div class="tags-view__tags">
+          <div v-if="g.tags.length" class="tags-view__tags">
             <button
               v-for="t in g.tags"
               :key="t.tag.id"
@@ -52,7 +53,6 @@
             >
               {{ t.tag.name }}<span class="tags-view__count" :style="{ background: t.countBg }">{{ t.tag.count }}</span>
             </button>
-            <span v-if="g.tags.length === 0" class="tags-view__empty">没有匹配的标签</span>
           </div>
         </div>
       </div>

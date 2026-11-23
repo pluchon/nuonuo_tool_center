@@ -11,6 +11,7 @@ import { useViewStore } from '@/stores/view'
 import { useSuggestStore } from '@/stores/suggest'
 import { groupConsecutive, layoutRows, monthKey, monthLabel, TILE_GAP, type LayoutRow } from '@/utils/gridLayout'
 import GridScrollbar from './GridScrollbar.vue'
+import GridRow from './GridRow.vue'
 
 // 按住多久再拖算系统原生拖拽（毫秒）
 export const LONG_PRESS_MS = 400
@@ -31,10 +32,10 @@ export interface GridGroup {
 const GRID_PAD_RIGHT = 14
 const ROW_PAD_X = 2
 
-// 图片网格：按月分组、固定行高排版、单选 / Ctrl / Shift 多选、键盘移动、Ctrl + 滚轮换档
+// 图片网格：按月分组、等高行排版、多选、键盘移动和缩放。
 export default defineComponent({
   name: 'ImageGrid',
-  components: { GridScrollbar },
+  components: { GridScrollbar, GridRow },
   setup() {
     const gallery = useGalleryStore()
     const toast = useToastStore()
@@ -44,6 +45,7 @@ export default defineComponent({
     const suggest = useSuggestStore()
     const gridRef = ref<HTMLElement | null>(null)
     const width = ref(0)
+    const galleryWidth = ref(0)
 
     const byId = computed(() => new Map(gallery.items.map((i) => [i.imageId, i])))
     const item = (id: number): GalleryItemVO => byId.value.get(id) as GalleryItemVO
@@ -56,6 +58,9 @@ export default defineComponent({
       if (rowWidth <= 0) {
         return []
       }
+      // 在缩放档位内随可用空间调整目标行高，稀疏的末行也能跟随侧栏缩放。
+      const fullWidth = Math.max(rowWidth, galleryWidth.value - GRID_PAD_RIGHT - ROW_PAD_X * 2)
+      const targetHeight = gallery.rowHeight * Math.sqrt(rowWidth / fullWidth)
       const sort = gallery.nameOnly ? 'new' : gallery.sort
       // “AI 建议”视图：主进程已经按目标类目录排在一起，这里按目录分组（有这类建议时才分）
       const aiView = viewStore.page === 'gallery' && viewStore.view === 'ai'
@@ -80,7 +85,7 @@ export default defineComponent({
           rows: layoutRows(
             p.items.map((i) => ({ id: i.imageId, ratio: ratioOf(i) })),
             rowWidth,
-            gallery.rowHeight
+            targetHeight
           ),
           aiDir: dir === undefined ? undefined : { name: dir?.name ?? null, isNew: dir?.isNew ?? false }
         }
@@ -90,7 +95,6 @@ export default defineComponent({
     // 大图库给每行保留准确的高度，只在视口附近挂载卡片。所有行共用一个观察器。
     const virtual = computed(() => gallery.items.length > 200)
     const visibleRows = shallowReactive(new Set<string>())
-    const rowStyle = computed(() => ({ '--tile-row-height': `${gallery.rowHeight + 40}px` }))
     let rowObserver: IntersectionObserver | undefined
     const mountRow = ({ el }: VNode): void => {
       rowObserver ??= new IntersectionObserver((entries) => {
@@ -111,15 +115,23 @@ export default defineComponent({
     }
 
     // 按下的时间：按住约 0.4 秒再拖是系统原生拖拽（带出原文件到别的软件），直接拖是拖到侧栏源目录
-    let pressAt = 0
-    const onTileDown = (): void => {
-      pressAt = Date.now()
+    let pressAt: number | null = null
+    let moveAt: number | null = null
+    const onTileDown = (event: MouseEvent): void => {
+      pressAt = event.button === 0 ? event.timeStamp : null
+      moveAt = null
+    }
+    const onGridMove = (event: MouseEvent): void => {
+      if (pressAt !== null && (event.buttons & 1)) moveAt = event.timeStamp
     }
 
     // 开始拖：跟手的是一个小方块缩略图，多张时角上显示张数（只能拖到侧栏的源目录上）
     const onDragStart = (e: DragEvent, id: number): void => {
       const ids = gallery.startDrag(id)
-      if (Date.now() - pressAt >= LONG_PRESS_MS) {
+      // Chromium 的 dragstart 沿用按下时间。采用触发拖动的鼠标移动时间，避免渲染延迟影响判断。
+      const longPress = pressAt !== null && (moveAt ?? performance.now()) - pressAt >= LONG_PRESS_MS
+      pressAt = null
+      if (longPress) {
         e.preventDefault()
         gallery.endDrag()
         const fileIds = ids.map((x) => item(x)).filter((p) => !p.missing && !p.offline).map((p) => p.fileId)
@@ -213,7 +225,7 @@ export default defineComponent({
     // 网格的键盘操作；焦点在输入框里或对话框开着时不处理
     const onKey = (e: KeyboardEvent): void => {
       const el = e.target as HTMLElement | null
-      if (hasInteractiveModal() || el?.matches('input, textarea, select') || el?.isContentEditable) {
+      if (hasInteractiveModal() || el?.closest('.filter-bar, .filter-chips') || el?.matches('input, textarea, select') || el?.isContentEditable) {
         return
       }
       // Delete：删除选中的图（走确认）
@@ -275,12 +287,49 @@ export default defineComponent({
     }
 
     let observer: ResizeObserver | null = null
+    const measureWidth = (): void => {
+      const grid = gridRef.value
+      if (!grid) return
+      width.value = grid.clientWidth
+      galleryWidth.value = grid.closest('.gallery--main')?.clientWidth ?? width.value
+    }
+    const syncPanelLayout = async (): Promise<void> => {
+      const grid = gridRef.value
+      if (!grid) return
+      const top = grid.getBoundingClientRect().top
+      const anchor = grid.scrollTop > 0
+        ? [...grid.querySelectorAll<HTMLElement>('.tile')].find(tile => tile.getBoundingClientRect().bottom > top)
+        : undefined
+      const anchorId = Number(anchor?.dataset.id)
+      const offset = anchor?.closest('.image-grid__row')?.getBoundingClientRect().top
+      measureWidth()
+      await nextTick()
+      if (offset === undefined || !grid.isConnected) return
+      for (const group of groups.value) {
+        const index = group.rows.findIndex(row => row.tiles.some(tile => tile.id === anchorId))
+        if (index < 0) continue
+        const first = group.rows[index].tiles[0].id
+        const row = grid.querySelector<HTMLElement>(`[data-first-id="${first}"]`)
+        if (row) {
+          grid.scrollTop += row.getBoundingClientRect().top - offset
+          // 滚动到新行后，先挂载当前视口的卡片，避免等到观察器下一帧才显示。
+          if (virtual.value) {
+            const bottom = top + grid.clientHeight
+            let visible: HTMLElement | null = row
+            while (visible && visible.getBoundingClientRect().top < bottom) {
+              visibleRows.add(visible.dataset.rowKey!)
+              visible = visible.nextElementSibling as HTMLElement | null
+            }
+            await nextTick()
+          }
+        }
+        break
+      }
+    }
     onMounted(() => {
       if (gridRef.value) {
-        width.value = gridRef.value.clientWidth
-        observer = new ResizeObserver(() => {
-          width.value = gridRef.value?.clientWidth ?? 0
-        })
+        measureWidth()
+        observer = new ResizeObserver(measureWidth)
         observer.observe(gridRef.value)
       }
       window.addEventListener('keydown', onKey)
@@ -309,6 +358,6 @@ export default defineComponent({
       }
     )
 
-    return { gallery, viewer, suggest, gridRef, groups, rowStyle, virtual, visibleRows, mountRow, unmountRow, item, masked, thumbUrl, onTileClick, onTileDown, onDragStart, onWheel }
+    return { gallery, viewer, suggest, gridRef, groups, virtual, visibleRows, mountRow, unmountRow, item, masked, thumbUrl, onTileClick, onTileDown, onGridMove, onDragStart, onWheel, syncPanelLayout }
   }
 })

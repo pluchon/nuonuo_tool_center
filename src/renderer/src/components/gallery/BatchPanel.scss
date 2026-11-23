@@ -12,7 +12,7 @@
     gap: 8px;
   }
 
-  &__act {
+  &__ask, &__act {
     flex: 1;
     height: 36px;
     border-radius: 999px;
@@ -29,6 +29,7 @@
       color: #ffffff;
     }
   }
+  &__ask { flex: none; height: 30px; padding: 0 14px; }
 
   &__head {
     display: flex;

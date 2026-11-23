@@ -76,7 +76,7 @@ export default defineComponent({
     }
     // 回车添加；中文输入法选字时的回车不算
     const onEnter = (e: KeyboardEvent): void => {
-      if (!e.isComposing) {
+      if (!e.isComposing && e.keyCode !== 229) {
         void add(draft.value)
       }
     }

@@ -169,7 +169,7 @@
   // content-visibility 会把绘制裁在行框里：上下各留出空间给悬停弹起的描边和投影，再用负外边距抵掉，图的位置不变
   &__row {
     box-sizing: content-box;
-    height: var(--tile-row-height);
+    height: calc(var(--image-height) + 40px);
     display: flex;
     gap: 8px;
     padding: 6px 2px 14px;
@@ -254,6 +254,7 @@
 
   &__img {
     position: relative;
+    height: var(--image-height);
     border-radius: 12px;
     overflow: hidden;
     background: var(--c-b-F1EEF6);
@@ -271,8 +272,6 @@
     display: block;
     width: 100%;
     height: 100%;
-    // 缩略图读出来时淡入
-    animation: nn-fade-in 0.3s ease both;
     object-fit: cover;
 
     // R-18：模糊遮挡

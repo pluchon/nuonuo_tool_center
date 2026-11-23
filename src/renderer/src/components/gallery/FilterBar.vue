@@ -1,9 +1,10 @@
 <template>
-  <div class="filter-bar">
+  <div class="filter-bar" @keydown.esc="closeMenu" @focusout="onFocusOut">
     <label class="filter-bar__search">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
       <span class="filter-bar__sr">搜索</span>
-      <input class="filter-bar__input" :value="draft" :placeholder="placeholder" @input="onInput" @keydown.esc.stop="clearSearch" />
+      <input ref="searchInput" v-model="searchText" class="filter-bar__input" :placeholder="placeholder"
+        @compositionstart="cancelSearchTimer" @keydown.esc.stop="!$event.isComposing && $event.keyCode !== 229 && clearSearch()" />
       <button v-if="draft" class="filter-bar__clear" type="button" aria-label="清空搜索" @click="clearSearch">✕</button>
     </label>
 
@@ -18,7 +19,7 @@
           <span class="filter-bar__arrow" aria-hidden="true" />
           <div class="filter-bar__pop-head"><span>选标签</span><span :class="{ 'filter-bar__full': gallery.tagIds.length >= max }">{{ gallery.tagIds.length }} / {{ max }}</span></div>
           <div class="filter-bar__scroll">
-            <button v-for="t in tagOptions" :key="t.id" class="filter-bar__check" :class="{ 'filter-bar__check--on': gallery.tagIds.includes(t.id) }" type="button" @click="toggleTag(t.id)">
+            <button v-for="t in tagOptions" :key="t.id" class="filter-bar__check" :class="{ 'filter-bar__check--on': gallery.tagIds.includes(t.id) }" type="button" :aria-pressed="gallery.tagIds.includes(t.id)" :disabled="gallery.tagIds.length >= max && !gallery.tagIds.includes(t.id)" @click="toggleTag(t.id)">
               <span class="filter-bar__box" :class="{ 'filter-bar__box--full': gallery.tagIds.length >= max }" aria-hidden="true">{{ gallery.tagIds.includes(t.id) ? '✓' : '' }}</span>
               <span class="filter-bar__check-label">{{ t.name }}</span><span class="filter-bar__check-note" :style="{ color: colorOf(t.categoryId).ink }">{{ categoryName(t.categoryId) }}</span>
             </button>
@@ -39,7 +40,7 @@
           <span class="filter-bar__arrow" aria-hidden="true" />
           <div class="filter-bar__pop-head"><span>选目录</span><span :class="{ 'filter-bar__full': gallery.dirs.length >= max }">{{ gallery.dirs.length }} / {{ max }}</span></div>
           <div class="filter-bar__scroll">
-            <button v-for="d in dirOptions" :key="d.key" class="filter-bar__check" :class="{ 'filter-bar__check--on': dirOn(d.key) }" type="button" @click="toggleDir(d)">
+            <button v-for="d in dirOptions" :key="d.key" class="filter-bar__check" :class="{ 'filter-bar__check--on': dirOn(d.key) }" type="button" :aria-pressed="dirOn(d.key)" :disabled="gallery.dirs.length >= max && !dirOn(d.key)" @click="toggleDir(d)">
               <span class="filter-bar__box" :class="{ 'filter-bar__box--full': gallery.dirs.length >= max }" aria-hidden="true">{{ dirOn(d.key) ? '✓' : '' }}</span>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" :stroke="d.ink" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="filter-bar__icon"><path :d="d.icon" /></svg>
               <span class="filter-bar__check-label">{{ d.label }}</span><span class="filter-bar__check-note">{{ d.count }}</span>
@@ -102,7 +103,7 @@
     <template v-if="showHereOnly">
       <span class="filter-bar__sep" aria-hidden="true" />
       <button class="filter-bar__here" :class="{ 'filter-bar__here--on': gallery.onlyHere }" type="button" role="switch" :aria-checked="gallery.onlyHere" @click="toggleHere">
-        <span class="filter-bar__box" aria-hidden="true">{{ gallery.onlyHere ? '✓' : '' }}</span>仅当前目录(不含子目录)
+        <span class="filter-bar__box" aria-hidden="true">{{ gallery.onlyHere ? '✓' : '' }}</span>仅当前目录
       </button>
     </template>
   </div>

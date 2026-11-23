@@ -24,6 +24,11 @@ export default defineComponent({
     const toast = useToastStore()
 
     const query = ref('')
+    const searchInput = ref<HTMLInputElement | null>(null)
+    const clearSearch = (): void => {
+      query.value = ''
+      searchInput.value?.focus()
+    }
     const selectedId = ref<number | null>(null)
     const creating = ref(false)
     const palFor = ref<number | null>(null)
@@ -52,14 +57,21 @@ export default defineComponent({
     // 每个分类一张卡片：标签按图片数排；选中的标签深底白字
     const groups = computed(() => {
       const q = query.value.trim().toLowerCase()
-      return tagsStore.categories.map((c) => {
+      const byCategory = new Map<number, TagVO[]>()
+      for (const t of tagsStore.tags) {
+        if (!matches(t, q)) continue
+        const list = byCategory.get(t.categoryId)
+        if (list) list.push(t)
+        else byCategory.set(t.categoryId, [t])
+      }
+      return tagsStore.categories.filter((c) => !q || byCategory.has(c.id)).map((c) => {
         const color = tagColor(c.colorIndex)
-        const list = tagsStore.tags.filter((t) => t.categoryId === c.id && matches(t, q)).sort(byCount)
+        const list = (byCategory.get(c.id) ?? []).sort(byCount)
         return {
           id: c.id,
           name: c.name,
           color,
-          total: tagsStore.tags.filter((t) => t.categoryId === c.id).length,
+          total: list.length,
           swatches: SWATCHES.map((n) => ({ n, dot: tagColor(n).dot, mine: c.colorIndex === n })),
           tags: list.map((t) => {
             const on = !creating.value && t.id === selectedId.value
@@ -146,6 +158,8 @@ export default defineComponent({
       viewStore,
       tagsStore,
       query,
+      searchInput,
+      clearSearch,
       creating,
       selected,
       groups,
