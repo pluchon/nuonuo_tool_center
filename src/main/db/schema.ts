@@ -19,6 +19,13 @@ import {
 // 向量维度：图片语义向量与 AI 记忆向量共用
 export const EMBEDDING_DIMENSIONS = 1024
 
+// 只保存可由请求重建的检索计划和文本向量；图片和结果编号不进入缓存。
+export const aiSearchCache = pgTable('ai_search_cache', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull()
+}, (t) => [index('ix_ai_search_cache_expiry').on(t.expiresAt)])
+
 // 内容分级：只有 GENERAL 允许上云
 export const ratingEnum = pgEnum('rating', ['UNKNOWN', 'GENERAL', 'SENSITIVE', 'QUESTIONABLE', 'EXPLICIT'])
 // 分级来源：模型判定或手动指定
