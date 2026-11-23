@@ -10,7 +10,7 @@ import { useViewStore } from '@/stores/view'
 // 叠放的缩略图最多显示几张
 const THUMBS_SHOWN = 4
 
-// 多选时的批量面板：已选张数、叠放缩略图、共同标签（可一起移除）、一起加标签（满 5 个的跳过）、全部标 / 取消 R-18（照原型）
+// 多选时的批量面板：已选张数、叠放缩略图、共同标签（可一起移除）、一起加标签（标签已满的图片跳过）、全部标 / 取消 R-18（照原型）
 export default defineComponent({
   name: 'BatchPanel',
   setup() {

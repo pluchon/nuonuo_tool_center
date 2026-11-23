@@ -45,7 +45,7 @@ describe('编辑', () => {
     expect((await getImageDetail(1)).name).toBe('a.jpg')
   })
 
-  it('加标签：按别名命中已有标签；新标签默认进“主题”；已有的不重复；满 5 个跳过', async () => {
+  it('加标签：别名和重复标签不占新位置，批量添加只跳过已有 15 个标签的图片', async () => {
     const byAlias = await addTag({ imageIds: [1], name: 'ganyu' })
     expect(byAlias).toMatchObject({ tag: { id: 1, name: '甘雨' }, added: 1, already: 0, skipped: 0 })
     const again = await addTag({ imageIds: [1, 2], name: '甘雨' })
@@ -61,7 +61,12 @@ describe('编辑', () => {
     await addTag({ imageIds: [1], name: '四' })
     await addTag({ imageIds: [1], name: '五' })
     expect((await getImageDetail(1)).tags.map((t) => t.name)).toEqual(['甘雨', '表情 包', '京都', '四', '五'])
-    expect(await addTag({ imageIds: [1, 3], name: '六' })).toMatchObject({ added: 1, skipped: 1 })
+    for (let i = 6; i <= 15; i++) {
+      expect(await addTag({ imageIds: [1], name: `标签${i}` })).toMatchObject({ added: 1, skipped: 0 })
+    }
+    expect(await addTag({ imageIds: [1], name: 'Ganyu' })).toMatchObject({ added: 0, already: 1 })
+    expect(await addTag({ imageIds: [1, 3], name: '第十六个' })).toMatchObject({ added: 1, skipped: 1 })
+    expect((await getImageDetail(1)).tags).toHaveLength(15)
     await expect(addTag({ imageIds: [1], name: '   ' })).rejects.toThrow('空')
     await expect(addTag({ imageIds: [1], name: 'x', categoryId: 999 })).rejects.toThrow('分类')
 

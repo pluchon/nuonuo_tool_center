@@ -95,7 +95,7 @@ export async function setR18(imageIds: unknown, value: unknown): Promise<number>
   return ids.length
 }
 
-// 给图加标签：名字或别名命中已有标签就用它（分类不变），否则在指定分类下新建；已有的不重复加，已满 5 个的跳过
+// 给图加标签：名字或别名命中已有标签就用它（分类不变），否则在指定分类下新建；已有的不重复加，标签已满的图片跳过
 export async function addTag(dto: AddTagDTO, opts: { record?: boolean } = {}): Promise<AddTagResultVO> {
   const result = await addTagInTx(dto)
   // 事件在事务外记（PGlite 只有一条连接，事务里再查会卡住）；采用 AI 建议时由建议那边记

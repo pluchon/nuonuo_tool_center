@@ -324,7 +324,7 @@ export interface AddTagDTO {
   categoryId?: number
 }
 
-// 加标签的结果：实际加上的张数、已经有的张数、已满 5 个跳过的张数
+// 加标签的结果：实际加上、已有该标签，以及因标签已满而跳过的图片数。
 export interface AddTagResultVO {
   tag: ImageTagVO
   added: number
@@ -396,7 +396,7 @@ export interface ImageDetailVO {
 
 // 名字最多几个字、每张图最多几个标签、筛选最多选几个
 export const NAME_MAX = 15
-export const TAGS_PER_IMAGE = 5
+export const TAGS_PER_IMAGE = 15
 export const FILTER_MAX = 5
 // 标签名、别名最多几个字（照原型标签管理页的 15 字计数）
 export const TAG_NAME_MAX = 15
