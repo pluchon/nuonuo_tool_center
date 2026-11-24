@@ -32,7 +32,7 @@
     height: 34px;
     flex: none;
     border-radius: 10px;
-    background: var(--c-surface);
+    background: var(--look-field-bg);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -105,7 +105,7 @@
   &__bar {
     height: 6px;
     border-radius: 3px;
-    background: var(--c-surface);
+    background: var(--look-field-bg);
     overflow: hidden;
   }
 
@@ -134,7 +134,7 @@
 
   &--scan &__btn {
     border: 1.5px solid var(--c-b-BFE3D6);
-    background: var(--c-surface);
+    background: var(--look-field-bg);
     color: var(--c-i-2F7463);
   }
 

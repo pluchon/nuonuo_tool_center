@@ -1,5 +1,19 @@
-// 设置弹窗（照原型 setDlg）：900×620 磨砂玻璃；左侧 188px 半透明分类栏，右侧半透明白卡片分组，每行“名称 + 控件”
 .set-dlg {
+  --settings-shell: rgb(247 245 251 / 90%);
+  --settings-card: rgb(255 255 255 / 85%);
+  --settings-rule: color-mix(in srgb, var(--c-i-7F7494) 17%, transparent);
+  --settings-wash: color-mix(in srgb, var(--a) 9%, transparent);
+
+  :root.dark & {
+    --settings-shell: rgb(33 30 41 / 92%);
+    --settings-card: rgb(54 48 65 / 83%);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--a);
+    outline-offset: 2px;
+  }
+
   position: fixed;
   inset: 0;
   z-index: 65;
@@ -18,9 +32,9 @@
     display: flex;
     flex-direction: column;
     border-radius: 26px;
-    background: var(--look-dlg-bg);
+    background: var(--settings-shell);
     backdrop-filter: blur(30px) saturate(1.5);
-    border: 1px solid rgba(var(--w), 0.85);
+    border: 1px solid var(--settings-rule);
     box-shadow:
       0 34px 80px -24px rgba(var(--sh), 0.5),
       0 1px 0 rgba(var(--w), 0.9) inset;
@@ -74,7 +88,7 @@
     flex-direction: column;
     gap: 4px;
     padding: 16px 12px;
-    background: rgba(var(--w), 0.38);
+    background: color-mix(in srgb, var(--c-surface) 32%, transparent);
     border-right: 1px solid var(--a-line2);
   }
 
@@ -119,26 +133,27 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 18px;
-    padding: 20px 24px 24px;
+    gap: 14px;
+    padding: 18px 22px 22px;
+    background: color-mix(in srgb, var(--a) 3%, transparent);
   }
 
   &__group {
     flex: none;
-    border-radius: 18px;
-    background: rgba(var(--w), 0.72);
-    border: 1px solid rgba(var(--w), 0.95);
-    box-shadow: 0 10px 26px -20px rgba(var(--sh), 0.45);
+    border-radius: 14px;
+    background: var(--settings-card);
+    border: 1px solid var(--settings-rule);
+    box-shadow: 0 3px 10px -8px rgba(var(--sh), 0.32);
     overflow: hidden;
   }
 
   &__group-title {
     margin: 0;
-    padding: 14px 18px 6px;
-    font-size: 12px;
+    padding: 15px 18px 4px;
+    font-size: 13px;
     font-weight: 700;
     color: var(--c-i-7F7494);
-    letter-spacing: 1px;
+    letter-spacing: 0.3px;
   }
 
   &__row {
@@ -149,7 +164,7 @@
     padding: 8px 18px;
 
     &--sep {
-      border-top: 1px solid var(--c-b-F1ECF8);
+      border-top: 1px solid var(--settings-rule);
     }
 
     &--stack {
@@ -224,31 +239,40 @@
       background 0.15s;
   }
 
+  // 单选采用文字与下划线，多选格式使用复选标记。
   &__seg {
     display: flex;
-    gap: 2px;
-    padding: 3px;
-    border-radius: 999px;
-    background: var(--a-bg);
-    border: 1px solid var(--a-line2);
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 4px;
   }
 
   &__seg-btn {
-    height: 28px;
-    padding: 0 14px;
-    border-radius: 999px;
-    border: 1px solid transparent;
+    position: relative;
+    min-height: 32px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 5px;
     background: transparent;
     color: var(--c-i-6E6280);
     font: inherit;
     font-size: 12px;
     cursor: pointer;
 
+    &:hover:not(:disabled) { background: var(--settings-wash); }
+
     &--on {
-      background: var(--c-surface);
-      border-color: var(--a-line);
       color: var(--a-ink);
       font-weight: 700;
+
+      &::after {
+        content: '';
+        position: absolute;
+        inset: auto 10px 1px;
+        height: 2px;
+        border-radius: 2px;
+        background: var(--a);
+      }
     }
   }
 
@@ -264,8 +288,14 @@
     cursor: pointer;
   }
 
-  &__bg {
+  &__bg-option {
+    position: relative;
     flex: 1;
+    min-width: 0;
+  }
+
+  &__bg {
+    width: 100%;
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -305,8 +335,14 @@
   }
 
   &__bg-swap {
-    width: 28px;
-    height: 28px;
+    position: absolute;
+    right: 0;
+    bottom: -2px;
+    width: 21px;
+    height: 21px;
+    padding: 0;
+    border: 0;
+    cursor: pointer;
     border-radius: 50%;
     background: rgba(var(--w), 0.85);
     color: var(--a-ink);
@@ -366,35 +402,54 @@
     font-variant-numeric: tabular-nums;
   }
 
+  &__ctl:has(&__chip) {
+    flex-wrap: wrap;
+    gap: 4px 7px;
+  }
+
   &__chip {
-    height: 26px;
-    padding: 0 10px;
-    border-radius: 6px;
-    border: 1px solid var(--a-line2);
-    background: var(--c-surface);
-    color: var(--c-i-9C90B3);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 28px;
+    padding: 2px 3px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--c-i-6E6280);
     font: inherit;
     font-size: 11px;
     font-weight: 700;
-    letter-spacing: 0.4px;
     cursor: pointer;
 
-    &--on {
-      background: color-mix(in srgb, var(--a) 8%, var(--c-surface));
-      border-color: color-mix(in srgb, var(--a) 33%, transparent);
-      color: var(--a-ink);
+    &::before {
+      content: '';
+      box-sizing: border-box;
+      width: 13px;
+      height: 13px;
+      border: 1px solid var(--c-i-9C90B3);
+      border-radius: 3px;
     }
+
+    &--on {
+      color: var(--c-i-3B3047);
+
+      &::before {
+        content: '✓';
+        background: var(--a);
+        color: white;
+        border-color: var(--a);
+        font: bold 11px/11px sans-serif;
+      }
+    }
+    &:hover { background: var(--settings-wash); }
   }
 
   &__path {
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    padding: 5px 10px;
-    border-radius: 8px;
-    background: var(--a-bg);
-    border: 1px solid var(--a-line2);
+    overflow-wrap: anywhere;
+    user-select: text;
+    text-align: right;
     font-family: Consolas, monospace;
     font-size: 12px;
     color: var(--c-i-5E5270);
@@ -416,7 +471,7 @@
     padding: 0 10px;
     border-radius: 8px;
     border: 1px solid var(--a-line2);
-    background: var(--a-bg);
+    background: color-mix(in srgb, var(--c-surface) 60%, transparent);
     color: var(--c-i-3B3047);
     font: inherit;
     font-size: 12px;
@@ -435,8 +490,8 @@
     height: 30px;
     padding: 0 14px;
     border-radius: 999px;
-    border: 1.5px solid var(--a);
-    background: var(--c-surface);
+    border: 1px solid var(--a-line);
+    background: var(--settings-wash);
     color: var(--a-ink);
     font: inherit;
     font-size: 12px;

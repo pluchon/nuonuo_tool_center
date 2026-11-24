@@ -1,0 +1,19 @@
+@mixin transfer-action {
+  flex: 1;
+  height: 36px;
+  border-radius: 999px;
+  border: 1.5px solid var(--a);
+  background: var(--look-chip-bg);
+  color: var(--a-ink);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+
+  &:hover:not(:disabled) { background: color-mix(in srgb, var(--look-chip-bg) 93%, black); }
+  &--main {
+    background: color-mix(in srgb, var(--a) 22%, transparent);
+    &:hover:not(:disabled) { background: color-mix(in srgb, var(--a) 30%, transparent); }
+  }
+  &:disabled { opacity: 0.45; cursor: default; }
+}

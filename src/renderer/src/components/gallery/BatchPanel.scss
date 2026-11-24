@@ -1,3 +1,5 @@
+@use '../../styles/transferAction' as *;
+
 // 批量面板（照原型 batch）
 .batch-panel {
   flex: 1 0 auto;
@@ -12,23 +14,7 @@
     gap: 8px;
   }
 
-  &__ask, &__act {
-    flex: 1;
-    height: 36px;
-    border-radius: 999px;
-    border: 1.5px solid var(--a);
-    background: var(--c-surface);
-    color: var(--a-ink);
-    font: inherit;
-    font-weight: 700;
-    cursor: pointer;
-
-    &--main {
-      border: none;
-      background: var(--a);
-      color: #ffffff;
-    }
-  }
+  &__ask, &__act { @include transfer-action; }
   &__ask { flex: none; height: 30px; padding: 0 14px; }
 
   &__head {
@@ -216,16 +202,20 @@
     height: 34px;
     border-radius: 10px;
     border: 1px solid var(--a-line);
-    background: var(--c-surface);
+    background: var(--look-field-bg);
     color: var(--c-i-6E6280);
     font: inherit;
     font-size: 12px;
     font-weight: 700;
     cursor: pointer;
 
+    &:hover:not(:disabled) {
+      background-color: var(--look-field-hover-bg);
+    }
+
     &--on {
       border-color: var(--c-b-F2C6D4);
-      background: var(--c-b-FCE7EE);
+      background: var(--r18-row-bg);
       color: var(--c-i-A23D62);
     }
 

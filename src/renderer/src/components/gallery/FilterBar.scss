@@ -15,7 +15,7 @@
   transition: background-color 0.6s ease;
 
   &:hover {
-    background-color: rgba(var(--w), 0.9);
+    background-color: var(--look-card-hover-bg);
   }
 
   &__search {
@@ -79,15 +79,17 @@
     padding: 0 12px;
     border-radius: 999px;
     border: 1px solid rgba(var(--w), 0.9);
-    background: rgba(var(--w), 0.55);
+    background: var(--look-chip-bg);
     color: var(--c-i-3B3047);
     font: inherit;
     white-space: nowrap;
     cursor: pointer;
 
+    &:hover { background: color-mix(in srgb, var(--look-chip-bg) 94%, black); }
+
     &--open {
       border-color: var(--a);
-      background: rgba(var(--w), 0.96);
+      background: var(--a-soft);
     }
   }
 
@@ -332,11 +334,13 @@
     padding: 0 12px;
     border-radius: 999px;
     border: 1px solid var(--c-b-F2C6D4);
-    background: var(--c-b-FCE7EE);
+    background: color-mix(in srgb, var(--c-b-FCE7EE) 50%, transparent);
     color: var(--c-i-A23D62);
     font: inherit;
     font-weight: 700;
     cursor: pointer;
+
+    &:hover:not(&--on) { background: color-mix(in srgb, var(--c-b-FCE7EE) 66%, transparent); }
 
     &--on {
       border-color: var(--c-b-A23D62);

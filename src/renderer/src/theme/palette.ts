@@ -192,9 +192,10 @@ function lookVars(accent: string, isDark: boolean, look: GlassLook, backdrop: Ba
   return {
     '--look-pane-bg': glassOf(paneA),
     '--look-card-bg': glassOf(paneA),
+    '--look-card-hover-bg': `color-mix(in srgb, ${glassOf(paneA)} 95%, black)`,
     '--look-field-bg': `rgba(var(--w), ${fieldA.toFixed(2)})`,
     // 悬停、输入时稍微变实一点
-    '--look-field-hover-bg': `rgba(var(--w), ${Math.min(1, fieldA + 0.32).toFixed(2)})`,
+    '--look-field-hover-bg': `rgba(var(--w), ${Math.min(1, fieldA + 0.08).toFixed(2)})`,
     '--look-foot-bg': glassOf(paneA * 0.7),
     '--look-blur': blur,
     '--look-edge': hasBg ? 'rgba(var(--w), 0.8)' : tint(accent, 0.16),
