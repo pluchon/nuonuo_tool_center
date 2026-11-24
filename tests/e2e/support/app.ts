@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
@@ -152,12 +152,10 @@ export async function shot(page: Page, name: string): Promise<string> {
   return file
 }
 
-// 截原型的某个静态页（node docs/prototype/tools/render.cjs 渲染出的 test-output/prototype/*.html）
+// 从仓库里的原型生成当前预设，首次测试和修改原型后都使用同一份基准。
 export async function shotPrototype(name: string): Promise<string> {
+  execFileSync(process.execPath, [resolve('docs/prototype/tools/render.cjs'), '--preset', name])
   const html = resolve(`test-output/prototype/${name}.html`)
-  if (!existsSync(html)) {
-    throw new Error(`没有原型静态页 ${html}，先运行 node docs/prototype/tools/render.cjs`)
-  }
   const file = join(SHOT_DIR, 'proto', `${name}.png`)
   mkdirSync(join(SHOT_DIR, 'proto'), { recursive: true })
   const proto = await _electron.launch({

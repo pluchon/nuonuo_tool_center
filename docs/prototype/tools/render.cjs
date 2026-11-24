@@ -1,6 +1,7 @@
 // 应用原型的本地静态预览：把 AiMain.dc.html 的模板按 renderVals() 展开成普通 HTML，只看样式，不带交互。
 // 用法：
 //   node docs/prototype/tools/render.cjs                 渲染全部预设到 test-output/prototype/
+//   node docs/prototype/tools/render.cjs --preset <名字>   只渲染指定预设
 //   node docs/prototype/tools/render.cjs <名字> '<state-json>' [scene]   渲染一个自定义状态
 // 预设名见下方 PRESETS；state 的字段就是 AiMain.dc.html 里 this.state 的字段（如 page、set.theme、set.bg、viewer、setOpen）。
 // 生成的 .html 直接用浏览器打开即可（字体从 Google Fonts 加载，离线时退回系统字体）。
@@ -157,7 +158,13 @@ let html = fs.readFileSync(SRC, 'utf8')
 for (const [id, file] of Object.entries(BLOBS)) html = html.split('/_blob/' + id).join(file)
 fs.mkdirSync(OUT, { recursive: true })
 const [, , name, stateJson, scene] = process.argv
-const jobs = name ? { [name]: [JSON.parse(stateJson || '{}'), scene || ''] } : PRESETS
+let jobs = PRESETS
+if (name === '--preset') {
+  if (!Object.hasOwn(PRESETS, stateJson)) throw new Error('未知的原型预设：' + stateJson)
+  jobs = { [stateJson]: PRESETS[stateJson] }
+} else if (name) {
+  jobs = { [name]: [JSON.parse(stateJson || '{}'), scene || ''] }
+}
 for (const [n, [state, sc]] of Object.entries(jobs)) {
   const file = path.join(OUT, n + '.html')
   fs.writeFileSync(file, renderPage(html, state, sc))
