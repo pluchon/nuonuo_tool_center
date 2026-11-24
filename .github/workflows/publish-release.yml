@@ -45,6 +45,7 @@ jobs:
           if ("v$version" -cne $env:TAG) { throw '标签和应用版本不一致' }
           npm ci --no-audit --no-fund
           npm run typecheck
+          npm exec -- install-electron
           npm run dist:win
       - name: 验证打包后的图库
         shell: pwsh
