@@ -14,7 +14,6 @@
     @pointerenter="hover = true"
     @pointerleave="hover = false"
   >
-    <span class="grid-scroll__rail" aria-hidden="true" />
     <span
       class="grid-scroll__thumb"
       :style="{ height: `${thumbH}px`, transform: `translateY(${thumbY}px)` }"

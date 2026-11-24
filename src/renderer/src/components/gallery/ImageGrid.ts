@@ -9,7 +9,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useViewerStore } from '@/stores/viewer'
 import { useViewStore } from '@/stores/view'
 import { useSuggestStore } from '@/stores/suggest'
-import { groupConsecutive, layoutRows, monthKey, monthLabel, TILE_GAP, type LayoutRow } from '@/utils/gridLayout'
+import { fluidGalleryRows, groupConsecutive, TILE_CHROME, ROW_INSET, monthKey, monthLabel, TILE_GAP } from '@/utils/gridLayout'
 import GridScrollbar from './GridScrollbar.vue'
 import GridRow from './GridRow.vue'
 
@@ -23,14 +23,13 @@ export interface GridGroup {
   label: string
   ids: number[]
   allOn: boolean
-  rows: LayoutRow[]
+  rows: ReturnType<typeof fluidGalleryRows>
   // 只在“AI 建议”视图：目标类目录（null 是没有这类建议的那组）、目录还不存在
   aiDir?: { name: string | null; isNew: boolean }
 }
 
 // 网格右侧给自绘滚动条留的窄边（和 ImageGrid.scss 的 padding-right 一致）和每行左右的内边距
 const GRID_PAD_RIGHT = 14
-const ROW_PAD_X = 2
 
 // 图片网格：按月分组、等高行排版、多选、键盘移动和缩放。
 export default defineComponent({
@@ -44,7 +43,6 @@ export default defineComponent({
     const viewStore = useViewStore()
     const suggest = useSuggestStore()
     const gridRef = ref<HTMLElement | null>(null)
-    const width = ref(0)
     const galleryWidth = ref(0)
 
     const byId = computed(() => new Map(gallery.items.map((i) => [i.imageId, i])))
@@ -53,14 +51,7 @@ export default defineComponent({
     const masked = (id: number): boolean => item(id).isR18 && settings.values.r18Blur
 
     // 按导入月份或拍摄月份分组；按大小、名称排序时不分组
-    const groups = computed<GridGroup[]>(() => {
-      const rowWidth = width.value - GRID_PAD_RIGHT - ROW_PAD_X * 2
-      if (rowWidth <= 0) {
-        return []
-      }
-      // 在缩放档位内随可用空间调整目标行高，稀疏的末行也能跟随侧栏缩放。
-      const fullWidth = Math.max(rowWidth, galleryWidth.value - GRID_PAD_RIGHT - ROW_PAD_X * 2)
-      const targetHeight = gallery.rowHeight * Math.sqrt(rowWidth / fullWidth)
+    const partitions = computed(() => {
       const sort = gallery.nameOnly ? 'new' : gallery.sort
       // “AI 建议”视图：主进程已经按目标类目录排在一起，这里按目录分组（有这类建议时才分）
       const aiView = viewStore.page === 'gallery' && viewStore.view === 'ai'
@@ -82,14 +73,18 @@ export default defineComponent({
           label: byDir ? (dir?.name ?? '其他建议') : monthLabel(p.key),
           ids,
           allOn: gallery.multi && ids.every((id) => gallery.isSelected(id)),
-          rows: layoutRows(
-            p.items.map((i) => ({ id: i.imageId, ratio: ratioOf(i) })),
-            rowWidth,
-            targetHeight
-          ),
+          items: p.items.map((i) => ({ id: i.imageId, ratio: ratioOf(i) })),
           aiDir: dir === undefined ? undefined : { name: dir?.name ?? null, isNew: dir?.isNew ?? false }
         }
       })
+    })
+
+    const groups = computed<GridGroup[]>(() => {
+      const fullWidth = galleryWidth.value - GRID_PAD_RIGHT - ROW_INSET * 2
+      if (fullWidth <= TILE_CHROME) return []
+      return partitions.value.map(({ items, ...group }) => ({
+        ...group, rows: fluidGalleryRows(items, fullWidth, gallery.rowHeight)
+      }))
     })
 
     // 大图库给每行保留准确的高度，只在视口附近挂载卡片。所有行共用一个观察器。
@@ -204,7 +199,7 @@ export default defineComponent({
 
     // ↑ / ↓：跳到上一行或下一行里水平位置最近的那张
     const verticalNeighbor = (id: number, dir: -1 | 1): number | null => {
-      const rows = groups.value.flatMap((g) => g.rows)
+      const rows = groups.value.flatMap(g => g.rows)
       const centers = rows.map((r) => {
         let x = 0
         return r.tiles.map((t) => {
@@ -287,50 +282,12 @@ export default defineComponent({
     }
 
     let observer: ResizeObserver | null = null
-    const measureWidth = (): void => {
-      const grid = gridRef.value
-      if (!grid) return
-      width.value = grid.clientWidth
-      galleryWidth.value = grid.closest('.gallery--main')?.clientWidth ?? width.value
-    }
-    const syncPanelLayout = async (): Promise<void> => {
-      const grid = gridRef.value
-      if (!grid) return
-      const top = grid.getBoundingClientRect().top
-      const anchor = grid.scrollTop > 0
-        ? [...grid.querySelectorAll<HTMLElement>('.tile')].find(tile => tile.getBoundingClientRect().bottom > top)
-        : undefined
-      const anchorId = Number(anchor?.dataset.id)
-      const offset = anchor?.closest('.image-grid__row')?.getBoundingClientRect().top
-      measureWidth()
-      await nextTick()
-      if (offset === undefined || !grid.isConnected) return
-      for (const group of groups.value) {
-        const index = group.rows.findIndex(row => row.tiles.some(tile => tile.id === anchorId))
-        if (index < 0) continue
-        const first = group.rows[index].tiles[0].id
-        const row = grid.querySelector<HTMLElement>(`[data-first-id="${first}"]`)
-        if (row) {
-          grid.scrollTop += row.getBoundingClientRect().top - offset
-          // 滚动到新行后，先挂载当前视口的卡片，避免等到观察器下一帧才显示。
-          if (virtual.value) {
-            const bottom = top + grid.clientHeight
-            let visible: HTMLElement | null = row
-            while (visible && visible.getBoundingClientRect().top < bottom) {
-              visibleRows.add(visible.dataset.rowKey!)
-              visible = visible.nextElementSibling as HTMLElement | null
-            }
-            await nextTick()
-          }
-        }
-        break
-      }
-    }
     onMounted(() => {
-      if (gridRef.value) {
-        measureWidth()
-        observer = new ResizeObserver(measureWidth)
-        observer.observe(gridRef.value)
+      const container = gridRef.value?.closest('.gallery--main')
+      if (container) {
+        galleryWidth.value = container.clientWidth
+        observer = new ResizeObserver(() => { galleryWidth.value = container.clientWidth })
+        observer.observe(container)
       }
       window.addEventListener('keydown', onKey)
     })
@@ -358,6 +315,6 @@ export default defineComponent({
       }
     )
 
-    return { gallery, viewer, suggest, gridRef, groups, virtual, visibleRows, mountRow, unmountRow, item, masked, thumbUrl, onTileClick, onTileDown, onGridMove, onDragStart, onWheel, syncPanelLayout }
+    return { gallery, viewer, suggest, gridRef, groups, virtual, visibleRows, mountRow, unmountRow, item, masked, thumbUrl, onTileClick, onTileDown, onGridMove, onDragStart, onWheel }
   }
 })

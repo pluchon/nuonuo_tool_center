@@ -91,23 +91,13 @@ it('返回页面直接恢复右栏，重启后保留选择，编辑标签时可�
   await nav('标签管理').click()
   await page.getByRole('button', { name: '收起标签编辑栏' }).click()
   await page.locator('#right-panel').waitFor({ state: 'hidden' })
-  await page.waitForFunction(() => !document.documentElement.classList.contains('panel-motion'))
-  const panelAnimations = await page.evaluateHandle(() => {
-    const names: string[] = []
-    new MutationObserver(records => {
-      for (const record of records) {
-        if ((record.target as Element).classList.contains('panel-motion')) names.push('panel-motion')
-      }
-    }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'], attributeOldValue: true })
-    return names
-  })
   await nav('图库样本').click()
   await page.getByRole('button', { name: '展开图片详情栏' }).waitFor()
   await nav('最近导入').click()
   await page.locator('#right-panel').waitFor()
   await nav('标签管理').click()
   await page.getByRole('button', { name: '展开标签编辑栏' }).waitFor()
-  expect(await panelAnimations.jsonValue()).toEqual([])
+  expect(await page.locator('#right-panel').evaluate(el => el.getAnimations().length)).toBe(0)
   await page.getByRole('button', { name: '新建标签' }).click()
   await page.locator('#tagNameInput').fill('临时草稿')
   await page.getByRole('button', { name: '收起标签编辑栏' }).click()
@@ -121,166 +111,129 @@ it('返回页面直接恢复右栏，重启后保留选择，编辑标签时可�
   expect(await reopened.page.locator('#right-panel').isVisible()).toBe(false)
 })
 
-it('右栏退出动画先于图库结束时，旧面板不会闪回', async () => {
-  const { app, page } = await openGallery('gallery-panel-exit')
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setBackgroundThrottling(false))
-  // 用色块识别面板快照，暂停图库动画以检查两者结束之间的画面。
-  await page.addStyleTag({ content: `
-    #right-panel { position: relative }
-    #right-panel::after { content: ''; position: absolute; top: 48px; left: 2px; width: 24px; height: 24px; background: #ff00ff; }
-    :root.panel-motion::view-transition-group(panel-controls) { animation-play-state: paused; }
-  ` })
-  const markerPixels = async (name: string) => {
-    const pixels = await sharp(await shot(page, name)).removeAlpha().raw().toBuffer()
-    let count = 0
-    for (let i = 0; i < pixels.length; i += 3) {
-      if (pixels[i] > 245 && pixels[i + 1] < 10 && pixels[i + 2] > 245) count++
-    }
-    return count
-  }
-  expect(await markerPixels('panel-exit-open')).toBeGreaterThan(100)
-  await page.getByRole('button', { name: '收起图片详情栏' }).click()
-  await page.waitForFunction(() => {
-    const animations = document.getAnimations()
-    return animations.some(a => a.playState === 'paused') &&
-      !animations.some(a => a instanceof CSSAnimation && a.animationName === 'panel-slide' && a.playState === 'running')
-  })
-  try {
-    expect(await markerPixels('panel-exit-last-frame')).toBe(0)
-  } finally {
-    await page.evaluate(() => document.getAnimations().filter(a => a.playState === 'paused').forEach(a => a.finish()))
-  }
-  await page.waitForFunction(() => !document.documentElement.classList.contains('panel-motion'))
-  expect(await page.locator('#right-panel').isVisible()).toBe(false)
-})
-
-it('只有两张图时，收起和展开右栏的中间画面都能看到缩略图逐渐缩放', async () => {
-  const { app, page } = await openGallery('gallery-fluid-thumbnails')
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setBackgroundThrottling(false))
-  await page.waitForFunction(() => {
-    const images = [...document.querySelectorAll<HTMLImageElement>('.tile__pic')]
-    return images.length === 2 && images.every(img => img.complete && img.naturalWidth)
-  })
-  const bounds = await page.locator('.image-grid').boundingBox()
-  // 给展开状态加一个标记，检查收起中途是否重复绘制旧卡片。
-  await page.addStyleTag({ content: `
-    .gallery--main:has(#right-panel:not([style*="display: none"])) .tile::after {
-      content: ''; position: absolute; inset: 12px auto auto 12px; width: 16px; height: 16px; background: #ff00ff;
-    }` })
-  const greenArea = async (name: string) => {
-    const file = await shot(page, name)
-    const pixels = await sharp(file).extract({
-      left: Math.ceil(bounds!.x), top: Math.ceil(bounds!.y),
-      width: Math.floor(bounds!.width) - 1, height: Math.floor(bounds!.height) - 1
-    }).removeAlpha().raw().toBuffer()
-    let area = 0
-    let oldPixels = 0
-    for (let i = 0; i < pixels.length; i += 3) {
-      if (pixels[i] < 30 && pixels[i + 1] > 225 && pixels[i + 2] < 30) area++
-      if (pixels[i] > 220 && pixels[i + 1] < 35 && pixels[i + 2] > 220) oldPixels++
-    }
-    if (name === 'fluid-panel-open') expect(oldPixels).toBeGreaterThan(200)
-    if (name === 'fluid-panel-closing') expect(oldPixels).toBe(0)
-    return area
-  }
-  await page.evaluate(() => {
-    const start = document.startViewTransition.bind(document)
-    document.startViewTransition = cb => {
-      const t = start(cb)
-      void t.ready.then(() => {
-        for (const a of document.getAnimations()) {
-          if (!(a instanceof CSSAnimation) || !/view-transition|panel-slide/.test(a.animationName)) continue
-          a.pause()
-          a.currentTime = Number(a.effect!.getTiming().duration) / 2
-        }
-      })
-      return t
-    }
-  })
-  const areaWithPanel = await greenArea('fluid-panel-open')
-  expect(areaWithPanel).toBeGreaterThan(1000)
+it('右栏宽度连续变化，缩略图按中间宽度重排', async () => {
+  const { page } = await openGallery('gallery-fluid-panel')
   const toggle = page.locator('.title-bar__panel-toggle')
-  const toggleAndSample = async (name: string) => {
-    await toggle.click()
-    await page.waitForFunction(() => document.getAnimations().some(a => a.playState === 'paused'))
-    const area = await greenArea(name)
-    await page.evaluate(() => document.getAnimations().filter(a => a.playState === 'paused').forEach(a => a.finish()))
-    await page.waitForFunction(() => !document.documentElement.classList.contains('panel-motion'))
-    return area
+  const panel = page.locator('#right-panel')
+  const dimensions = () => page.evaluate(() => [
+    document.querySelector('.image-grid')!.clientWidth,
+    document.querySelector('.tile')!.getBoundingClientRect().width
+  ])
+  const open = await dimensions()
+  for (const closing of [true, false]) {
+    // 固定在过渡中点，直接测量活跃的图库及卡片。
+    await toggle.evaluate(async (el: HTMLElement) => {
+      el.click()
+      await Promise.resolve()
+      const panel = document.querySelector<HTMLElement>('#right-panel')!
+      panel.getBoundingClientRect()
+      for (const animation of panel.getAnimations()) {
+        animation.pause()
+        animation.currentTime = Number(animation.effect!.getTiming().duration) / 2
+      }
+    })
+    await expect.poll(() => panel.evaluate(el => el.clientWidth)).toBe(150)
+    await expect.poll(async () => (await dimensions())[1]).toBeGreaterThan(open[1])
+    const middle = await dimensions()
+    await shot(page, 'gallery-fluid-midpoint')
+    await panel.evaluate(el => el.getAnimations().forEach(animation => animation.finish()))
+    await expect.poll(() => panel.evaluate(el => el.clientWidth)).toBe(closing ? 0 : 300)
+    if (closing) {
+      await expect.poll(async () => (await dimensions())[1]).toBeGreaterThan(middle[1])
+      expect((await dimensions())[0]).toBeGreaterThan(middle[0])
+    } else {
+      await expect.poll(dimensions).toEqual(open)
+    }
+    expect(await page.locator('.tile[style*="view-transition-name"]').count()).toBe(0)
   }
-  const closing = await toggleAndSample('fluid-panel-closing')
-  const areaWithoutPanel = await greenArea('fluid-panel-closed')
-  const opening = await toggleAndSample('fluid-panel-opening')
-  expect(areaWithoutPanel).toBeGreaterThan(areaWithPanel)
-  for (const mid of [closing, opening]) {
-    const progress = (mid - areaWithPanel) / (areaWithoutPanel - areaWithPanel)
-    expect(progress).toBeGreaterThan(0.2)
-    expect(progress).toBeLessThan(0.8)
-  }
-  expect(await greenArea('fluid-panel-restored')).toBe(areaWithPanel)
 })
 
-it('虚拟图库中手动切换右栏时只移动当前视口的缩略图，连续切换和减少动画设置均能恢复', async () => {
-  const { app, page } = await openGallery('gallery-panel-motion', 240)
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setBackgroundThrottling(false))
-  await expect.poll(() => page.locator('.image-grid__row').count(), { timeout: 45_000 }).toBeGreaterThan(45)
+it('侧栏开合时图片随行连续上下移动，中间帧没有遮挡或重建', async () => {
+  const { page } = await openGallery('gallery-wrap-motion', 18)
+  await expect.poll(() => page.locator('.tile').count()).toBe(18)
+  for (const closing of [true, false]) {
+    const sample = await page.evaluate(async () => {
+      const tiles = Array.from(document.querySelectorAll<HTMLElement>('.tile'))
+      const positions = () => tiles.map(tile => tile.getBoundingClientRect().top)
+      const start = positions()
+      document.querySelector<HTMLButtonElement>('.title-bar__panel-toggle')!.click()
+      await Promise.resolve()
+      const panel = document.querySelector<HTMLElement>('#right-panel')!
+      panel.getBoundingClientRect()
+      const motion = panel.getAnimations()
+      const frames: number[][] = []
+      for (const fraction of [0.25, 0.5, 0.75, 1]) {
+        for (const animation of motion) {
+          animation.pause()
+          animation.currentTime = Number(animation.effect!.getTiming().duration) * fraction
+        }
+        await new Promise(requestAnimationFrame)
+        await new Promise(requestAnimationFrame)
+        const boxes = tiles.map(tile => tile.getBoundingClientRect())
+        for (const [index, box] of boxes.entries()) {
+          for (const other of boxes.slice(index + 1)) {
+            const overlap = Math.min(box.right, other.right) - Math.max(box.left, other.left)
+            if (overlap > 1 && Math.min(box.bottom, other.bottom) - Math.max(box.top, other.top) > 1) {
+              throw new Error('缩略图在过渡中相互遮挡')
+            }
+          }
+        }
+        frames.push(positions())
+      }
+      motion.forEach(animation => animation.finish())
+      const end = frames[3]
+      const index = start.findIndex((y, i) => Math.abs(y - end[i]) > 75)
+      if (index < 0) throw new Error('后续图片行没有随宽度上下移动')
+      return {
+        steps: frames.map(frame => (frame[index] - start[index]) / (end[index] - start[index])),
+        retained: tiles.every(tile => tile.isConnected), panelWidth: panel.clientWidth
+      }
+    })
+    expect(sample.steps[0]).toBeGreaterThan(0)
+    expect(sample.steps[1]).toBeCloseTo(0.5, 1)
+    expect(sample.steps[2]).toBeLessThan(1)
+    expect(sample.steps).toEqual([...sample.steps].sort((a, b) => a - b))
+    expect(sample.retained).toBe(true)
+    expect(sample.panelWidth).toBe(closing ? 0 : 300)
+  }
+  await page.locator('.title-bar__panel-toggle').evaluate(async (button: HTMLElement) => {
+    button.click()
+    await Promise.resolve()
+    const panel = document.querySelector<HTMLElement>('#right-panel')!
+    panel.getBoundingClientRect()
+    for (const animation of panel.getAnimations()) {
+      animation.pause()
+      animation.currentTime = Number(animation.effect!.getTiming().duration) / 2
+    }
+  })
+  await shot(page, 'gallery-wrap-midpoint')
+})
+
+it('虚拟图库连续切换右栏保持当前位置，减少动画时直接完成', async () => {
+  const { page } = await openGallery('gallery-panel-motion', 240)
   const grid = page.locator('.image-grid')
+  await expect.poll(() => grid.locator('.image-grid__row').count(), { timeout: 45_000 }).toBeGreaterThan(45)
   await grid.evaluate(el => { el.scrollTop = 2800 })
-  const topImage = () => grid.evaluate(el => {
-    const top = el.getBoundingClientRect().top
-    return [...el.querySelectorAll<HTMLElement>('.tile')].find(t => {
-      const r = t.getBoundingClientRect()
-      return r.bottom > top && r.top < top + el.clientHeight
-    })?.dataset.id
+  const visible = () => grid.evaluate(el => {
+    const {top, bottom} = el.getBoundingClientRect()
+    return [...el.querySelectorAll<HTMLElement>('.tile')].filter(tile => {
+      const box = tile.getBoundingClientRect()
+      return box.bottom > top && box.top < bottom
+    }).map(tile => tile.dataset.id)
   })
-  await expect.poll(topImage).toBeTruthy()
-  const anchor = await topImage()
-  const readMotion = await page.evaluateHandle(() => {
-    const start = document.startViewTransition.bind(document)
-    const samples: string[][] = []
-    document.startViewTransition = cb => {
-      const t = start(cb)
-      t.ready.then(() => {
-        const animations = document.getAnimations().filter(a => a instanceof CSSAnimation && /view-transition|panel-slide/.test(a.animationName))
-        samples.push(animations.map(a => (a as CSSAnimation).animationName))
-        if (samples.length === 1) {
-          for (const a of animations) { a.pause(); a.currentTime = Number(a.effect!.getTiming().duration) / 2 }
-        }
-      }).catch(err => samples.push([String(err)]))
-      return t
-    }
-    return samples
-  })
+  await expect.poll(async () => (await visible()).length).toBeGreaterThan(0)
+  const [anchor] = await visible()
   const toggle = page.locator('.title-bar__panel-toggle')
-  await toggle.click()
-  await expect.poll(async () => (await readMotion.jsonValue()).length, { timeout: 5000 }).toBe(1)
-  const samples = await readMotion.jsonValue()
-  const movingTiles = samples.flat().filter(name => name.includes('group') && name.includes('panel-tile-'))
-  expect(movingTiles.length).toBeGreaterThan(0)
-  expect(movingTiles.length).toBeLessThan(80)
-  await shot(page, 'gallery-panel-midpoint')
-  await page.evaluate(() => document.getAnimations().filter(a => a.playState === 'paused').forEach(a => a.play()))
-  await page.waitForFunction(() => !document.querySelector('.panel-motion') && !document.querySelector<HTMLElement>('#right-panel')?.offsetWidth)
-  expect(await grid.locator(`[data-id="${anchor}"]`).evaluate(el => {
-    const r = el.getBoundingClientRect()
-    const viewport = el.closest('.image-grid')!.getBoundingClientRect()
-    return r.bottom > viewport.top && r.top < viewport.bottom
-  })).toBe(true)
-  await toggle.click()
-  await page.waitForFunction(() => !document.querySelector('.panel-motion') && !!document.querySelector<HTMLElement>('#right-panel')?.offsetWidth)
-  await toggle.evaluate(async (button: HTMLElement) => {
-    button.click()
-    await new Promise(resolve => setTimeout(resolve, 10))
-    button.click()
-  })
-  await expect.poll(() => toggle.getAttribute('aria-expanded')).toBe('true')
-  await page.waitForFunction(() => !document.querySelector('.panel-motion') && !!document.querySelector<HTMLElement>('#right-panel')?.offsetWidth)
-  await page.emulateMedia({ reducedMotion: 'reduce' })
-  const before = (await readMotion.jsonValue()).length
   await toggle.click()
   await page.locator('#right-panel').waitFor({ state: 'hidden' })
-  expect((await readMotion.jsonValue()).length).toBe(before)
-  expect(await grid.locator('[style*="view-transition-name"]').count()).toBe(0)
+  await expect.poll(visible).toContain(anchor)
+  expect(await grid.locator('.tile').count()).toBeLessThan(100)
+  await toggle.click()
+  await toggle.click()
+  await page.locator('#right-panel').waitFor({ state: 'hidden' })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await toggle.click()
+  expect(await page.locator('#right-panel').evaluate(el => [el.clientWidth, el.getAnimations().length])).toEqual([300, 0])
 }, 120_000)
 
 it('切换目录后查询失败，旧列表和旧图片操作不会出现在新视图', async () => {

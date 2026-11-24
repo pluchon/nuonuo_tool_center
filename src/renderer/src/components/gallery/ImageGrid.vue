@@ -37,66 +37,68 @@
           </button>
         </div>
 
-        <GridRow v-for="(row, ri) in g.rows" :key="ri" :data-first-id="row.tiles[0].id"
-          :style="{ '--image-height': row.height + 'px' }"
-          :row-key="g.key + '/' + ri" :virtual="virtual" :visible-rows="visibleRows" @vue:mounted="mountRow" @vue:before-unmount="unmountRow">
-          <button
-            v-for="t in row.tiles"
-            :key="t.id"
-            class="tile"
-            :class="{ 'tile--on': gallery.isSelected(t.id), 'tile--multi': gallery.multi }"
-            type="button"
-            :data-id="t.id"
-            :aria-label="item(t.id).name"
-            :aria-pressed="gallery.isSelected(t.id)"
-            :style="{ width: `${t.width}px` }"
-            :draggable="!item(t.id).missing && !item(t.id).offline"
-            @mousedown="onTileDown"
-            @click="onTileClick($event, t.id)"
-            @dblclick="viewer.show(t.id)"
-            @dragstart="onDragStart($event, t.id)"
-            @dragend="gallery.endDrag()"
-          >
-            <span
-              class="tile__chk"
-              role="checkbox"
-              :aria-checked="gallery.multi && gallery.isSelected(t.id)"
-              aria-label="选择这张图"
-              @click.stop="gallery.toggle(t.id)"
-            >{{ gallery.multi && gallery.isSelected(t.id) ? '✓' : '' }}</span>
-            <div
-              class="tile__img"
-              :class="{ 'tile__img--offline': item(t.id).offline }"
+        <div class="image-grid__canvas">
+          <GridRow v-for="(row, ri) in g.rows" :key="ri" :data-first-id="row.tiles[0].id"
+            :style="{ '--image-height': row.imageHeight }"
+            :row-key="g.key + '/' + ri" :virtual="virtual" :visible-rows="visibleRows" @vue:mounted="mountRow" @vue:before-unmount="unmountRow">
+            <button
+              v-for="t in row.tiles"
+              :key="t.id"
+              class="tile"
+              :class="{ 'tile--on': gallery.isSelected(t.id), 'tile--multi': gallery.multi }"
+              type="button"
+              :data-id="t.id"
+              :aria-label="item(t.id).name"
+              :aria-pressed="gallery.isSelected(t.id)"
+              :style="{ '--tile-ratio': t.ratio }"
+              :draggable="!item(t.id).missing && !item(t.id).offline"
+              @mousedown="onTileDown"
+              @click="onTileClick($event, t.id)"
+              @dblclick="viewer.show(t.id)"
+              @dragstart="onDragStart($event, t.id)"
+              @dragend="gallery.endDrag()"
             >
-              <img
-                v-if="item(t.id).thumb === 'READY'"
-                class="tile__pic"
-                :class="{ 'tile__pic--masked': masked(t.id) }"
-                :src="thumbUrl(item(t.id).hash)"
-                alt=""
-                loading="lazy"
-                decoding="async"
-                draggable="false"
-              />
-              <span v-if="item(t.id).thumb === 'PENDING' && !item(t.id).missing" class="tile__shim" role="img" aria-label="缩略图生成中" />
-              <span v-if="item(t.id).missing" class="tile__bad tile__bad--missing">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M9.5 12.5l5 5M14.5 12.5l-5 5" /></svg>文件不见了
-              </span>
-              <span v-else-if="item(t.id).thumb === 'FAILED'" class="tile__bad">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18v14H3zM3 15l5-5 4 4M14 12l2-2 5 5M8 3l2 4M16 21l-2-4" /></svg>无法预览
-              </span>
-              <span v-if="masked(t.id)" class="tile__r18">
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg><span class="tile__r18-text">R-18</span>
-              </span>
-              <span class="tile__badge tile__badge--fmt">{{ item(t.id).format }}</span>
-              <span v-if="t.crop" class="tile__badge tile__badge--crop">{{ t.crop }}</span>
-            </div>
-            <div class="tile__foot">
-              <span class="tile__name">{{ item(t.id).name }}</span>
-              <span v-if="!item(t.id).tagged" class="tile__dot" aria-label="还没打标签" />
-            </div>
-          </button>
-        </GridRow>
+              <span
+                class="tile__chk"
+                role="checkbox"
+                :aria-checked="gallery.multi && gallery.isSelected(t.id)"
+                aria-label="选择这张图"
+                @click.stop="gallery.toggle(t.id)"
+              >{{ gallery.multi && gallery.isSelected(t.id) ? '✓' : '' }}</span>
+              <div
+                class="tile__img"
+                :class="{ 'tile__img--offline': item(t.id).offline }"
+              >
+                <img
+                  v-if="item(t.id).thumb === 'READY'"
+                  class="tile__pic"
+                  :class="{ 'tile__pic--masked': masked(t.id) }"
+                  :src="thumbUrl(item(t.id).hash)"
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  draggable="false"
+                />
+                <span v-if="item(t.id).thumb === 'PENDING' && !item(t.id).missing" class="tile__shim" role="img" aria-label="缩略图生成中" />
+                <span v-if="item(t.id).missing" class="tile__bad tile__bad--missing">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M9.5 12.5l5 5M14.5 12.5l-5 5" /></svg>文件不见了
+                </span>
+                <span v-else-if="item(t.id).thumb === 'FAILED'" class="tile__bad">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18v14H3zM3 15l5-5 4 4M14 12l2-2 5 5M8 3l2 4M16 21l-2-4" /></svg>无法预览
+                </span>
+                <span v-if="masked(t.id)" class="tile__r18">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg><span class="tile__r18-text">R-18</span>
+                </span>
+                <span class="tile__badge tile__badge--fmt">{{ item(t.id).format }}</span>
+                <span v-if="t.crop" class="tile__badge tile__badge--crop">{{ t.crop }}</span>
+              </div>
+              <div class="tile__foot">
+                <span class="tile__name">{{ item(t.id).name }}</span>
+                <span v-if="!item(t.id).tagged" class="tile__dot" aria-label="还没打标签" />
+              </div>
+            </button>
+          </GridRow>
+        </div>
       </section>
     </div>
     <GridScrollbar :target="gridRef" :timeline="groups[0]?.timeline ?? false" :revision="groups" />

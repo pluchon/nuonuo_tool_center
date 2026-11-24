@@ -41,6 +41,16 @@ describe('性能', () => {
       }
 
       const { app, page } = await launchApp(dirs)
+      const cdp = await page.context().newCDPSession(page)
+      const memory = async () => ({
+        processes: await app.evaluate(({ app: a }) => a.getAppMetrics().map(m => ({
+          pid: m.pid, name: m.name ?? m.type, workingSetMiB: Math.round(m.memory.workingSetSize / 1024),
+          privateMiB: m.memory.privateBytes === undefined ? null : Math.round(m.memory.privateBytes / 1024)
+        }))),
+        heapMiB: Math.round((await cdp.send('Runtime.getHeapUsage')).usedSize / 1024 ** 2),
+        dom: await cdp.send('Memory.getDOMCounters')
+      })
+      const startup = await memory()
       const t0 = Date.now()
       await importFolder(app, page, source)
       await page.waitForSelector('.app-toast:has-text("扫描完成")', { timeout: 30 * 60_000 })
@@ -101,20 +111,60 @@ describe('性能', () => {
         return { ms, fps: (frames * 1000) / ms, longestFrameMs: longest, height: el.scrollHeight }
       })
 
-      const memory = await app.evaluate(async ({ app: a }) =>
-        (await a.getAppMetrics()).map((m) => ({ type: m.type, mb: Math.round(m.memory.workingSetSize / 1024) }))
-      )
+      const afterScroll = await memory()
+      await page.keyboard.press('Home')
+      const firstTile = page.locator(`.tile[data-id="${listing.first}"]`)
+      const cycle = async () => {
+        await firstTile.dblclick()
+        await page.locator('.viewer__pic').waitFor()
+        await page.keyboard.press('Escape')
+        await page.locator('.viewer').waitFor({ state: 'detached' })
+        await page.locator('.title-bar__gear').click()
+        await page.getByRole('tab', { name: '外观', exact: true }).click()
+        await page.keyboard.press('Escape')
+        await page.locator('.set-dlg').waitFor({ state: 'detached' })
+      }
+      const retained = async () => {
+        await cdp.send('HeapProfiler.collectGarbage')
+        return memory()
+      }
+      await cycle()
+      const warm = await retained()
+      for (let i = 0; i < 20; i++) await cycle()
+      const afterCycles = await retained()
 
-      const result = { count: COUNT, scanMs, perImageMs: Math.round(scanMs / COUNT), firstScreenMs, listMs: Math.round(listMs), scroll, memory }
+      const result = { count: COUNT, scanMs, perImageMs: Math.round(scanMs / COUNT), firstScreenMs, listMs: Math.round(listMs), scroll, memory: { startup, afterScroll, warm, afterCycles } }
       mkdirSync(resolve('test-output'), { recursive: true })
       writeFileSync(resolve('test-output/perf.json'), JSON.stringify(result, null, 2))
       console.log(JSON.stringify(result))
       // 粗的底线：列表查询 1 秒内、首屏 5 秒内、滚动不低于 30 帧
       expect(listMs).toBeLessThan(1000)
       expect(firstScreenMs).toBeLessThan(5000)
-      expect(scroll.fps).toBeGreaterThan(30)
       await app.close()
+      await expect.poll(() => afterCycles.processes.filter(({ pid }) => {
+        try { process.kill(pid, 0); return true } catch { return false }
+      }), { timeout: 10_000 }).toEqual([])
+      expect(scroll.fps).toBeGreaterThan(30)
     },
     60 * 60_000
   )
+
+  run('分级结束后空闲会释放模型工作进程', async () => {
+    const dirs = freshCase('perf-idle-rating')
+    const source = join(dirs.root, 'pics')
+    mkdirSync(source)
+    await makeImage(join(source, '测试图.jpg'), 1)
+    const { app, page } = await launchApp(dirs)
+    await importFolder(app, page, source)
+    const metrics = () => app.evaluate(({ app: a }) => a.getAppMetrics().map(m => ({
+      name: m.name ?? m.type, workingSetMiB: Math.round(m.memory.workingSetSize / 1024), cpuPercent: m.cpu.percentCPUUsage
+    })))
+    const hasModel = (rows: Awaited<ReturnType<typeof metrics>>) => rows.some(m => m.name === '诺诺本地分级')
+    await expect.poll(async () => hasModel(await metrics()), { timeout: 30_000 }).toBe(true)
+    await expect.poll(async () => hasModel(await metrics()), { timeout: 160_000, interval: 2000 }).toBe(false)
+    const idle = await metrics()
+    mkdirSync(resolve('test-output'), { recursive: true })
+    writeFileSync(resolve('test-output/perf-idle.json'), JSON.stringify(idle, null, 2))
+    await app.close()
+  }, 210_000)
 })

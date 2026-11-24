@@ -10,19 +10,6 @@
   user-select: none;
   touch-action: none;
 
-  // 轨道：平时看不见，悬停或拖动时浮出一条淡色细槽
-  &__rail {
-    position: absolute;
-    top: 6px;
-    bottom: 6px;
-    right: 4px;
-    width: 6px;
-    border-radius: 999px;
-    background: var(--a-line);
-    opacity: 0;
-    transition: opacity 0.2s ease;
-  }
-
   // 滑块：和月份标题竖条同一组紫粉渐变
   &__thumb {
     position: absolute;
@@ -43,11 +30,6 @@
 
   &--active &__thumb {
     opacity: 0.9;
-  }
-
-  &:hover &__rail,
-  &--drag &__rail {
-    opacity: 0.55;
   }
 
   &:hover &__thumb,
@@ -74,7 +56,8 @@
     padding: 0 11px;
     border-radius: 999px;
     border: 1.5px solid var(--a-line);
-    background: var(--c-surface);
+    background: var(--look-field-bg);
+    backdrop-filter: var(--look-blur);
     box-shadow: 0 8px 20px -10px rgba(var(--sh), 0.55);
     color: var(--a-ink);
     font-size: 12px;

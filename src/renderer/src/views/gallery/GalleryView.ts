@@ -1,4 +1,4 @@
-import { computed, defineComponent, onMounted, ref, watch } from 'vue'
+import { computed, defineComponent, onMounted, watch } from 'vue'
 import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue'
 import NonoArt from '@/components/nono/NonoArt.vue'
 import DetailPanel from '@/components/gallery/DetailPanel.vue'
@@ -20,7 +20,6 @@ export default defineComponent({
     const picker = usePickerStore()
     const viewStore = useViewStore()
     const gallery = useGalleryStore()
-    const imageGrid = ref<InstanceType<typeof ImageGrid> | null>(null)
 
     const hasFilters = computed(() => gallery.onlyR18 || gallery.onlyHere || gallery.tagIds.length > 0 || gallery.dirs.length > 0 ||
       Object.values(gallery.more).some((values) => values?.length))
@@ -66,6 +65,6 @@ export default defineComponent({
 
     const showUntagged = (): void => viewStore.show('untagged')
 
-    return { library, picker, gallery, viewStore, imageGrid, emptyText, deleteTitle, showUntaggedLink, showUntagged }
+    return { library, picker, gallery, viewStore, emptyText, deleteTitle, showUntaggedLink, showUntagged }
   }
 })

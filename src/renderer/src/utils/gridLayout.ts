@@ -18,6 +18,7 @@ export interface LayoutInput {
 // 排好的一张：卡片宽度（含边框内边距）、图片区宽度，以及超宽超长时的角标
 export interface LayoutTile {
   id: number
+  ratio: number
   width: number
   imageWidth: number
   crop: '' | '全景' | '长图'
@@ -46,7 +47,7 @@ export function layoutRows(items: LayoutInput[], width: number, targetHeight: nu
       const left = Math.round(edge)
       edge += ratio * height
       const imageWidth = Math.round(edge) - left
-      return { id, width: imageWidth + TILE_CHROME, imageWidth, crop }
+      return { id, ratio, width: imageWidth + TILE_CHROME, imageWidth, crop }
     })
     rows.push({ height, tiles })
     pending = []
@@ -69,6 +70,25 @@ export function layoutRows(items: LayoutInput[], width: number, targetHeight: nu
   }
   if (pending.length) finishRow(targetHeight)
   return rows
+}
+
+export const PANEL_WIDTH = 300
+export const PANEL_GAP = 14
+export const ROW_INSET = 2
+
+// 开合侧栏时保留行内顺序。窗口宽度和缩放档位决定换行，行高随图库的实际宽度连续变化。
+export function fluidGalleryRows(items: LayoutInput[], fullWidth: number, targetHeight: number) {
+  const reference = Math.max(TILE_CHROME + 1, fullWidth - (PANEL_WIDTH + PANEL_GAP) / 2)
+  const rows = layoutRows(items, reference, targetHeight * Math.sqrt(reference / fullWidth))
+  return rows.map((row, i) => {
+    const ratioSum = row.tiles.reduce((sum, tile) => sum + tile.ratio, 0)
+    const fixed = 2 * ROW_INSET + row.tiles.length * TILE_CHROME + (row.tiles.length - 1) * TILE_GAP
+    const fit = `calc((100% - ${fixed}px) / ${ratioSum})`
+    // 末行未填满时限制行高，避免一两张图片被放大到占满整行。
+    const sparse = i === rows.length - 1 && ratioSum * row.height < reference - fixed + 2 * ROW_INSET - 1
+    const cap = `calc(${targetHeight / 2}px + (100% - ${ROW_INSET * 2}px) * ${targetHeight / (2 * fullWidth)})`
+    return { ...row, imageHeight: sparse ? `min(${fit}, ${cap})` : fit }
+  })
 }
 
 // 分组用的月份键：YYYY-MM（本机时区）；没有时间时为 'none'

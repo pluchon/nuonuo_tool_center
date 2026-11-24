@@ -24,6 +24,7 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: clip;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -166,22 +167,26 @@
     }
   }
 
-  // content-visibility 会把绘制裁在行框里：上下各留出空间给悬停弹起的描边和投影，再用负外边距抵掉，图的位置不变
-  &__row {
-    box-sizing: content-box;
-    height: calc(var(--image-height) + 40px);
+  &__canvas {
     display: flex;
-    gap: 8px;
-    padding: 6px 2px 14px;
-    margin: -6px 0 -14px;
-    content-visibility: auto;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  &__row {
+    position: relative;
+    // 百分比内边距随可用宽度变化；空行与已挂载卡片的行保持相同高度。
+    padding-block-start: calc(var(--image-height) + 40px);
   }
 }
 
 // 一张缩略图卡片：底下垫一层淡磨砂白，名字落在它上面
 .tile {
   position: relative;
+  width: calc(var(--image-height) * var(--tile-ratio) + 16px);
   flex: none;
+  &:first-child { margin-inline-start: 2px; }
+  min-width: 0;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -202,7 +207,7 @@
 
   &:hover {
     transform: translateY(-3px);
-    background-color: rgba(var(--w), 0.8);
+    background-color: color-mix(in srgb, var(--look-tile-bg) 95%, black);
     box-shadow: 0 16px 30px -18px rgba(var(--sh), 0.5);
 
     .tile__chk {
@@ -254,7 +259,8 @@
 
   &__img {
     position: relative;
-    height: var(--image-height);
+    flex: 1;
+    min-height: 0;
     border-radius: 12px;
     overflow: hidden;
     background: var(--c-b-F1EEF6);
