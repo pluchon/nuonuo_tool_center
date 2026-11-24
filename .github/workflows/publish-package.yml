@@ -47,7 +47,16 @@ jobs:
           $feed = "https://nuget.pkg.github.com/$env:GITHUB_REPOSITORY_OWNER/index.json"
           dotnet nuget add source $feed --name github --username $env:GITHUB_ACTOR --password $env:GH_TOKEN --store-password-in-clear-text
           dotnet nuget push (Join-Path $staging "Pluchon.NuonuoGallery.Windows.$version.nupkg") --source github --api-key $env:GH_TOKEN --skip-duplicate
-          $verify = Join-Path $env:RUNNER_TEMP 'nuonuo-verify'
-          nuget install Pluchon.NuonuoGallery.Windows -Version $version -Source github -OutputDirectory $verify -DirectDownload -NoHttpCache -NonInteractive
-          $download = Join-Path $verify "Pluchon.NuonuoGallery.Windows.$version/tools/win-x64/$file"
-          if ((Get-FileHash $download).Hash -ne $hash) { throw '软件包内的安装程序与 Release 不一致' }
+          $credential = [pscredential]::new($env:GITHUB_ACTOR, (ConvertTo-SecureString $env:GH_TOKEN -AsPlainText -Force))
+          $index = Invoke-RestMethod $feed -Authentication Basic -Credential $credential
+          $base = ($index.resources | Where-Object { $_.'@type' -like 'PackageBaseAddress/*' } | Select-Object -First 1).'@id'
+          $id = 'pluchon.nuonuogallery.windows'
+          $verify = Join-Path $env:RUNNER_TEMP 'verify.nupkg'
+          Invoke-WebRequest "$($base.TrimEnd('/'))/$id/$version/$id.$version.nupkg" -Authentication Basic -Credential $credential -OutFile $verify -MaximumRetryCount 3
+          $archive = [IO.Compression.ZipFile]::OpenRead($verify)
+          try {
+            $stream = $archive.GetEntry("tools/win-x64/$file").Open()
+            try {
+              if ((Get-FileHash -InputStream $stream).Hash -ne $hash) { throw '软件包内的安装程序与 Release 不一致' }
+            } finally { $stream.Dispose() }
+          } finally { $archive.Dispose() }

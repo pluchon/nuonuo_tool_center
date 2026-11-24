@@ -31,11 +31,25 @@ jobs:
         with:
           ref: refs/tags/${{ steps.version.outputs.tag }}
           persist-credentials: false
+      - id: existing
+        name: 检查版本是否已经发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: pwsh
+        run: |
+          $params = @{ Headers = @{ Authorization = "Bearer $env:GH_TOKEN" }; SkipHttpErrorCheck = $true }
+          $result = Invoke-WebRequest "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/releases/tags/$env:TAG" @params
+          if ($result.StatusCode -eq 404) { 'published=false' >> $env:GITHUB_OUTPUT }
+          elseif ($result.StatusCode -eq 200 -and !($result.Content | ConvertFrom-Json).draft) { 'published=true' >> $env:GITHUB_OUTPUT }
+          else { throw "无法确认发布状态 ($($result.StatusCode))" }
       - uses: actions/setup-node@v4
+        if: steps.existing.outputs.published == 'false'
         with:
           node-version: 22
           cache: npm
       - name: 构建安装程序
+        if: steps.existing.outputs.published == 'false'
         shell: pwsh
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -48,6 +62,7 @@ jobs:
           npm exec -- install-electron
           npm run dist:win
       - name: 验证打包后的图库
+        if: steps.existing.outputs.published == 'false'
         shell: pwsh
         run: |
           $env:LTM_DATA_DIR = Join-Path $env:RUNNER_TEMP 'test-gallery'
@@ -70,6 +85,7 @@ jobs:
           check().catch(error => { console.error(error); process.exitCode = 1 })
           '@ | node -
       - name: 发布安装程序和校验文件
+        if: steps.existing.outputs.published == 'false'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
