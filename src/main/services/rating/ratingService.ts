@@ -105,6 +105,7 @@ let worker: UtilityProcess | null = null
 let idleTimer: ReturnType<typeof setTimeout> | null = null
 let running: Promise<void> | null = null
 let stopping = false
+const shutdown = new AbortController()
 let seq = 0
 const waiters = new Map<number, (r: RatingResponse) => void>()
 let workerQueue: Promise<void> = Promise.resolve()
@@ -167,6 +168,8 @@ function killWorker(): void {
   }
   worker?.kill()
   worker = null
+  for (const [id, done] of waiters) done({ id, ok: false, error: '工作进程已关闭' })
+  waiters.clear()
 }
 
 // 发一张给工作进程，等结果或超时
@@ -235,12 +238,7 @@ export function getVisualTagsForSearch(imageId: number): Promise<string[] | null
 // 跑一轮：一批一批取还没分级的图，直到没有了、扫描开始了或要退出了
 async function runOnce(): Promise<void> {
   const cfg = config!
-  if (!(await ensureModel(cfg.modelsRoot))) {
-    log.warn('本地分级模型不可用，这次跳过')
-    return
-  }
   const modelDir = modelDirOf(cfg.modelsRoot)
-  log.info(`本地分级用 ${pickModelFile(modelDir)}`)
   // 上次退出（或被扫描打断）时这一轮已经判了几张：接着算，进度从“200/3000”继续而不是“0/2800”
   const base = (await loadCheckpoint<{ done: number }>(RATING_CHECKPOINT))?.done ?? 0
   let rated = 0
@@ -258,6 +256,13 @@ async function runOnce(): Promise<void> {
     if (batch.length === 0) {
       finished = true
       break
+    }
+    if (rated === 0) {
+      if (!(await ensureModel(cfg.modelsRoot, shutdown.signal))) {
+        if (!stopping) log.warn('本地分级模型不可用，这次跳过')
+        return
+      }
+      log.info(`本地分级用 ${pickModelFile(modelDir)}`)
     }
     // 中途又导入了新图时分母跟着变大
     setProgress({ running: true, done: base + rated, total: base + rated + (await countRatingCandidates()) })
@@ -315,7 +320,7 @@ export function scheduleRating(): void {
 // 现在就给一个文件分级（诺诺助手里上传的图，上云前过本地闸门）；模型不可用时返回 null
 export async function rateFileNow(file: string): Promise<{ scores: Record<WdRating, number>; r18: boolean } | null> {
   const cfg = config
-  if (!cfg || !(await ensureModel(cfg.modelsRoot))) {
+  if (!cfg || stopping || !(await ensureModel(cfg.modelsRoot, shutdown.signal))) {
     return null
   }
   // 你在等结果：用当前已加载的线程数，不为一张图重新加载模型
@@ -328,9 +333,10 @@ export function isRatingBusy(): boolean {
   return running !== null
 }
 
-// 退出前：不再开始新的一张，等手上这张做完，关掉工作进程
+// 退出时取消下载和推理。未完成的图片保留为待分级，下次启动继续。
 export async function stopRating(): Promise<void> {
   stopping = true
-  await Promise.allSettled([running, workerQueue, ...pendingFeatures.values()])
+  shutdown.abort()
   killWorker()
+  await Promise.allSettled([running, workerQueue, ...pendingFeatures.values()])
 }

@@ -1,5 +1,5 @@
 // 本地分级模型（WD swinv2 tagger v3）放在数据目录的 models 下；第一次要用时在后台下载，断了下次接着下
-import { createWriteStream, existsSync } from 'node:fs'
+import { createWriteStream } from 'node:fs'
 import { mkdir, rename, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -35,32 +35,40 @@ export async function isModelReady(modelsRoot: string): Promise<boolean> {
   return true
 }
 
-// 从一个地址下载一个文件到 .part（已有的部分用 Range 接着下），完整后改名；目标已存在时不覆盖
-async function downloadOne(base: string, dir: string, file: (typeof FILES)[number]): Promise<void> {
+// 先写临时文件，校验后再替换缺失或损坏的正式文件。
+async function downloadOne(base: string, dir: string, file: (typeof FILES)[number], signal?: AbortSignal): Promise<void> {
   const target = join(dir, file)
-  if (existsSync(target)) {
+  if (((await stat(target).catch(() => null))?.size ?? 0) >= MIN_BYTES[file]) {
     return
   }
   const part = `${target}.part`
   const have = (await stat(part).catch(() => null))?.size ?? 0
-  const res = await fetch(base + file, { headers: have > 0 ? { Range: `bytes=${have}-` } : {}, redirect: 'follow' })
+  let res = await fetch(base + file, { headers: have > 0 ? { Range: `bytes=${have}-` } : {}, signal })
+  if (have && res.status === 416) {
+    await res.body?.cancel()
+    res = await fetch(base + file, { signal })
+  }
   if (!res.ok || !res.body) {
+    await res.body?.cancel()
     throw new Error(`下载 ${file} 失败：HTTP ${res.status}`)
   }
   // 服务器不支持续传时从头下
-  const append = have > 0 && res.status === 206
-  await pipeline(Readable.fromWeb(res.body as never), createWriteStream(part, { flags: append ? 'a' : 'w' }))
+  const append = res.status === 206
+  const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(res.headers.get('content-range') ?? '')
+  if (append && (!range || Number(range[1]) !== have || Number(range[2]) !== Number(range[3]) - 1)) {
+    await res.body.cancel()
+    throw new Error(`${file} 的续传范围不一致`)
+  }
+  await pipeline(Readable.fromWeb(res.body as never), createWriteStream(part, { flags: append ? 'a' : 'w' }), { signal })
   const size = (await stat(part)).size
-  if (size < MIN_BYTES[file]) {
+  if (size < MIN_BYTES[file] || (append && size !== Number(range![3]))) {
     throw new Error(`${file} 只下到 ${size} 字节，不完整`)
   }
-  if (!existsSync(target)) {
-    await rename(part, target)
-  }
+  await rename(part, target)
 }
 
 // 确保模型在本地：缺了就下载（同时只下一份）；成功返回 true，失败只记日志返回 false
-export function ensureModel(modelsRoot: string): Promise<boolean> {
+export function ensureModel(modelsRoot: string, signal?: AbortSignal): Promise<boolean> {
   pending ??= (async () => {
     if (await isModelReady(modelsRoot)) {
       return true
@@ -71,11 +79,13 @@ export function ensureModel(modelsRoot: string): Promise<boolean> {
     for (const file of FILES) {
       let done = false
       for (const base of SOURCES) {
+        if (signal?.aborted) return false
         try {
-          await downloadOne(base, dir, file)
+          await downloadOne(base, dir, file, signal)
           done = true
           break
         } catch (err) {
+          if (signal?.aborted) return false
           log.warn(`从 ${new URL(base).host} 下载 ${file} 失败`, err)
         }
       }

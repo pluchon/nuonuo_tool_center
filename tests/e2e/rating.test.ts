@@ -45,6 +45,34 @@ function r18Count(page: Page): Promise<string | null> {
 }
 
 describe('本地分级', () => {
+  it('空图库不下载模型，首次下载中关闭窗口会及时释放图库锁', async () => {
+    const dirs = freshCase('rating-first-download')
+    const models = join(dirs.root, 'models')
+    const { app, page } = await launchApp(dirs, { LTM_MODEL_DIR: models })
+    const logFile = join(dirs.data, 'logs', 'main.log')
+    await app.evaluate(() => {
+      globalThis.fetch = (_input, init) => new Promise((_resolve, reject) => {
+        const signal = init?.signal
+        if (!signal) throw new Error('模型下载缺少取消信号')
+        signal.throwIfAborted()
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+    })
+    await page.locator('.app-shell').waitFor()
+    expect(readFileSync(logFile, 'utf8')).not.toContain('开始下载')
+    const source = join(dirs.root, 'pics')
+    await makeImages(source, 1)
+    await importFolder(app, page, source)
+    await waitForLog(dirs, '开始下载', 15_000)
+    const exit = app.waitForEvent('close', { timeout: 10_000 })
+    await page.locator('.title-bar__win--close').click()
+    await exit
+    expect(existsSync(join(dirs.data, 'ltm.lock'))).toBe(false)
+    const again = await launchApp(dirs)
+    await waitForLog(dirs, '判了 1 张', 60_000)
+    await again.app.close()
+  })
+
   it('扫描完在后台判一遍：普通图不打 R-18', async () => {
     const dirs = freshCase('rating')
     const source = join(dirs.root, 'pics')

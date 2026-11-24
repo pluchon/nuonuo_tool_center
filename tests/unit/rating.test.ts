@@ -1,5 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { EventEmitter } from 'node:events'
+import { open, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -49,6 +50,47 @@ describe('模型文件', () => {
     dir = mkdtempSync(join(tmpdir(), 'ltm-model-'))
   })
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
+
+  it.each([200, 206, 416])('修复不完整的正式文件，正确处理续传响应 %i', async (status) => {
+    const root = mkdtempSync(join(dir, 'repair-'))
+    const m = modelDirOf(root)
+    mkdirSync(m)
+    const model = await open(join(m, 'model.onnx'), 'w')
+    try { await model.truncate(400_000_000) } finally { await model.close() }
+    const target = join(m, 'selected_tags.csv')
+    writeFileSync(target, '损坏')
+    const data = 'a'.repeat(100_000)
+    writeFileSync(target + '.part', data.slice(0, 10))
+    const request = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      if (status === 416 && !init?.headers) return new Response(data)
+      expect(init?.headers).toEqual({ Range: 'bytes=10-' })
+      if (status === 416) return new Response(null, { status })
+      if (status === 206) return new Response(data.slice(10), { status, headers: { 'content-range': 'bytes 10-99999/100000' } })
+      return new Response(data)
+    })
+    try {
+      expect(await ensureModel(root)).toBe(true)
+      expect(await readFile(target, 'utf8')).toBe(data)
+      expect(request).toHaveBeenCalledTimes(status === 416 ? 2 : 1)
+    } finally { request.mockRestore() }
+  })
+
+  it('退出时取消未返回的模型下载并保留断点', async () => {
+    const root = mkdtempSync(join(dir, 'cancel-'))
+    mkdirSync(modelDirOf(root))
+    const part = join(modelDirOf(root), 'selected_tags.csv.part')
+    writeFileSync(part, '尚未下载完')
+    const controller = new AbortController()
+    const request = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })
+      controller.abort()
+    }))
+    try {
+      expect(await ensureModel(root, controller.signal)).toBe(false)
+      expect(request).toHaveBeenCalledTimes(1)
+      expect(await readFile(part, 'utf8')).toBe('尚未下载完')
+    } finally { request.mockRestore() }
+  })
 
   it('文件不全或太小不算就绪；齐了直接返回，不联网', async () => {
     expect(await isModelReady(dir)).toBe(false)
