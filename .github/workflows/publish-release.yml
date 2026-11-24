@@ -1,0 +1,91 @@
+name: 发布 Windows 版本
+on:
+  push:
+    tags: ['v*']
+    branches: ['release/v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布的既有版本标签
+        type: string
+        required: true
+
+permissions: {}
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - id: version
+        shell: pwsh
+        env:
+          REF: ${{ inputs.tag || github.ref_name }}
+        run: |
+          $tag = $env:REF -creplace '^release/', ''
+          if ($tag -cnotmatch '^v\d+\.\d+\.\d+$') { throw '版本标签无效' }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.version.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: 构建安装程序
+        shell: pwsh
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -cne $env:TAG) { throw '标签和应用版本不一致' }
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm run dist:win
+      - name: 验证打包后的图库
+        shell: pwsh
+        run: |
+          $env:LTM_DATA_DIR = Join-Path $env:RUNNER_TEMP 'test-gallery'
+          $env:LTM_CATEGORY_HOME = Join-Path $env:RUNNER_TEMP 'test-library'
+          @'
+          const { _electron } = require('playwright')
+          const assert = require('node:assert/strict')
+          async function check() {
+            const app = await _electron.launch({ executablePath: require('node:path').resolve('dist/win-unpacked/诺诺的图床.exe') })
+            try {
+              const page = await app.firstWindow()
+              await page.waitForSelector('.app-shell')
+              assert.deepEqual(await page.evaluate(() => window.api.system.getBootState()), {ok:true, data:'READY'})
+              assert.equal((await page.evaluate(() => window.api.settings.get())).ok, true)
+              assert.equal(await app.evaluate(({app}) => app.isPackaged), true)
+            } finally {
+              await app.close()
+            }
+          }
+          check().catch(error => { console.error(error); process.exitCode = 1 })
+          '@ | node -
+      - name: 发布安装程序和校验文件
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $file = Get-Item "dist/NuonuoGallery-$($env:TAG.Substring(1))-win-x64-Setup.exe"
+          $hash = (Get-FileHash $file.FullName).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText((Join-Path $file.DirectoryName 'SHA256SUMS.txt'), "$hash  $($file.Name)`n")
+          $notes = "下载 $($file.Name) 即可安装诺诺的图床，适用于 Windows x64。已有图库和设置会继续使用。`n`n安装程序未签名，可使用同页的 SHA256SUMS.txt 校验下载文件。"
+          $notes | Set-Content "$env:RUNNER_TEMP/notes.md" -Encoding utf8NoBOM
+          gh release create $env:TAG $file.FullName dist/SHA256SUMS.txt --verify-tag --title "诺诺的图床 $env:TAG" --notes-file "$env:RUNNER_TEMP/notes.md"
+  package:
+    needs: release
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-package.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
