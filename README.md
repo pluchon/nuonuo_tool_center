@@ -1,10 +1,12 @@
 <p align="center">
-  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/readme-hero.jpg" alt="诺诺的图床" width="100%" />
+  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/readme-hero.jpg?v=37e2c79ade2d" alt="诺诺的图床" width="100%" />
 </p>
+
+***
 
 <h1 align="center">诺诺的图床</h1>
 
-<p align="center">只在你电脑上运行的图库管理工具，附带一个会看图、会帮你整理的小助手“诺诺”。</p>
+<p align="center">一款 Windows 本地图库，诺诺可以陪你聊天，也能帮你找图、整理收藏。</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 10 / 11" />
@@ -26,13 +28,12 @@
   <a href="#截图">截图</a> ·
   <a href="#它是怎么工作的">工作原理</a> ·
   <a href="#隐私和数据">隐私和数据</a> ·
-  <a href="#快捷键">快捷键</a> ·
   <a href="#开发">开发</a>
 </p>
 
 ---
 
-电脑里的图越攒越多：壁纸、截图、画师的作品、自己拍的照片，散在好几个盘、几十个文件夹里。诺诺的图床不搬动你的原图，只在旁边建一份索引，让你能给图起名字、打标签、分类，再一句话把图找出来。
+壁纸存在一个盘，照片和插画散在另外几个文件夹。把这些文件夹加到「源目录」，就能在同一个图库里浏览。导入时原图留在原处，你可以给它们起名、打标签，再按自己的习惯归类。
 
 - **本地优先**：图库数据都在本机，不需要账号；R-18 在本地判定，永远不上云。
 - **AI 可选**：配置了阿里云百炼的密钥才会用到诺诺，没配也不影响其他功能。
@@ -46,22 +47,21 @@
 | **整理** | 名字、标签（带分类和别名）、自建的“类目录”；复制、移动、删除都能撤销，删除走系统回收站。 |
 | **找图、看图** | 按名字和标签搜，按目录、方向、尺寸、时间筛；网格按月分组；大图缩放、旋转、翻页不用等。 |
 | **本地 R-18 分级** | 导入后在后台用本地模型逐张判，明显的自动标上；你手动改过的永远以你为准。int8 量化模型约 0.56 秒一张，只用 CPU、低优先级。 |
-| **诺诺助手** | 一句话找图（“找海边的风景”），在已确认标签的图片中检索，跳过待审建议。可以上传一张图找相似图片，也可以附上 Markdown 提示词，让诺诺按文件要求看图。 |
-| **AI 建议** | 新图判完分级后诺诺自动看一遍，给出名字、标签、角色、作品、出处，逐条采用或不要，按 A / X 快速审。 |
+| **诺诺助手** | 可以和诺诺聊天，也可以说“找海边的风景”。它会从类目录里查找已经确认标签的图片。可以上传一张图找相似图片，也可以附上 Markdown 提示词，让诺诺按文件要求看图。 |
+| **AI 建议** | 新图判完分级后诺诺自动看一遍，给出名字、标签、角色、作品、出处，可以逐条挑选，也可以全部采用。 |
 | **一键整理** | 诺诺拟一份“建哪些类目录、哪些图放进去”的方案，你改好、批了才复制进去。 |
 | **外观** | 浅色、深色、跟随系统，六种主题色，主题背景或自己的图，磨砂玻璃和透明度可调。 |
 
 ## 截图
 
 <p align="center">
-  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/v2/screenshot-light.png" alt="图库（浅色）" width="49%" />
-  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/v2/screenshot-dark.png" alt="图库（深色）" width="49%" />
+  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/screenshots/screenshot-light-8ab5bff52749.png" alt="图库（浅色）" width="49%" />
+  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/screenshots/screenshot-dark-968a42d65922.png" alt="图库（深色）" width="49%" />
 </p>
 <p align="center">
-  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/v2/assistant-light.png" alt="诺诺助手：一句话找图" width="49%" />
-  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/v2/suggest-dark.png" alt="AI 建议：逐条采用" width="49%" />
+  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/screenshots/assistant-light-c57efffaf45b.png" alt="诺诺助手：一句话找图" width="49%" />
+  <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/screenshots/suggest-dark-b22c1ffba5fd.png" alt="AI 建议：逐条采用" width="49%" />
 </p>
-<p align="center"><sub>左上、右上：图库的浅色和深色　·　左下：诺诺助手一句话找图　·　右下：AI 建议逐条采用</sub></p>
 
 ## 它是怎么工作的
 
@@ -88,29 +88,17 @@ flowchart TD
 | --- | --- |
 | 图库数据库、缩略图、日志、诺诺的记忆和对话 | `%APPDATA%\LocalToolManage` |
 | 本地分级模型（第一次用时自动下载） | `%APPDATA%\LocalToolManage\models` |
-| 类目录 | 默认 `D:\诺诺图床`，可在设置里改 |
-| 原图 | 留在你导入的文件夹里，应用不会搬动 |
+| 类目录 | 新图库默认使用应用数据目录下的「类目录」。旧图库沿用原位置，可在设置中查看路径。 |
+| 原图 | 导入时留在原文件夹 |
 
 - 在「设置 → AI」中填写云端密钥。默认读取 `DASHSCOPE_API_KEY`（百炼）、`ALIYUN_ACCESS_KEY_ID` 和 `ALIYUN_ACCESS_KEY_SECRET`（阿里云 OSS）。离开密钥输入区时自动加密保存填写的值，并优先使用。
 - 发给云端的只有过了本地分级的图，先缩小、去掉 EXIF；需要公网地址时私有上传、用完即删。
-- 云端用不了的图（比如 R-18），可以复制一段提示词给你自己的 AI，把回复贴回来，由本地整理成建议。
+- 也可以从图片详情复制提示词，和图片一起发给自己常用的 AI，再把回复贴回来。标准 JSON 在本地导入，自然语言或 Markdown 回复会在提交后交给百炼整理。
 - 设置里可以导出整个图库数据库作备份（不含图片本身）。
-
-## 快捷键
-
-| 操作 | 按键 |
-| --- | --- |
-| 打开大图 / 快速预览 | Enter / 空格 |
-| 翻页、换行、第一张 / 最后一张 | ← → ↑ ↓、Home / End |
-| 多选、连选、全选 | Ctrl + 点击、Shift + 点击、Ctrl + A |
-| 复制图片、删除、搜索 | Ctrl + C、Delete、Ctrl + F |
-| AI 建议全部采用 / 不要 | A / X |
-| 缩略图大小 / 大图缩放 | Ctrl + 滚轮 |
-| 大图放大、缩小、适应窗口、原始大小 | + − 0 1，或双击 |
 
 ## 开发
 
-需要 Node.js 22 和 Windows。
+需要 Windows 和 Node.js 22.12 或更高版本。
 
 ```powershell
 npm install
