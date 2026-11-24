@@ -1,0 +1,48 @@
+name: 发布 Windows 安装程序到 GitHub Packages
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已发布的版本标签
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - uses: NuGet/setup-nuget@v2
+      - name: 校验 Release 安装程序并发布
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($env:TAG -cne "v$version") { throw '标签和应用版本不一致' }
+          $file = "NuonuoGallery-$version-win-x64-Setup.exe"
+          $staging = Join-Path $env:RUNNER_TEMP 'nuonuo-package'
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern $file --pattern SHA256SUMS.txt --dir $staging
+          $hash = (Get-FileHash (Join-Path $staging $file) -Algorithm SHA256).Hash
+          if ((Get-Content (Join-Path $staging 'SHA256SUMS.txt') -Raw).Trim() -ne "$hash  $file") { throw '安装程序校验失败' }
+          $commit = git rev-parse HEAD
+          nuget pack packaging/windows/NuonuoGallery.nuspec -BasePath $staging -Version $version -Properties "commit=$commit" -OutputDirectory $staging -NonInteractive
+          $feed = "https://nuget.pkg.github.com/$env:GITHUB_REPOSITORY_OWNER/index.json"
+          dotnet nuget add source $feed --name github --username $env:GITHUB_ACTOR --password $env:GH_TOKEN --store-password-in-clear-text
+          dotnet nuget push (Join-Path $staging "Pluchon.NuonuoGallery.Windows.$version.nupkg") --source github --api-key $env:GH_TOKEN --skip-duplicate
+          $verify = Join-Path $env:RUNNER_TEMP 'nuonuo-verify'
+          nuget install Pluchon.NuonuoGallery.Windows -Version $version -Source github -OutputDirectory $verify -DirectDownload -NoHttpCache -NonInteractive
+          $download = Join-Path $verify "Pluchon.NuonuoGallery.Windows.$version/tools/win-x64/$file"
+          if ((Get-FileHash $download).Hash -ne $hash) { throw '软件包内的安装程序与 Release 不一致' }

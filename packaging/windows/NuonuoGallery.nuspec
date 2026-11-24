@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package>
+  <metadata>
+    <id>Pluchon.NuonuoGallery.Windows</id>
+    <version>$version$</version>
+    <authors>pluchon</authors>
+    <title>诺诺的图床</title>
+    <description>诺诺的图床 Windows x64 安装程序，位于 tools/win-x64 目录。</description>
+    <license type="expression">MIT</license>
+    <repository type="git" url="https://github.com/pluchon/nuonuo_tool_center" commit="$commit$" />
+    <packageTypes><packageType name="Tools" /></packageTypes>
+  </metadata>
+  <files>
+    <file src="NuonuoGallery-*-win-x64-Setup.exe" target="tools/win-x64" />
+    <file src="SHA256SUMS.txt" target="tools/win-x64" />
+  </files>
+</package>
