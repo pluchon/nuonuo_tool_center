@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { image, imageAiResult } from '../db/schema'
 
@@ -6,7 +6,6 @@ export type ImageEntity = typeof image.$inferSelect
 export type NewImage = typeof image.$inferInsert
 
 // 缩略图状态：0 还没生成，1 已生成，2 生成失败（无法预览）
-export const THUMB_PENDING = 0
 export const THUMB_READY = 1
 export const THUMB_FAILED = 2
 
@@ -109,12 +108,6 @@ export async function saveModelRating(
     .where(and(eq(image.id, id), isNull(image.ratingSource)))
     .returning({ id: image.id })
   return rows.length > 0
-}
-
-// 只更新缩略图状态
-export async function updateImageThumb(id: number, thumbReady: number): Promise<void> {
-  const { db } = getDatabase()
-  await db.update(image).set({ thumbReady }).where(eq(image.id, id))
 }
 
 // 全部图片的内容哈希（含逻辑删除的：它们还可能被恢复，缩略图留着）
