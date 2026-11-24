@@ -112,6 +112,7 @@ export const useOrganizeStore = defineStore('organize', {
       this.dialog = 'plan'
     },
     close(): void {
+      if (this.dialog === 'confirm' && !this.estimate) void window.api.organize.dismissEstimate()
       this.estimateRequest++
       this.estimate = null
       this.dialog = null

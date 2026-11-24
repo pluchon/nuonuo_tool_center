@@ -15,7 +15,6 @@ import {
 } from '../../src/main/services/fileOps/folderOpsService'
 import { dirChildren } from '../../src/main/services/folderService'
 import { getOverview } from '../../src/main/services/libraryService'
-import { updateSettings } from '../../src/main/services/settingsService'
 
 let dir: string
 let source: string
@@ -39,7 +38,6 @@ beforeAll(async () => {
   }
   writeFileSync(join(library, '壁纸', '横屏', 'w.jpg'), 'w')
   await openDatabase(join(dir, 'pgdata'), resolve('drizzle'))
-  await updateSettings({ categoryHome: library })
   const { pg } = getDatabase()
   await pg.query(`INSERT INTO library_root (kind, name, path) VALUES ('SOURCE', 'pics', $1), ('CATEGORY', '类目录', $2)`, [source, library])
   await pg.exec(`

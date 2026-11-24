@@ -95,6 +95,8 @@ describe('解码小工具', () => {
       .toBuffer()
     const raw = Buffer.concat([Buffer.alloc(50), small, Buffer.alloc(20), big, Buffer.alloc(20)])
     expect(largestEmbeddedJpeg(raw)?.equals(big)).toBe(true)
+    expect(largestEmbeddedJpeg(Buffer.concat([small, big]))?.equals(big)).toBe(true)
+    expect(largestEmbeddedJpeg(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x01]))).toBeNull()
     expect(largestEmbeddedJpeg(Buffer.concat([Buffer.alloc(10), small]))).toBeNull()
   })
 

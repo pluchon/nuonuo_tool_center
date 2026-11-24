@@ -58,7 +58,7 @@ export interface AppSettings {
   watchChanges: boolean
   scanFormats: ScanFormat[]
   skipSmall: SkipSmall
-  // 类目录保存的位置；为空时用默认的 D:\诺诺图床
+  // 兼容旧版保存的类目录路径，只读。
   categoryHome: string | null
 }
 

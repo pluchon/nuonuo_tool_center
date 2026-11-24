@@ -4,29 +4,48 @@
       <h3 class="set-dlg__group-title">后台画面索引</h3>
       <div class="set-dlg__row">
         <span class="set-dlg__label">云端处理</span>
-        <div class="set-dlg__seg" role="group" aria-label="云端处理">
-          <button v-for="option in modes" :key="option.id" type="button" class="set-dlg__seg-btn"
-            :class="{ 'set-dlg__seg-btn--on': mode === option.id }" :aria-pressed="mode === option.id"
-            :disabled="busy" @click="choose(option.id)">{{ option.label }}</button>
+        <div class="set-dlg__ctl">
+          <div class="set-dlg__seg" role="group" aria-label="云端处理">
+            <button v-for="option in modes" :key="option.id" type="button" class="set-dlg__seg-btn"
+              :class="{ 'set-dlg__seg-btn--on': mode === option.id }" :aria-pressed="mode === option.id"
+              :disabled="busy" @click="choose(option.id)">{{ option.label }}</button>
+          </div>
         </div>
       </div>
       <div v-if="mode === 'limited'" class="set-dlg__row set-dlg__row--sep">
         <label for="ai-embed-limit" class="set-dlg__label">每日限量</label>
-        <input id="ai-embed-limit" class="set-dlg__credential policy-limit" type="number" min="1" max="10000" placeholder="张数"
-          aria-label="后台向量每日上限" :value="data.dailyLimit > 0 ? data.dailyLimit : ''" :disabled="busy" @change="limit" />
-        <span class="set-dlg__value">张</span>
+        <div class="set-dlg__ctl">
+          <input id="ai-embed-limit" class="set-dlg__credential policy-limit" type="number" min="1" max="10000" placeholder="张数"
+            aria-label="后台向量每日上限" :value="data.dailyLimit > 0 ? data.dailyLimit : ''" :disabled="busy" @change="limit" />
+          <span class="set-dlg__value">张</span>
+        </div>
       </div>
-      <div class="set-dlg__row set-dlg__row--sep"><span class="set-dlg__label">待建立索引</span><strong class="policy-number">{{ data.pendingImages.toLocaleString() }} 张</strong></div>
-      <div class="set-dlg__row set-dlg__row--sep"><span class="set-dlg__label">今日已请求</span><span class="set-dlg__value">{{ data.dailyUsed.toLocaleString() }} 张</span></div>
+      <div class="set-dlg__row set-dlg__row--sep">
+        <span class="set-dlg__label">待建立索引</span>
+        <div class="set-dlg__ctl"><strong class="policy-number">{{ data.pendingImages.toLocaleString() }} 张</strong></div>
+      </div>
+      <div class="set-dlg__row set-dlg__row--sep">
+        <span class="set-dlg__label">今日已请求</span>
+        <div class="set-dlg__ctl"><span class="set-dlg__value">{{ data.dailyUsed.toLocaleString() }} 张</span></div>
+      </div>
     </section>
     <section class="set-dlg__group" aria-label="缓存用量">
       <h3 class="set-dlg__group-title">缓存用量</h3>
-      <div class="set-dlg__row"><span class="set-dlg__label">本地缓存命中</span><strong class="policy-number">{{ data.localHits.toLocaleString() }} 次</strong></div>
-      <div class="set-dlg__row set-dlg__row--sep"><span class="set-dlg__label">云端前缀缓存命中</span><strong class="policy-number">{{ data.cloudCachedTokens.toLocaleString() }} token</strong></div>
+      <div class="set-dlg__row">
+        <span class="set-dlg__label">本地缓存命中</span>
+        <div class="set-dlg__ctl"><strong class="policy-number">{{ data.localHits.toLocaleString() }} 次</strong></div>
+      </div>
+      <div class="set-dlg__row set-dlg__row--sep">
+        <span class="set-dlg__label">云端前缀缓存命中</span>
+        <div class="set-dlg__ctl"><strong class="policy-number">{{ data.cloudCachedTokens.toLocaleString() }} token</strong></div>
+      </div>
     </section>
     <section class="set-dlg__group" aria-label="长期记忆">
       <h3 class="set-dlg__group-title">长期记忆</h3>
-      <div v-if="data.confirmedFolders" class="set-dlg__row"><span class="set-dlg__label">已确认的分类规则</span><button class="set-dlg__btn" :disabled="busy" @click="resetRules">下次重新规划</button></div>
+      <div v-if="data.confirmedFolders" class="set-dlg__row">
+        <span class="set-dlg__label">已确认的分类规则</span>
+        <div class="set-dlg__ctl"><button class="set-dlg__btn" :disabled="busy" @click="resetRules">下次重新规划</button></div>
+      </div>
       <div v-if="!data.preferences.length" class="set-dlg__row"><span class="set-dlg__value">暂无记忆</span></div>
       <div v-for="(p, i) in data.preferences" :key="p.id" class="set-dlg__row policy-pref" :class="{ 'set-dlg__row--sep': i || data.confirmedFolders }">
         <span class="policy-origin">{{ p.explicit ? '用户明说' : '诺诺推断' }}</span>

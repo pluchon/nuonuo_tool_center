@@ -93,6 +93,7 @@ export function validateSettingsPatch(patch: unknown): Partial<AppSettings> {
   }
   const result: Record<string, unknown> = {}
   for (const [key, raw] of Object.entries(patch)) {
+    if (key === 'categoryHome') throw new BizError('BAD_REQUEST', '类目录保存位置为只读')
     if (!Object.hasOwn(VALIDATORS, key)) {
       throw new BizError('BAD_REQUEST', `没有这项设置：${key}`)
     }

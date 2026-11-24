@@ -1,4 +1,4 @@
-// 其他 AI 回复的解析：找出 json 代码块（没有代码块时退而找第一个完整的 { … }），数一下有几条能用的内容
+// 优先读取外部 AI 回复中的 JSON 代码块，也接受正文里的 JSON 对象。
 
 // 解析出对象；找不到或不是对象返回 null
 export function parseAssistJson(text: string): Record<string, unknown> | null {
@@ -25,9 +25,8 @@ export function parseAssistJson(text: string): Record<string, unknown> | null {
   return start >= 0 && end > start ? tryParse(text.slice(start, end + 1)) : null
 }
 
-// 有几条：名字、角色、作品、出处各算一条，每个标签算一条（描述不算）
-export function countAssistFields(o: Record<string, unknown>): number {
-  const str = (v: unknown): boolean => typeof v === 'string' && v.trim() !== ''
-  const tags = Array.isArray(o.tags) ? o.tags.filter(str).length : 0
-  return [o.name, o.character, o.work, o.source].filter(str).length + tags
+// 空模板也按标准格式在本地处理；自定义字段的 JSON 仍可交给模型识别。
+export function isAssistRecord(o: Record<string, unknown>): boolean {
+  return Object.keys(o).length === 0 || Array.isArray(o.tags) ||
+    ['name', 'description', 'character', 'work', 'source'].some(key => typeof o[key] === 'string')
 }

@@ -132,10 +132,10 @@ describe('第十一阶段：设置', () => {
     await expect(app.evaluate(({ app: a }) => a.getLoginItemSettings().openAtLogin)).resolves.toBe(false)
     await row(page, '开机自动启动').locator('.set-dlg__switch').click()
 
-    // 图库：格式至少留一种；测试环境的类目录位置由环境变量定，不能改
+    // 图库：格式至少留一种；类目录显示实际位置，只能读取
     await openTab(page, '图库')
     await page.waitForFunction(() => !!document.querySelector('.set-dlg__path')?.textContent?.includes('library'))
-    await expect(row(page, '类目录保存的位置').locator('.set-dlg__btn').isDisabled()).resolves.toBe(true)
+    await expect(row(page, '类目录保存的位置').locator('.set-dlg__btn').count()).resolves.toBe(0)
     await page.click('.set-dlg__chip:text-is("RAW")')
     await expect(page.locator('.set-dlg__chip:text-is("RAW")').getAttribute('aria-pressed')).resolves.toBe('false')
     await page.click('.set-dlg__chip:text-is("RAW")')

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import type { ThemeMode } from '@shared/api'
 import { ACCENT_COLORS, APPEARANCE_MODES, DEFAULT_SETTINGS, type AppSettings } from '@shared/settings'
-import { fetchSettings, pickBackground, pickCategoryHome, saveSettings } from '@/api/settings'
+import { fetchSettings, pickBackground, saveSettings } from '@/api/settings'
 
 // 设置弹窗左侧的分类
 export type SettingsTab = 'look' | 'general' | 'library' | 'ai' | 'data' | 'keys' | 'about'
@@ -73,14 +73,6 @@ export const useSettingsStore = defineStore('settings', {
       if (next) {
         this.values = next
       }
-    },
-    // 换类目录的位置；返回是否换了
-    async pickCategoryHome(): Promise<boolean> {
-      const next = await pickCategoryHome()
-      if (next) {
-        this.values = next
-      }
-      return next !== null
     },
     openDialog(): void {
       this.dialogOpen = true

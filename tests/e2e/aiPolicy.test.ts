@@ -19,6 +19,9 @@ it('在 AI 设置调整每日上限、纠正和忘记推断偏好，重新打开
     return desktop
   }
   const first = await open()
+  const rightEdges = await first.page.locator('.set-dlg__group[aria-label="后台画面索引"] .set-dlg__ctl > :last-child').evaluateAll(
+    elements => elements.map(el => el.getBoundingClientRect().right))
+  expect(Math.max(...rightEdges) - Math.min(...rightEdges)).toBeLessThan(1)
   expect(await first.page.getByRole('button',{name:'暂停',exact:true}).getAttribute('aria-pressed')).toBe('true')
   await first.page.getByRole('button',{name:'每日限量',exact:true}).click()
   const limit = first.page.getByLabel('后台向量每日上限')

@@ -22,7 +22,7 @@ export async function launchWithMockBailian(dirs: CaseDirs, rejectedImages = 0) 
       const body = await request.json() as {
         input?: { contents?: Array<{ image?: string }> }
         tools?: unknown[]
-        messages?: Array<{ role: string; content?: string }>
+        messages?: Array<{ role: string; content?: string | Array<{ type: string; text?: string }> }>
       }
 
       if (url.pathname.endsWith('/responses')) {
@@ -61,7 +61,9 @@ export async function launchWithMockBailian(dirs: CaseDirs, rejectedImages = 0) 
               function: { name: 'search_images', arguments: JSON.stringify({ tags: ['风景'], orientation: 'landscape' }) }
             }]
           }
-        } else if (last?.content?.includes('"folders"')) {
+        } else if (Array.isArray(last?.content) && last.content.some(part => part.type === 'text' && part.text?.includes('用蓝调夜景做标签'))) {
+          message = { role, content: jsonBlock({ tags: ['蓝调夜景'] }) }
+        } else if (typeof last?.content === 'string' && last.content.includes('"folders"')) {
           message = { role, content: jsonBlock({ folders: [{ name: '表情包', tags: ['表情包'] }] }) }
         } else {
           message = { role, content: '找到了几张合适的图片。' }

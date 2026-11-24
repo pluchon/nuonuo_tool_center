@@ -15,7 +15,6 @@ export const IpcChannel = {
   settingsUpdate: 'settings:update',
   settingsGetAiCredentials: 'settings:getAiCredentials',
   settingsSaveAiCredentials: 'settings:saveAiCredentials',
-  settingsPickCategoryHome: 'settings:pickCategoryHome',
   settingsPickBackground: 'settings:pickBackground',
   systemDataInfo: 'system:dataInfo',
   systemOpenDataDir: 'system:openDataDir',
@@ -98,6 +97,7 @@ export const IpcChannel = {
   ratingProgress: 'rating:progress',
   organizeState: 'organize:state',
   organizeEstimate: 'organize:estimate',
+  organizeDismissEstimate: 'organize:dismissEstimate',
   organizeStart: 'organize:start',
   organizeApprove: 'organize:approve',
   organizeCancel: 'organize:cancel',
@@ -115,7 +115,6 @@ export interface DataInfoVO {
   version: string
   // 类目录现在的位置；由环境变量指定时不能在设置里改
   categoryHome: string
-  categoryHomeLocked: boolean
 }
 
 // 清理缩略图缓存的结果

@@ -31,7 +31,7 @@ export function handleLtmProtocol(thumbsDir: string, backgroundsDir: string, res
     if (url.host === 'thumb' && THUMB_NAME.test(name)) {
       const file = join(thumbsDir, name)
       const isFile = await stat(file).then((s) => s.isFile(), () => false)
-      return isFile ? net.fetch(pathToFileURL(file).toString()) : new Response('Not Found', { status: 404 })
+      if (isFile) return net.fetch(pathToFileURL(file).toString()).catch(() => new Response('Not Found', { status: 404 }))
     }
     // 自定义背景图：只认应用自己生成的文件名；整张读进内存再给（不留文件句柄，换图时旧图马上能删）
     if (url.host === 'bg' && CUSTOM_BACKGROUND_NAME.test(name)) {

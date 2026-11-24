@@ -4,9 +4,6 @@ import { mkdirSync } from 'node:fs'
 // 老版本的数据目录名：改过 productName 后 Electron 默认的 userData 会跟着变，这里固定住，老数据才不会“消失”
 export const LEGACY_DATA_DIR_NAME = 'LocalToolManage'
 
-// 类目录默认存放的图库文件夹
-export const DEFAULT_CATEGORY_HOME = 'D:\\诺诺图床'
-
 // 应用数据目录下的派生数据位置（数据库、缩略图、模型、日志），不放在用户图片目录里
 export interface DataPaths {
   root: string
@@ -31,11 +28,6 @@ export function resolveDataRoot(env: NodeJS.ProcessEnv, appDataDir: string): str
 export function resolveCategoryHomeOverride(env: NodeJS.ProcessEnv): string | null {
   const fromEnv = env.LTM_CATEGORY_HOME?.trim()
   return fromEnv ? resolve(fromEnv) : null
-}
-
-// 生效的类目录位置：环境变量 > 设置 > 默认值
-export function effectiveCategoryHome(override: string | null, fromSetting: string | null): string {
-  return override ?? fromSetting ?? DEFAULT_CATEGORY_HOME
 }
 
 // 由数据目录推出各子目录，并确保存在（pgdata 交给 PGlite 自己建）

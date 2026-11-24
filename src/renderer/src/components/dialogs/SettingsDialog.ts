@@ -25,7 +25,7 @@ export type SettingRow =
   | { type: 'bgs'; label: string }
   | { type: 'range'; label: string; key: RangeKey; min: number; max: number; unit: string }
   | { type: 'chips'; label: string }
-  | { type: 'path'; label: string; path: string; btn: string; run: () => void; disabled?: boolean }
+  | { type: 'path'; label: string; path: string; btn?: string; run?: () => void }
   | { type: 'credential'; label: string; key: AiCredentialKey }
   | { type: 'value'; label: string; value: string; btn?: string; run?: () => void }
   | { type: 'update'; label: string }
@@ -240,17 +240,6 @@ export default defineComponent({
       }
     }
 
-    const changeHome = async (): Promise<void> => {
-      try {
-        if (await settings.pickCategoryHome()) {
-          await Promise.all([loadInfo(), library.load()])
-          toast.show('已更换类目录的位置')
-        }
-      } catch (err) {
-        fail(err)
-      }
-    }
-
     const onOpenData = (): void => {
       openDataDir().catch(fail)
     }
@@ -364,10 +353,7 @@ export default defineComponent({
                 {
                   type: 'path',
                   label: '类目录保存的位置',
-                  path: info.value?.categoryHome ?? '',
-                  btn: '更改…',
-                  run: () => void changeHome(),
-                  disabled: !info.value || info.value.categoryHomeLocked
+                  path: info.value?.categoryHome ?? ''
                 }
               ]
             }

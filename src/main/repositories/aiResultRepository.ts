@@ -2,6 +2,8 @@ import { and, asc, desc, eq, gte, inArray, isNull, notInArray, or, sql, type SQL
 import { getDatabase, type AppDatabase } from '../db/client'
 import { col } from '../db/sqlUtil'
 import { aiJob, image, imageAiResult, imageTag } from '../db/schema'
+import { setImmediate as yieldToIpc } from 'node:timers/promises'
+import { ratingCandidate } from './imageRepository'
 import { writeSettings } from './appSettingRepository'
 
 export type AiResultEntity = typeof imageAiResult.$inferSelect
@@ -67,11 +69,20 @@ export async function archiveReviewedLookFailures(): Promise<void> {
   ))
 }
 
-// 存一条 AI 建议
-export async function insertAiResult(row: typeof imageAiResult.$inferInsert): Promise<AiResultEntity> {
-  const { db } = getDatabase()
-  const [saved] = await db.insert(imageAiResult).values(row).returning()
-  return saved
+// 外部结果与看图队列都只补充空白描述，保留已经确认的内容。
+async function fillDescription(tx: Pick<AppDatabase, 'update'>, id: number, description: string): Promise<boolean> {
+  if (!description) return false
+  const changed = await tx.update(image).set({ description }).where(and(eq(image.id, id), isNull(image.description))).returning({ id: image.id })
+  return changed.length > 0
+}
+
+export async function saveExternalResult(row: typeof imageAiResult.$inferInsert, description: string): Promise<boolean> {
+  return getDatabase().db.transaction(async tx => {
+    const filled = await fillDescription(tx, row.imageId, description)
+    if (!filled && !Object.keys(row.fieldStatus ?? {}).length) return false
+    await tx.insert(imageAiResult).values(row)
+    return true
+  })
 }
 
 // 一张图的全部建议（先来的在前）
@@ -97,9 +108,7 @@ export async function completeLookJob(id: number, row: typeof imageAiResult.$inf
       .where(and(eq(aiJob.id, id), eq(aiJob.kind, 'LOOK'), eq(aiJob.status, 'RUNNING'))).returning({ id: aiJob.id })
     if (changed.length === 0) return false
     await tx.insert(imageAiResult).values(row)
-    if (description) {
-      await tx.update(image).set({ description }).where(and(eq(image.id, row.imageId), isNull(image.description)))
-    }
+    await fillDescription(tx, row.imageId, description)
     return true
   })
 }
@@ -144,6 +153,30 @@ export async function countLookCandidates(since: Date, again = false): Promise<n
   const { db } = getDatabase()
   const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(image).where(lookCandidateWhere(since, again))
   return Number(row?.n ?? 0)
+}
+
+// 按主键分段计数，让窗口在两段查询之间取消估算；每次查询最多检查一批图片。
+export async function countOrganizeEstimate(signal?: AbortSignal): Promise<{ toLook: number; ratingLeft: number }> {
+  const { db } = getDatabase()
+  const batchSize = 256
+  const look = lookCandidateWhere(new Date(0), true)
+  let cursor = 0
+  let toLook = 0
+  let ratingLeft = 0
+  for (;;) {
+    signal?.throwIfAborted()
+    const { rows: [row] } = await db.execute<{
+      last_id: number; size: number; look: number; rating: number
+    }>(sql`select max(id) as last_id, count(*)::int as size,
+        count(*) filter (where ${look})::int as look,
+        count(*) filter (where ${ratingCandidate})::int as rating
+      from (select * from ${image} where id > ${cursor} order by id limit ${batchSize}) as image`)
+    toLook += row.look
+    ratingLeft += row.rating
+    if (row.size < batchSize) return { toLook, ratingLeft }
+    cursor = Number(row.last_id)
+    await yieldToIpc()
+  }
 }
 
 // 整理状态、起始时间和看图任务同时落盘。退出后可以恢复同一轮整理。

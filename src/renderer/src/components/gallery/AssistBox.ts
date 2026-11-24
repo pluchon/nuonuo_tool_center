@@ -1,21 +1,17 @@
-import { computed, defineComponent, onBeforeUnmount, ref, watch } from 'vue'
+import { defineComponent, onBeforeUnmount, ref, watch } from 'vue'
 import { fetchAssistPrompt, importAssist } from '@/api/look'
 import { useGalleryStore } from '@/stores/gallery'
 import { useLibraryStore } from '@/stores/library'
-import { useLookStore } from '@/stores/look'
 import { useToastStore } from '@/stores/toast'
 import { ICON } from '@/theme/icons'
-import { countAssistFields, parseAssistJson } from '@shared/assistJson'
 
-// 详情面板 R-18 下面的“其他 AI 辅助整理”（照原型 assist）：整个过程不调云端，R-18 图也能用
+// 外部回复只在用户提交后整理，使用本次提交的图片编号。
 export default defineComponent({
   name: 'AssistBox',
   props: {
-    imageId: { type: Number, required: true },
-    r18: { type: Boolean, default: false }
+    imageId: { type: Number, required: true }
   },
   setup(props) {
-    const look = useLookStore()
     const gallery = useGalleryStore()
     const library = useLibraryStore()
     const toast = useToastStore()
@@ -32,10 +28,6 @@ export default defineComponent({
         copied.value = false
       }
     )
-
-    const parsed = computed(() => parseAssistJson(text.value))
-    const count = computed(() => (parsed.value ? countAssistFields(parsed.value) : 0))
-    const bad = computed(() => text.value.trim() !== '' && count.value === 0)
 
     // 复制整理好的完整提示词
     const copyPrompt = async (): Promise<void> => {
@@ -59,14 +51,16 @@ export default defineComponent({
 
     // 交给诺诺整理：本地对齐叫法、去重、归类，进“AI 建议”
     const handOff = async (): Promise<void> => {
-      if (!parsed.value) {
+      const input = text.value.trim()
+      const imageId = props.imageId
+      if (!input || busy.value) {
         return
       }
       busy.value = true
       try {
-        const n = await importAssist(props.imageId, parsed.value)
-        text.value = ''
-        toast.show(`诺诺整理好了 ${n} 条，放进了「AI 建议」`)
+        const n = await importAssist(imageId, input)
+        if (props.imageId === imageId && text.value.trim() === input) text.value = ''
+        toast.show(n ? `诺诺整理好了 ${n} 条，放进了「AI 建议」` : '已保存图片描述')
         await Promise.all([library.load(), gallery.load()])
       } catch (err) {
         toast.show(err instanceof Error ? err.message : String(err), 'error')
@@ -76,12 +70,9 @@ export default defineComponent({
     }
 
     return {
-      look,
       text,
       copied,
       busy,
-      count,
-      bad,
       copyPrompt,
       handOff,
       starPath: ICON.spark,

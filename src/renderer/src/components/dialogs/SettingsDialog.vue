@@ -106,30 +106,18 @@
                   </template>
 
                   <template v-else-if="r.type === 'bgs'">
-                    <button
-                      v-for="t in bgTiles"
-                      :key="t.key"
-                      class="set-dlg__bg"
-                      :class="{ 'set-dlg__bg--on': t.on }"
-                      type="button"
-                      :aria-pressed="t.on"
-                      :aria-label="t.empty ? '选一张背景图' : t.label"
-                      @click="pickBg(t.key)"
-                    >
-                      <span class="set-dlg__bg-pic" :class="{ 'set-dlg__bg-pic--empty': t.empty }" :style="{ background: t.bg }">
-                        <svg v-if="t.empty" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-                        <span
-                          v-else-if="t.key === 'custom'"
-                          class="set-dlg__bg-swap"
-                          role="button"
-                          aria-label="更换图片"
-                          @click.stop="replaceBg()"
-                        >
-                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3M20 4v5h-5M20 12a8 8 0 0 1-14 5.3M4 20v-5h5" /></svg>
+                    <div v-for="t in bgTiles" :key="t.key" class="set-dlg__bg-option">
+                      <button class="set-dlg__bg" :class="{ 'set-dlg__bg--on': t.on }" type="button"
+                        :aria-pressed="t.on" :aria-label="t.empty ? '选一张背景图' : t.label" @click="pickBg(t.key)">
+                        <span class="set-dlg__bg-pic" :class="{ 'set-dlg__bg-pic--empty': t.empty }" :style="{ background: t.bg }">
+                          <svg v-if="t.empty" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
                         </span>
-                      </span>
-                      <span class="set-dlg__bg-label">{{ t.label }}</span>
-                    </button>
+                        <span class="set-dlg__bg-label">{{ t.label }}</span>
+                      </button>
+                      <button v-if="t.key === 'custom' && !t.empty" type="button" class="set-dlg__bg-swap" aria-label="更换图片" @click="replaceBg()">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3M20 4v5h-5M20 12a8 8 0 0 1-14 5.3M4 20v-5h5" /></svg>
+                      </button>
+                    </div>
                   </template>
 
                   <template v-else-if="r.type === 'range'">
@@ -163,7 +151,7 @@
 
                   <template v-else-if="r.type === 'path'">
                     <span class="set-dlg__path">{{ r.path || '…' }}</span>
-                    <button class="set-dlg__btn" type="button" :disabled="r.disabled" @click="r.run()">{{ r.btn }}</button>
+                    <button v-if="r.btn" class="set-dlg__btn" type="button" @click="r.run?.()">{{ r.btn }}</button>
                   </template>
 
                   <template v-else-if="r.type === 'value'">

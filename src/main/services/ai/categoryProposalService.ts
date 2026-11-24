@@ -173,7 +173,7 @@ export async function prepareCategoryRequest(text: string, selectedCategory?: st
 }
 
 async function makeDirectory(home: string, path: string): Promise<void> {
-  if (!await categoryDirectory(home, '')) await mkdir(home, { recursive: true })
+  await ensureCategoryRoot(home, true)
   let rel = ''
   for (const name of categoryRel(path).split('\\')) {
     rel = join(rel, name)
@@ -253,7 +253,6 @@ export async function decideCategoryProposal(id: number, messageId: number, appl
           await observeOrganizeTarget(entry.path)
         }
       }
-      if (payload.entries.some((entry) => entry.kind === 'create')) await ensureCategoryRoot(row.home)
       invalidateCategoryTree()
     }
     const [updated] = await getDatabase().db.update(categoryProposal).set({ status: apply ? 'applied' : 'cancelled' }).where(eq(categoryProposal.id, id)).returning()

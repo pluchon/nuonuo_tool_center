@@ -8,6 +8,7 @@ export type AppDatabase = PgliteDatabase<typeof schema>
 
 // 数据库句柄：PGlite 只有一条连接，由主进程独占
 export interface DatabaseHandle {
+  directory: string
   pg: PGlite
   db: AppDatabase
 }
@@ -24,7 +25,7 @@ export async function openDatabase(dataDir: string, migrationsFolder: string): P
     await pg.exec('CREATE EXTENSION IF NOT EXISTS vector;')
     const db = drizzle({ client: pg, schema })
     await migrate(db, { migrationsFolder })
-    handle = { pg, db }
+    handle = { directory: dataDir, pg, db }
     return handle
   } catch (err) {
     await pg.close().catch(() => undefined)

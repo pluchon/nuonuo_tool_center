@@ -14,16 +14,11 @@ import {
 const MIGRATIONS = resolve('drizzle')
 
 describe('设置校验', () => {
-  it('合法的修改原样通过，路径会规范化', () => {
-    expect(validateSettingsPatch({ appearance: 'dark', backgroundDim: 80, categoryHome: 'E:\\图库\\' })).toEqual({
-      appearance: 'dark',
-      backgroundDim: 80,
-      categoryHome: resolve('E:\\图库\\')
-    })
-  })
-
-  it('空白路径当作用默认位置', () => {
-    expect(validateSettingsPatch({ categoryHome: '  ' })).toEqual({ categoryHome: null })
+  it('类目录位置只读取旧设置，普通设置更新不能修改或清空路径', () => {
+    expect(validateSettingsPatch({ appearance: 'dark', backgroundDim: 80 })).toEqual({ appearance: 'dark', backgroundDim: 80 })
+    const path = resolve('旧图库')
+    expect(mergeStoredSettings([{ key: 'categoryHome', value: path }]).categoryHome).toBe(path)
+    for (const value of [path, '', null]) expect(() => validateSettingsPatch({ categoryHome: value })).toThrow('只读')
   })
 
   it.each([

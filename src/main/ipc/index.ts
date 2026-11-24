@@ -5,6 +5,7 @@ import {
   IpcEvent,
   organizeUsesLookQueue,
   type AddTagDTO,
+  type DbBootState,
   type AiAskDTO,
   type AiPredictionDTO,
   type CreateTagDTO,
@@ -16,7 +17,7 @@ import {
 import type { DataPaths } from '../config/paths'
 import { BizError } from '../common/bizError'
 import { bootDatabase, getDbBootState, type DatabaseLocation } from '../services/databaseService'
-import { deleteImages, recoverFileOps, undoDelete } from '../services/fileOps/fileOpsService'
+import { deleteImages, undoDelete } from '../services/fileOps/fileOpsService'
 import { copyImages, moveImages, undoTransfer } from '../services/fileOps/transferService'
 import { createFolder, deleteCategoryFolder, removeSource, renameCategoryFolder } from '../services/fileOps/folderOpsService'
 import { getCategoryProposal, decideCategoryProposal } from '../services/ai/categoryProposalService'
@@ -44,7 +45,7 @@ import {
 import { getScanState, startScan, stopScan } from '../services/scan/scanService'
 import { getSettings, updateSettings } from '../services/settingsService'
 import { getAiCredentialStatus, saveAiCredentialSettings } from '../services/aiCredentialSettings'
-import { categoryHomeOf, changeCategoryHome } from '../services/categoryHome'
+import { categoryHomeOf } from '../services/categoryHome'
 import { backupFileName, cleanThumbCache, exportBackup, folderBytes, importCustomBackground } from '../services/systemService'
 import { applySystemSettings } from '../window/systemSettings'
 import { syncWatching } from '../services/scan/watchService'
@@ -100,15 +101,17 @@ function refreshImageIndex<T>(result: T): T {
 }
 
 // 注册全部 IPC 处理器：只做参数绑定与调用服务
-export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation): void {
+export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation, onDatabaseReady: () => Promise<void>): void {
+  let retry: Promise<DbBootState> | null = null
   handle(IpcChannel.systemGetBootState, async () => getDbBootState())
   handle(IpcChannel.systemRetryDatabase, async () => {
-    const state = await bootDatabase(location)
-    // 重试打开成功：先把上次没做完的文件操作补做完
-    if (state === 'READY') {
-      await recoverFileOps()
-    }
-    return state
+    if (retry) return retry
+    if (getDbBootState() === 'READY') return 'READY'
+    retry = bootDatabase(location).then(async state => {
+      if (state === 'READY') await onDatabaseReady()
+      return state
+    }).finally(() => { retry = null })
+    return retry
   })
 
   handle(IpcChannel.settingsGet, async () => {
@@ -119,24 +122,13 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
     requireDatabase()
     const next = await updateSettings(patch)
     applySystemSettings(next, patch as Record<string, unknown>)
-    if (Object.hasOwn(patch as object, 'watchChanges') || Object.hasOwn(patch as object, 'categoryHome')) {
+    if (Object.hasOwn(patch as object, 'watchChanges')) {
       await syncWatching()
     }
     return next
   })
   handle(IpcChannel.settingsGetAiCredentials, async () => getAiCredentialStatus())
   handle(IpcChannel.settingsSaveAiCredentials, async (_event, patch: unknown) => saveAiCredentialSettings(patch))
-  // 更改类目录保存的位置：系统的选文件夹对话框，取消返回 null
-  handle(IpcChannel.settingsPickCategoryHome, async (event) => {
-    requireDatabase()
-    const picked = await dialog.showOpenDialog(senderWindow(event), { title: '类目录保存的位置', properties: ['openDirectory', 'createDirectory'] })
-    if (picked.canceled || picked.filePaths.length === 0) {
-      return null
-    }
-    await changeCategoryHome(picked.filePaths[0], paths.categoryHomeOverride, paths.root)
-    await syncWatching()
-    return getSettings()
-  })
   // 自定义背景：选一张图，缩好存进数据目录再换上；取消返回 null
   handle(IpcChannel.settingsPickBackground, async (event) => {
     requireDatabase()
@@ -157,8 +149,7 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
       dataDir: paths.root,
       cacheBytes: await folderBytes(paths.thumbs),
       version: app.getVersion(),
-      categoryHome: await categoryHomeOf(paths.categoryHomeOverride),
-      categoryHomeLocked: paths.categoryHomeOverride !== null
+      categoryHome: await categoryHomeOf(paths.categoryHomeOverride)
     }
   })
   // Windows 自己的选文件夹对话框（导入源目录、重新选择位置、复制 / 移动到其他位置）；取消返回 null
@@ -497,9 +488,24 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
     requireDatabase()
     return getOrganizeState()
   })
-  handle(IpcChannel.organizeEstimate, async () => {
+  const estimates = new Map<number, AbortController>()
+  handle(IpcChannel.organizeEstimate, async ({ sender }) => {
     requireDatabase()
-    return estimateOrganize()
+    const id = sender.id
+    estimates.get(id)?.abort()
+    const controller = new AbortController()
+    estimates.set(id, controller)
+    const stop = () => controller.abort(new BizError('CONFLICT', '已关闭整理估算'))
+    sender.once('destroyed', stop)
+    try {
+      return await estimateOrganize(controller.signal)
+    } finally {
+      sender.removeListener('destroyed', stop)
+      if (estimates.get(id) === controller) estimates.delete(id)
+    }
+  })
+  handle(IpcChannel.organizeDismissEstimate, async ({ sender }) => {
+    estimates.get(sender.id)?.abort(new BizError('CONFLICT', '已关闭整理估算'))
   })
   handle(IpcChannel.organizeStart, async () => {
     requireDatabase()
@@ -519,7 +525,7 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   })
   handle(IpcChannel.assistImport, async (_event, imageId: number, raw: unknown) => {
     requireDatabase()
-    return importAssist(imageId, raw)
+    return importAssist(imageId, raw, paths.thumbs)
   })
 
   handle(IpcChannel.windowSetTheme, async (event, theme: ThemeMode) => {

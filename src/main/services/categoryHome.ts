@@ -1,76 +1,41 @@
-import { stat } from 'node:fs/promises'
-import { isAbsolute, resolve } from 'node:path'
+import { mkdir, stat } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { BizError } from '../common/bizError'
 import { isWithin } from '../common/pathUtil'
-import { countImagesByRoot } from '../repositories/libraryOverviewRepository'
-import { effectiveCategoryHome } from '../config/paths'
-import { getLogger } from '../common/logger'
-import { findActiveRootsByKind, insertRoot, updateRootPath, type LibraryRootEntity } from '../repositories/libraryRootRepository'
-import { getSettings, updateSettings } from './settingsService'
+import { getDatabase } from '../db/client'
+import { findActiveRootsByKind, registerCategoryRoot, type LibraryRootEntity } from '../repositories/libraryRootRepository'
+import { getSettings } from './settingsService'
 
-const log = getLogger('library')
-
-// 当前生效的类目录位置：环境变量 > 设置 > 默认值
-export async function categoryHomeOf(override: string | null): Promise<string> {
-  const { categoryHome } = await getSettings()
-  return effectiveCategoryHome(override, categoryHome)
+// 登记前优先沿用旧版保存的位置；全新图库与数据库同属一个应用数据目录。
+function initialHome(saved: string | null, override: string | null): string {
+  return saved ?? override ?? join(dirname(getDatabase().directory), '类目录')
 }
 
-// 确保类目录所在的图库文件夹登记为一条 CATEGORY 目录：文件夹还不存在就不登记；位置变了就跟着改
-export async function ensureCategoryRoot(override: string | null): Promise<LibraryRootEntity | null> {
-  const home = await categoryHomeOf(override)
-  const [existing] = await findActiveRootsByKind('CATEGORY')
-  const exists = await stat(home)
-    .then((s) => s.isDirectory())
-    .catch(() => false)
-  if (existing) {
-    if (existing.path.toLowerCase() !== home.toLowerCase() && exists) {
-      log.warn(`类目录位置从 ${existing.path} 改到了 ${home}`)
-      return updateRootPath(existing.id, home)
+export async function categoryHomeOf(override: string | null): Promise<string> {
+  const [root] = await findActiveRootsByKind('CATEGORY')
+  return root?.path ?? initialHome((await getSettings()).categoryHome, override)
+}
+
+// 仅首次建立图库时创建根目录。已登记的路径离线时保留记录，写入须等原目录恢复。
+export async function ensureCategoryRoot(override: string | null, create = false): Promise<LibraryRootEntity | null> {
+  const [root] = await findActiveRootsByKind('CATEGORY')
+  if (root && !create) return root
+  const saved = root ? null : (await getSettings()).categoryHome
+  const home = root?.path ?? initialHome(saved, override)
+  if (!root) {
+    const sources = await findActiveRootsByKind('SOURCE')
+    if (sources.some(source => isWithin(source.path, home) || isWithin(home, source.path))) {
+      throw new BizError('CONFLICT', '类目录位置与已导入的源目录重叠')
     }
-    return existing
+    if (create && !saved) await mkdir(home, { recursive: true })
   }
-  if (!exists) {
+  const online = await stat(home).then(s => s.isDirectory(), (error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false
+    throw error
+  })
+  if (!online) {
+    if (create) throw new BizError('NOT_FOUND', `类目录暂时不可用：${home}`)
     return null
   }
-  return insertRoot({ kind: 'CATEGORY', name: '类目录', path: home })
-}
-
-// 更换类目录保存的位置：只换到一个空的新位置，原来的类目录里还有图时不换（图不会跟着搬，换了会全部变成“文件不见了”）
-export async function changeCategoryHome(raw: string, override: string | null, dataDir: string): Promise<string> {
-  if (override) {
-    throw new BizError('BAD_REQUEST', '现在的类目录位置由环境变量指定，不能在这里改')
-  }
-  if (!isAbsolute(raw)) {
-    throw new BizError('BAD_REQUEST', '位置不对')
-  }
-  const target = resolve(raw)
-  const isDir = await stat(target).then(
-    (s) => s.isDirectory(),
-    () => false
-  )
-  if (!isDir) {
-    throw new BizError('NOT_FOUND', `文件夹找不到：${target}`)
-  }
-  const current = await categoryHomeOf(override)
-  if (current.toLowerCase() === target.toLowerCase()) {
-    return target
-  }
-  if (isWithin(dataDir, target) || isWithin(target, dataDir)) {
-    throw new BizError('BAD_REQUEST', '不能放在应用的数据文件夹里')
-  }
-  for (const src of await findActiveRootsByKind('SOURCE')) {
-    if (isWithin(src.path, target) || isWithin(target, src.path)) {
-      throw new BizError('BAD_REQUEST', `和源目录「${src.name}」重叠了，换一个位置`)
-    }
-  }
-  const [existing] = await findActiveRootsByKind('CATEGORY')
-  const left = existing ? ((await countImagesByRoot()).get(existing.id) ?? 0) : 0
-  if (left > 0) {
-    throw new BizError('BAD_REQUEST', `类目录里还有 ${left} 张图，先把它们移走再换位置`)
-  }
-  await updateSettings({ categoryHome: target })
-  await ensureCategoryRoot(override)
-  log.info(`类目录位置改为 ${target}`)
-  return target
+  return root ?? await registerCategoryRoot(home)
 }

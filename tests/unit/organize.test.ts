@@ -27,7 +27,6 @@ const { listGallery } = await import('../../src/main/services/galleryService')
 const { configureFolderOps } = await import('../../src/main/services/fileOps/folderOpsService')
 const { configureTransfer } = await import('../../src/main/services/fileOps/transferService')
 const { configureFileOps } = await import('../../src/main/services/fileOps/fileOpsService')
-const { updateSettings } = await import('../../src/main/services/settingsService')
 const { insertOrganizeResults } = await import('../../src/main/repositories/aiResultRepository')
 const { upsertSettings } = await import('../../src/main/repositories/appSettingRepository')
 
@@ -93,7 +92,6 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     writeFileSync(join(library, '风景', 'e.jpg'), 'e.jpg')
     process.env.DASHSCOPE_API_KEY = 'test-key-not-real'
     await openDatabase(join(dir, 'pgdata'), resolve('drizzle'))
-    await updateSettings({ categoryHome: library })
     configureFolderOps(library)
     configureTransfer(library)
     configureFileOps({ trash: async (p) => renameSync(p, join(dir, `bin-${Date.now()}`)), onDone: () => undefined })
@@ -137,6 +135,22 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     expect(after).toMatchObject({ toLook: 1, ratingLeft: 1 })
     expect(after.tokens).toBeGreaterThan(before.tokens)
     await pg.exec(`UPDATE image SET rating = 'EXPLICIT', rating_source = 'MODEL', is_r18 = true WHERE content_hash = 'h6'`)
+  })
+
+  it('关闭估算后停止读取下一批图片', async () => {
+    const { pg, db } = getDatabase()
+    const controller = new AbortController()
+    await pg.exec("insert into image (content_hash, format, byte_size) select 'cancel-estimate-' || i, 'JPG', 1 from generate_series(1, 600) i")
+    const execute = vi.spyOn(db, 'execute')
+    try {
+      const estimate = org.estimateOrganize(controller.signal)
+      setImmediate(() => controller.abort())
+      await expect(estimate).rejects.toMatchObject({ name: 'AbortError' })
+      expect(execute).toHaveBeenCalledTimes(1)
+    } finally {
+      execute.mockRestore()
+      await pg.exec("delete from image where content_hash like 'cancel-estimate-%'")
+    }
   })
 
   it('看图排队后出方案：只把非 R-18、不在类目录里的图的词交给模型', async () => {

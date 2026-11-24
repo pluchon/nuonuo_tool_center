@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { open, type FileHandle } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -7,8 +7,8 @@ import { PGlite } from '@electric-sql/pglite'
 import { vector } from '@electric-sql/pglite-pgvector'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
-import { changeCategoryHome } from '../../src/main/services/categoryHome'
-import { getSettings, updateSettings } from '../../src/main/services/settingsService'
+import { categoryHomeOf, ensureCategoryRoot } from '../../src/main/services/categoryHome'
+import { getSettings } from '../../src/main/services/settingsService'
 import * as settingsService from '../../src/main/services/settingsService'
 import { bmp24 } from '../support/bmp'
 import {
@@ -37,7 +37,8 @@ beforeAll(async () => {
     mkdirSync(d, { recursive: true })
   }
   await openDatabase(join(dir, 'pgdata'), resolve('drizzle'))
-  await updateSettings({ categoryHome: library })
+  expect(await categoryHomeOf(null)).toBe(join(dir, '类目录'))
+  expect(existsSync(join(dir, '类目录'))).toBe(false)
   const { pg } = getDatabase()
   await pg.query(`INSERT INTO library_root (kind, name, path) VALUES ('SOURCE', 'pics', $1), ('CATEGORY', '类目录', $2)`, [source, library])
   await pg.exec(`
@@ -62,22 +63,32 @@ describe('设置里和系统打交道的几项', () => {
     expect(readdirSync(thumbs).sort()).toEqual([`${'a'.repeat(64)}.webp`, 'note.txt'])
   })
 
-  it('换类目录位置：类目录里还有图时不换；不能和源目录、数据文件夹重叠；有环境变量时不能改', async () => {
-    const empty = join(dir, 'new-home')
-    mkdirSync(empty)
-    await expect(changeCategoryHome(empty, null, data)).rejects.toThrow('类目录里还有 1 张图')
-    await expect(changeCategoryHome(join(source), null, data)).rejects.toThrow('和源目录「pics」重叠')
-    mkdirSync(join(data, 'inside'))
-    await expect(changeCategoryHome(join(data, 'inside'), null, data)).rejects.toThrow('数据文件夹')
-    await expect(changeCategoryHome(empty, 'D:\\x', data)).rejects.toThrow('环境变量')
-    await expect(changeCategoryHome(join(dir, 'nope'), null, data)).rejects.toThrow('找不到')
-
-    // 类目录空了就能换，库里的类目录跟着指过去
-    await getDatabase().pg.exec(`UPDATE image_file SET delete_state = 1 WHERE root_id = 2`)
-    expect(await changeCategoryHome(empty, null, data)).toBe(empty)
-    expect((await getSettings()).categoryHome).toBe(empty)
-    const { rows } = await getDatabase().pg.query<{ path: string }>(`SELECT path FROM library_root WHERE kind = 'CATEGORY' AND delete_state = 0`)
-    expect(rows.map((r) => r.path)).toEqual([empty])
+  it('已登记的旧图库优先于新位置，文件占用或目录离线时保留原路径', async () => {
+    const alternative = join(dir, 'new-home')
+    mkdirSync(alternative)
+    mkdirSync(join(library, '一级', '二级'), { recursive: true })
+    const file = join(library, '一级', '二级', '图.jpg')
+    const held = await open(file, 'wx')
+    try {
+      await held.writeFile('original')
+      const root = await ensureCategoryRoot(alternative, true)
+      expect(root?.path).toBe(library)
+      expect(await categoryHomeOf(alternative)).toBe(library)
+      expect(readFileSync(file, 'utf8')).toBe('original')
+      expect(readdirSync(alternative)).toEqual([])
+    } finally {
+      await held.close()
+    }
+    const offline = library + '-offline'
+    renameSync(library, offline)
+    try {
+      expect((await ensureCategoryRoot(alternative))?.path).toBe(library)
+      await expect(ensureCategoryRoot(alternative, true)).rejects.toThrow('暂时不可用')
+      expect(existsSync(library)).toBe(false)
+    } finally {
+      renameSync(offline, library)
+    }
+    expect((await ensureCategoryRoot(alternative, true))?.id).toBe(2)
   })
 
   it('自定义背景：缩到 2560 存成 webp，旧的删掉', async () => {

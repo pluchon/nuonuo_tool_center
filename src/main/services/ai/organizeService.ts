@@ -16,7 +16,7 @@ import { getLogger } from '../../common/logger'
 import { isValidDirName } from '../../common/pathUtil'
 import { findActiveSettings, readSetting, upsertSettings } from '../../repositories/appSettingRepository'
 import {
-  countLookCandidates,
+  countOrganizeEstimate,
   countLookProgress,
   enqueueNewLookJobs,
   findOpenLookJobs,
@@ -121,9 +121,8 @@ export async function resumeOrganize(): Promise<void> {
 }
 
 // 开始前的估算：要看多少张、大概多少 token 和钱；ratingLeft 是本地分级还剩几张（大于 0 时界面不让开始）
-export async function estimateOrganize(): Promise<OrganizeEstimateVO> {
-  const toLook = await countLookCandidates(new Date(0), true)
-  const ratingLeft = await countRatingCandidates()
+export async function estimateOrganize(signal?: AbortSignal): Promise<OrganizeEstimateVO> {
+  const { toLook, ratingLeft } = await countOrganizeEstimate(signal)
   const realtime = Math.min(toLook, ORGANIZE_COST.realtimeMax)
   const yuan = realtime * ORGANIZE_COST.realtimeYuanPerImage + (toLook - realtime + ratingLeft) * ORGANIZE_COST.batchYuanPerImage
   return { toLook, tokens: (toLook + ratingLeft) * ORGANIZE_COST.tokensPerImage, yuan: Math.round(yuan * 100) / 100, ratingLeft }

@@ -68,7 +68,6 @@ const api = {
     getAiCredentials: (): Promise<ApiResponse<AiCredentialStatus>> => ipcRenderer.invoke(IpcChannel.settingsGetAiCredentials),
     saveAiCredentials: (patch: AiCredentialPatch): Promise<ApiResponse<AiCredentialStatus>> =>
       ipcRenderer.invoke(IpcChannel.settingsSaveAiCredentials, patch),
-    pickCategoryHome: (): Promise<ApiResponse<AppSettings | null>> => ipcRenderer.invoke(IpcChannel.settingsPickCategoryHome),
     pickBackground: (): Promise<ApiResponse<AppSettings | null>> => ipcRenderer.invoke(IpcChannel.settingsPickBackground)
   },
   library: {
@@ -178,6 +177,7 @@ const api = {
   },
   organize: {
     state: (): Promise<ApiResponse<OrganizeStateVO>> => ipcRenderer.invoke(IpcChannel.organizeState),
+    dismissEstimate: (): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.organizeDismissEstimate),
     estimate: (): Promise<ApiResponse<OrganizeEstimateVO>> => ipcRenderer.invoke(IpcChannel.organizeEstimate),
     start: (): Promise<ApiResponse<OrganizeStateVO>> => ipcRenderer.invoke(IpcChannel.organizeStart),
     approve: (plan: OrganizeFolderVO[]): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.organizeApprove, plan),

@@ -104,8 +104,7 @@ export async function createFolder(parent: FolderRefDTO, rawName: unknown): Prom
   return enqueue(async () => {
     if (folder.kind === 'category' && !folder.rel) {
       // 图库文件夹还不存在时先建出来，并登记成类目录根
-      await mkdir(folder.abs, { recursive: true })
-      await ensureCategoryRoot(categoryHomeOverride)
+      await ensureCategoryRoot(categoryHomeOverride, true)
     }
     const ok = await stat(folder.abs)
       .then((s) => s.isDirectory())
@@ -164,9 +163,8 @@ export async function ensureSuggestionTarget(rawName: string, mustExist = false)
     }
     if (mustExist) throw new BizError('NOT_FOUND', '建议中的类目录已不存在')
     const name = checkName(path)
-    if (!await categoryDirectory(home, '')) await mkdir(home, { recursive: true })
+    await ensureCategoryRoot(categoryHomeOverride, true)
     await mkdir(join(home, name))
-    await ensureCategoryRoot(categoryHomeOverride)
     await observeOrganizeTarget(name)
     invalidateCategoryTree()
     return join(home, name)

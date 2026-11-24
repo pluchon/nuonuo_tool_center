@@ -32,7 +32,7 @@ export async function findActiveRootById(id: number): Promise<LibraryRootEntity 
   return row
 }
 
-// 改目录位置（源目录“重新选择”、类目录位置变了）
+// 重新选择源目录的位置
 export async function updateRootPath(id: number, path: string): Promise<LibraryRootEntity> {
   const { db } = getDatabase()
   const [row] = await db.update(libraryRoot).set({ path }).where(eq(libraryRoot.id, id)).returning()
@@ -59,4 +59,14 @@ export async function insertRoot(root: NewLibraryRoot): Promise<LibraryRootEntit
   const { db } = getDatabase()
   const [created] = await db.insert(libraryRoot).values(root).returning()
   return created
+}
+
+// 启动扫描和首次建类目录可能同时登记，唯一索引保证只有一个根目录。
+export async function registerCategoryRoot(path: string): Promise<LibraryRootEntity> {
+  const { db } = getDatabase()
+  const [created] = await db.insert(libraryRoot).values({ kind: 'CATEGORY', name: '类目录', path }).onConflictDoNothing().returning()
+  if (created) return created
+  const [existing] = await findActiveRootsByKind('CATEGORY')
+  if (existing?.path === path) return existing
+  throw new Error('类目录位置与已登记的目录冲突')
 }

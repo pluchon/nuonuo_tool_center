@@ -67,7 +67,7 @@ export async function updateR18(ids: number[], isR18: boolean, onlyPendingReview
 // 还没分级的图：指定了 id 的（你正在看的）只在这些里找；否则最新导入的在前（老图在后台慢慢判）
 export async function findRatingCandidates(limit: number, onlyIds?: number[]): Promise<Array<{ id: number; contentHash: string }>> {
   const { db } = getDatabase()
-  const conds = [eq(image.deleteState, 0), isNull(image.ratingSource), eq(image.thumbReady, THUMB_READY)]
+  const conds = [ratingCandidate]
   if (onlyIds) {
     if (onlyIds.length === 0) {
       return []
@@ -82,13 +82,15 @@ export async function findRatingCandidates(limit: number, onlyIds?: number[]): P
     .limit(limit)
 }
 
+export const ratingCandidate = and(eq(image.deleteState, 0), isNull(image.ratingSource), eq(image.thumbReady, THUMB_READY))
+
 // 还有多少张等着本地分级（进度条的分母）
 export async function countRatingCandidates(): Promise<number> {
   const { db } = getDatabase()
   const [row] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(image)
-    .where(and(eq(image.deleteState, 0), isNull(image.ratingSource), eq(image.thumbReady, THUMB_READY)))
+    .where(ratingCandidate)
   return Number(row?.n ?? 0)
 }
 

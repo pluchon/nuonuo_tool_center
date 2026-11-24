@@ -63,7 +63,7 @@ export async function launchApp(dirs: CaseDirs, overrides: Record<string, string
     LTM_CATEGORY_HOME: dirs.library,
     LTM_LOG_LEVEL: 'info',
     LTM_FAKE_TRASH_DIR: join(dirs.root, 'trash'),
-    LTM_MODEL_DIR: env.LTM_MODEL_DIR ?? MODEL_DIR
+    LTM_MODEL_DIR: overrides.LTM_MODEL_DIR ?? env.LTM_MODEL_DIR ?? MODEL_DIR
   })
   const entry = env.LTM_E2E_HIDDEN === '1' ? join(PROJECT_ROOT, 'tests/e2e/support/hiddenWindow.cjs') : PROJECT_ROOT
   const app = await _electron.launch({ executablePath: electronPath as unknown as string, args: [entry], env })

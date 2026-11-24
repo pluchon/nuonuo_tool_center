@@ -263,42 +263,49 @@ async function bootstrap(): Promise<void> {
   configureFileOps({ trash: trashFunction(), onDone: broadcastFileOpDone })
   configureTransfer(paths.categoryHomeOverride)
   configureFolderOps(paths.categoryHomeOverride)
-  registerIpcHandlers(paths, dbLocation)
-  if (state === 'READY') {
-    // 上次没做完的文件操作（崩溃、断电）先按日志补做，再扫描
-    await recoverFileOps().catch((err: unknown) => log.error('补做上次的文件操作失败', err))
-  }
-  if (state === 'READY') {
-    // 关闭窗口时的行为按设置来（开机自动启动只在设置里改的时候才登记，这里不碰）
-    await getSettings()
-      .then(async (s) => {
-        applySystemSettings(s, {})
-        // 上次换背景时还在显示、没删掉的旧图
-        await pruneBackgrounds(paths.backgrounds, s.customBackground)
-      })
-      .catch((err: unknown) => log.warn('读取关闭窗口设置失败，按退出应用处理', err))
-    await restoreOrganize().catch((err: unknown) => log.error('恢复整理状态失败', err))
-  }
+  registerIpcHandlers(paths, dbLocation, async () => {
+    await restoreLibrary()
+    await resumeLibraryServices()
+  })
+  if (state === 'READY') await restoreLibrary()
   createMainWindow(await initialTheme(state === 'READY'))
-  if (state === 'READY') {
-    // 扫描断点优先，避免先排启动扫描，再重复排一次断点里的扫描。
-    const scanResumed = await resumeScan().catch((err: unknown) => {
-      log.warn('接着上次的扫描失败', err)
-      return false
+  if (state === 'READY') await resumeLibraryServices()
+}
+
+// 首次打开与解除占用后的重试，共用文件恢复、系统设置和后台任务的启动顺序。
+async function restoreLibrary(): Promise<void> {
+  // 上次没做完的文件操作（崩溃、断电）先按日志补做，再扫描
+  await recoverFileOps().catch((err: unknown) => log.error('补做上次的文件操作失败', err))
+  // 关闭窗口时的行为按设置来（开机自动启动只在设置里改的时候才登记，这里不碰）
+  await getSettings()
+    .then(async (s) => {
+      applySystemSettings(s, {})
+      // 上次换背景时还在显示、没删掉的旧图
+      await pruneBackgrounds(paths.backgrounds, s.customBackground)
     })
-    if (!scanResumed) await autoScanOnStart()
-    await syncWatching()
-    // 上次没判完的接着判（自动扫描在跑时先让路，扫完会再叫一次）
-    scheduleRating()
-    // 看图队列：上次没做完的接着做，查已提交的批量任务
-    await initLook().catch((err: unknown) => log.error('看图队列启动失败', err))
-    if (closing) return
-    await resumeOrganize().catch((err: unknown) => log.error('继续一键整理失败', err))
-    // 做梦：几分钟没操作、扫描分级看图对话都不在跑时，把事件整理成记忆和核心档案
-    startDreaming({ isBusy: () => getScanState().progress !== null || isRatingBusy() || isLookBusy() || isAnswering() || isEmbedBusy() })
-    // 上次没补完的向量接着补
-    scheduleEmbedding()
-  }
+    .catch((err: unknown) => log.warn('读取关闭窗口设置失败，按退出应用处理', err))
+  await restoreOrganize().catch((err: unknown) => log.error('恢复整理状态失败', err))
+}
+
+async function resumeLibraryServices(): Promise<void> {
+  if (closing) return
+  // 扫描断点优先，避免先排启动扫描，再重复排一次断点里的扫描。
+  const scanResumed = await resumeScan().catch((err: unknown) => {
+    log.warn('接着上次的扫描失败', err)
+    return false
+  })
+  if (!scanResumed) await autoScanOnStart()
+  await syncWatching()
+  // 上次没判完的接着判（自动扫描在跑时先让路，扫完会再叫一次）
+  scheduleRating()
+  // 看图队列：上次没做完的接着做，查已提交的批量任务
+  await initLook().catch((err: unknown) => log.error('看图队列启动失败', err))
+  if (closing) return
+  await resumeOrganize().catch((err: unknown) => log.error('继续一键整理失败', err))
+  // 做梦：几分钟没操作、扫描分级看图对话都不在跑时，把事件整理成记忆和核心档案
+  startDreaming({ isBusy: () => getScanState().progress !== null || isRatingBusy() || isLookBusy() || isAnswering() || isEmbedBusy() })
+  // 上次没补完的向量接着补
+  scheduleEmbedding()
 }
 
 // 单实例：同一个数据目录只允许一个进程，第二个实例只负责唤起已有窗口
@@ -307,7 +314,7 @@ if (app.requestSingleInstanceLock()) {
     const win = BrowserWindow.getAllWindows()[0]
     if (win) showWindow(win)
   })
-  app.whenReady().then(bootstrap, (err: unknown) => log.error('应用启动失败', err))
+  app.whenReady().then(bootstrap).catch((err: unknown) => log.error('应用启动失败', err))
 } else {
   app.exit(0)
 }

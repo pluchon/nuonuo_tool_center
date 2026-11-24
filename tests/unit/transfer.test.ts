@@ -7,7 +7,6 @@ import { getImageDetail } from '../../src/main/services/galleryService'
 import { configureFileOps, recoverFileOps, settleFileOps } from '../../src/main/services/fileOps/fileOpsService'
 import { configureTransfer, copyImages, moveImages, undoTransfer } from '../../src/main/services/fileOps/transferService'
 import { insertBatch, updateBatchStatus, updateOpToPath, findPendingOps } from '../../src/main/repositories/fileOpRepository'
-import { updateSettings } from '../../src/main/services/settingsService'
 import { hashBuffer } from '../../src/main/services/scan/imageProbe'
 
 let dir: string
@@ -36,7 +35,6 @@ beforeAll(async () => {
   writeFileSync(join(source, 'b.jpg'), 'B')
   writeFileSync(join(source, 'sub', 'b.jpg'), 'OTHER')
   await openDatabase(join(dir, 'pgdata'), resolve('drizzle'))
-  await updateSettings({ categoryHome: library })
   const { pg } = getDatabase()
   await pg.query(`INSERT INTO library_root (kind, name, path) VALUES ('SOURCE', 'pics', $1)`, [source])
   for (const value of ['A', 'B', 'OTHER']) {

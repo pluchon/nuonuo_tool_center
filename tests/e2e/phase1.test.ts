@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import sharp from 'sharp'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import {
   closeLeftoverApps,
@@ -105,9 +106,16 @@ describe('第一阶段：数据隔离、设置、图库打不开', () => {
       expect(await page.locator('.db-error__title').textContent()).toBe('图库数据被占用，暂时打不开')
 
       await killAndWait(holder)
+      mkdirSync(main.library, { recursive: true })
       await page.click('.db-error__retry')
       await page.waitForSelector('.app-shell')
       expect(await page.locator('.db-error').count()).toBe(0)
+      // 重试也要恢复目录监听；重试后才出现的文件应自动进入图库。
+      await sharp({ create: { width: 32, height: 32, channels: 3, background: '#397f84' } }).png().toFile(join(main.library, '重试后新增.png'))
+      await expect.poll(() => page.evaluate(async () => {
+        const result = await window.api.gallery.list({ view: 'recent', sort: 'new' })
+        return result.ok && result.data.items.some(item => item.name === '重试后新增.png' && item.thumb === 'READY')
+      }), { timeout: 15_000 }).toBe(true)
       await setAppearance(page, 'dark')
       await app.close()
     } finally {

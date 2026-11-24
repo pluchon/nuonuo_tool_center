@@ -7,7 +7,7 @@ const MIN_PREVIEW_BYTES = 16 * 1024
 // 从 start（SOI 的位置）开始按段解析一张 JPEG，返回结束位置（EOI 之后），解析不通返回 -1
 function jpegEnd(buf: Buffer, start: number): number {
   let i = start + 2
-  while (i + 4 <= buf.length) {
+  while (i + 2 <= buf.length) {
     if (buf[i] !== 0xff) {
       return -1
     }
@@ -25,6 +25,7 @@ function jpegEnd(buf: Buffer, start: number): number {
       i += 2
       continue
     }
+    if (i + 4 > buf.length) return -1
     const len = buf.readUInt16BE(i + 2)
     if (len < 2) {
       return -1

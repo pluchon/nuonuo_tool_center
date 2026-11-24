@@ -110,7 +110,7 @@
         </button>
       </div>
 
-      <AssistBox :image-id="detail.imageId" :r18="detail.isR18" />
+      <AssistBox :image-id="detail.imageId" />
 
       <div class="detail-panel__foot">
         <div class="detail-panel__acts">
