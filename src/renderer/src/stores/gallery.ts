@@ -1,3 +1,4 @@
+import { shallowRef } from 'vue'
 import { defineStore } from 'pinia'
 import {
   TAGS_PER_IMAGE,
@@ -56,7 +57,7 @@ export const useGalleryStore = defineStore('gallery', {
     tagIds: [] as number[],
     dirs: [] as DirKeyDTO[],
     more: {} as MoreFilterDTO,
-    items: [] as GalleryItemVO[],
+    items: shallowRef<GalleryItemVO[]>([]),
     loaded: false,
     loading: false,
     error: '',
@@ -296,6 +297,49 @@ export const useGalleryStore = defineStore('gallery', {
     async afterEdit(): Promise<void> {
       await Promise.all([this.load(), useLibraryStore().load(), useTagsStore().load()])
     },
+    // 本地移除若干张图，按与 load() 一致的规则更新选中并刷新详情
+    removeItemsLocally(ids: number[]): void {
+      if (ids.length === 0) {
+        return
+      }
+      const removed = new Set(ids)
+      const oldIndex = this.primary === null ? -1 : this.items.findIndex((i) => i.imageId === this.primary)
+      const nextItems = this.items.filter((i) => !removed.has(i.imageId))
+      this.items = nextItems
+      const remaining = new Set(nextItems.map((i) => i.imageId))
+      const kept = this.selected.filter((id) => remaining.has(id))
+      if (kept.length > 0) {
+        this.selected = kept
+        if (this.primary === null || !remaining.has(this.primary)) {
+          this.primary = kept[0]
+        }
+        if (this.anchor !== null && !remaining.has(this.anchor)) {
+          this.anchor = this.primary
+        }
+        void this.loadDetail()
+      } else {
+        const at = oldIndex >= 0 ? Math.min(oldIndex, nextItems.length - 1) : 0
+        this.selectOne(nextItems[at]?.imageId ?? null)
+      }
+    },
+    // 本地浅拷贝更新指定图片的字段，保持 items 整体引用替换以触发 shallowRef 响应
+    patchItemsLocally(ids: number[], patcher: (item: GalleryItemVO) => GalleryItemVO): void {
+      if (ids.length === 0) {
+        return
+      }
+      const targetIds = new Set(ids)
+      let changed = false
+      const nextItems = this.items.map((item) => {
+        if (!targetIds.has(item.imageId)) {
+          return item
+        }
+        changed = true
+        return patcher(item)
+      })
+      if (changed) {
+        this.items = nextItems
+      }
+    },
     // 当前要改的图：多选时是全部选中的，否则是正在看的那张
     targets(): number[] {
       if (!this.primaryItem) return []
@@ -308,8 +352,19 @@ export const useGalleryStore = defineStore('gallery', {
         return false
       }
       try {
-        await renameImage(id, name)
-        await this.afterEdit()
+        const saved = await renameImage(id, name)
+        if (this.q.trim() !== '' || (!this.nameOnly && this.sort === 'name')) {
+          await this.load()
+        } else if (saved !== null) {
+          this.patchItemsLocally([id], (item) => ({ ...item, name: saved }))
+          await this.loadDetail()
+        } else {
+          await this.loadDetail()
+          if (this.detail?.imageId === id) {
+            const fallbackName = this.detail.name
+            this.patchItemsLocally([id], (item) => ({ ...item, name: fallbackName }))
+          }
+        }
         return true
       } catch (err) {
         useToastStore().show(errText(err), 'error')
@@ -324,7 +379,16 @@ export const useGalleryStore = defineStore('gallery', {
       }
       try {
         await setImagesR18(ids, value)
-        await this.afterEdit()
+        const view = useViewStore().view
+        if (view === 'ai' || ((view === 'r18' || this.onlyR18) && value)) {
+          await Promise.all([this.load(), useLibraryStore().load()])
+        } else if ((view === 'r18' || this.onlyR18) && !value) {
+          this.removeItemsLocally(ids)
+          await useLibraryStore().load()
+        } else {
+          this.patchItemsLocally(ids, (item) => ({ ...item, isR18: value }))
+          await Promise.all([this.loadDetail(), useLibraryStore().load()])
+        }
       } catch (err) {
         useToastStore().show(errText(err), 'error')
       }
@@ -340,7 +404,16 @@ export const useGalleryStore = defineStore('gallery', {
         if (result.skipped > 0) {
           useToastStore().show(`有 ${result.skipped} 张已经有 ${TAGS_PER_IMAGE} 个标签了，没加上`, 'error')
         }
-        await this.afterEdit()
+        const view = useViewStore().view
+        if (view === 'untagged') {
+          this.removeItemsLocally(ids)
+          await Promise.all([useLibraryStore().load(), useTagsStore().load()])
+        } else if (view === 'ai' || this.q.trim() !== '' || this.tagIds.length > 0) {
+          await this.afterEdit()
+        } else {
+          this.patchItemsLocally(ids, (item) => ({ ...item, tagged: true }))
+          await Promise.all([this.loadDetail(), useLibraryStore().load(), useTagsStore().load()])
+        }
         return true
       } catch (err) {
         useToastStore().show(errText(err), 'error')
@@ -355,7 +428,16 @@ export const useGalleryStore = defineStore('gallery', {
       }
       try {
         await removeImageTag(ids, tagId)
-        await this.afterEdit()
+        const view = useViewStore().view
+        if (view === 'all' || view === 'ai' || this.q.trim() !== '' || this.tagIds.length > 0) {
+          await this.afterEdit()
+        } else {
+          await Promise.all([this.loadDetail(), useLibraryStore().load(), useTagsStore().load()])
+          if (ids.length === 1 && this.detail?.imageId === ids[0]) {
+            const tagged = this.detail.tags.length > 0
+            this.patchItemsLocally([ids[0]], (item) => ({ ...item, tagged }))
+          }
+        }
       } catch (err) {
         useToastStore().show(errText(err), 'error')
       }
@@ -395,7 +477,8 @@ export const useGalleryStore = defineStore('gallery', {
       try {
         // ids 可能来自响应式状态（确认框里存的那份），IPC 只能传普通数组
         const res = await deleteImages(query, [...ids])
-        await this.afterEdit()
+        this.removeItemsLocally(ids)
+        await Promise.all([useLibraryStore().load(), useTagsStore().load()])
         const text = res.images === 1 ? '已放进系统回收站' : `${res.images} 张图已放进系统回收站`
         toast.show(text, 'ok', async () => {
           try {

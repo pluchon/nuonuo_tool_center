@@ -110,10 +110,28 @@ let seq = 0
 const waiters = new Map<number, (r: RatingResponse) => void>()
 let workerQueue: Promise<void> = Promise.resolve()
 const pendingFeatures = new Map<number, Promise<string[] | null>>()
+const CRASH_BACKOFFS_MS = [1000, 3000, 8000]
+let consecutiveCrashes = 0
+let workerDegraded = false
+let nextSpawnAllowedAt = 0
+
+// 计算连续崩溃后的退避延迟（第 1/2/3 次分别等 1s/3s/8s；超过 3 次返回 null 表示进入降级模式）
+export function nextCrashBackoffMs(consecutiveCrashes: number): number | null {
+  if (consecutiveCrashes <= 0) return 0
+  return CRASH_BACKOFFS_MS[consecutiveCrashes - 1] ?? null
+}
+
+// 恢复系统唤醒或重新配置后重置工作进程降级标记
+export function resetRatingDegradation(): void {
+  consecutiveCrashes = 0
+  workerDegraded = false
+  nextSpawnAllowedAt = 0
+}
 
 // 配置分级服务（启动时调一次）
 export function configureRating(next: RatingConfig): void {
   config = next
+  resetRatingDegradation()
 }
 
 // WD 的四个分数换成库里的分级枚举：取最高的那个
@@ -141,6 +159,11 @@ function ensureWorker(): UtilityProcess {
   }
   const child = utilityProcess.fork(config!.workerPath, [], { serviceName: '诺诺本地分级', stdio: 'ignore' })
   child.on('message', (msg: RatingResponse) => {
+    if (msg.ok) {
+      consecutiveCrashes = 0
+      workerDegraded = false
+      nextSpawnAllowedAt = 0
+    }
     const done = waiters.get(msg.id)
     if (done) {
       waiters.delete(msg.id)
@@ -150,11 +173,23 @@ function ensureWorker(): UtilityProcess {
   child.on('exit', (code) => {
     if (worker !== child) return
     worker = null
+    const hadPendingWaiters = waiters.size > 0
     // 进程没了：还在等的都按失败处理
     for (const [id, done] of waiters) {
       done({ id, ok: false, error: `工作进程退出（${code}）` })
     }
     waiters.clear()
+    if (!stopping && (code !== 0 || hadPendingWaiters)) {
+      consecutiveCrashes += 1
+      const backoff = nextCrashBackoffMs(consecutiveCrashes)
+      if (backoff === null) {
+        workerDegraded = true
+        log.error('本地分级工作进程连续异常退出，已暂时降级跳过，避免持续重启占满 CPU')
+      } else {
+        nextSpawnAllowedAt = Date.now() + backoff
+        log.warn(`本地分级工作进程异常退出（code=${code}，第 ${consecutiveCrashes} 次），${backoff}ms 后重试`)
+      }
+    }
   })
   worker = child
   return child
@@ -173,8 +208,27 @@ function killWorker(): void {
 }
 
 // 发一张给工作进程，等结果或超时
-function inferFile(file: string, modelDir: string, threadCount: number): Promise<RatingResponse> {
+async function inferFile(file: string, modelDir: string, threadCount: number): Promise<RatingResponse> {
   const id = ++seq
+  if (workerDegraded) {
+    return { id, ok: false, error: '本地分级工作进程异常降级' }
+  }
+  if (!worker && nextSpawnAllowedAt > Date.now()) {
+    const waitMs = nextSpawnAllowedAt - Date.now()
+    await new Promise<void>((resolve) => {
+      const onAbort = (): void => {
+        clearTimeout(timer)
+        resolve()
+      }
+      const timer = setTimeout(() => {
+        shutdown.signal.removeEventListener('abort', onAbort)
+        resolve()
+      }, waitMs)
+      shutdown.signal.addEventListener('abort', onAbort, { once: true })
+    })
+    if (stopping) return { id, ok: false, error: '正在退出' }
+    if (workerDegraded) return { id, ok: false, error: '本地分级工作进程异常降级' }
+  }
   const child = ensureWorker()
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
@@ -245,7 +299,7 @@ async function runOnce(): Promise<void> {
   let r18 = 0
   let finished = false
   for (;;) {
-    if (stopping || !cfg.canRun()) {
+    if (stopping || workerDegraded || !cfg.canRun()) {
       break
     }
     // 先判你正在看的，再按最新导入的往前判
@@ -267,7 +321,7 @@ async function runOnce(): Promise<void> {
     // 中途又导入了新图时分母跟着变大
     setProgress({ running: true, done: base + rated, total: base + rated + (await countRatingCandidates()) })
     for (const img of batch) {
-      if (stopping || !cfg.canRun()) {
+      if (stopping || workerDegraded || !cfg.canRun()) {
         break
       }
       const res = await rateFile(join(cfg.thumbsDir, `${img.contentHash}.webp`), modelDir, threadsNow())
@@ -278,6 +332,9 @@ async function runOnce(): Promise<void> {
         if ((await saveModelRating(img.id, ratingOf(res.scores), res.scores, hit, features)) && hit) {
           r18++
         }
+      } else if (workerDegraded) {
+        log.warn(`图片 ${img.id} 因本地分级工作进程降级暂停处理：${res.error}`)
+        break
       } else {
         // 判不了的（缩略图读不出来、超时）记成 UNKNOWN，不反复重试
         log.warn(`图片 ${img.id} 分级失败：${res.error}`)
@@ -304,7 +361,7 @@ async function runOnce(): Promise<void> {
 
 // 有新图或扫描结束后调用：没在跑就开始一轮；跑完一段时间没新活就关掉工作进程
 export function scheduleRating(): void {
-  if (!config || running || stopping) {
+  if (!config || running || stopping || workerDegraded) {
     return
   }
   running = runOnce()

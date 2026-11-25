@@ -6,6 +6,7 @@ import { CUSTOM_BACKGROUND_NAME, type AppSettings } from '@shared/settings'
 import { BizError } from '../common/bizError'
 import { getLogger } from '../common/logger'
 import { publishExclusive } from '../common/publishFile'
+import { atomicWriteFile, retryOnWinBusy } from '../common/winFs'
 import { getDatabase } from '../db/client'
 import { findAllContentHashes } from '../repositories/imageRepository'
 import { updateSettings } from './settingsService'
@@ -97,23 +98,82 @@ async function writeAndClose(file: FileHandle, bytes: Buffer): Promise<void> {
   }
 }
 
-// 删一个文件；刚写好的文件可能正被杀毒软件扫描（EBUSY / EPERM），隔一会儿再试几次
+// 删一个文件；刚写好的文件可能正被杀毒软件扫描（EBUSY / EPERM / EACCES），隔一会儿再试几次
 async function unlinkWithRetry(file: string, tries = BUSY_RETRIES): Promise<void> {
-  for (let i = 0; ; i++) {
-    try {
-      await unlink(file)
-      return
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code
-      if (code === 'ENOENT') {
-        return
-      }
-      if ((code !== 'EBUSY' && code !== 'EPERM') || i >= tries - 1) {
-        throw err
-      }
-      await new Promise((r) => setTimeout(r, BUSY_WAIT_MS))
+  const delays = Array.from({ length: Math.max(0, tries - 1) }, () => BUSY_WAIT_MS)
+  try {
+    await retryOnWinBusy(() => unlink(file), delays)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+  }
+}
+
+const AUTO_SNAPSHOT_FILE = /^auto-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.tar\.gz$/
+const AUTO_SNAPSHOT_GLOB = /^auto-.*\.tar\.gz$/
+const DEFAULT_SNAPSHOT_KEEP = 3
+const DEFAULT_SNAPSHOT_INTERVAL_MS = 24 * 3600 * 1000
+
+function autoSnapshotName(now: Date): string {
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `auto-${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}.tar.gz`
+}
+
+function snapshotTimeMs(name: string, mtimeMs: number): number {
+  const m = AUTO_SNAPSHOT_FILE.exec(name)
+  if (!m) return mtimeMs
+  const parsed = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6])).getTime()
+  return Number.isFinite(parsed) ? parsed : mtimeMs
+}
+
+// 定期自动快照轮转：清理残留 .tmp，间隔不足 minIntervalMs 时跳过，超出 keep 份时按时间清理最旧快照
+export async function rotateAutoSnapshot(
+  snapshotsDir: string,
+  options?: { keep?: number; minIntervalMs?: number; now?: Date }
+): Promise<string | null> {
+  const keep = options?.keep ?? DEFAULT_SNAPSHOT_KEEP
+  const minIntervalMs = options?.minIntervalMs ?? DEFAULT_SNAPSHOT_INTERVAL_MS
+  const now = options?.now ?? new Date()
+  await mkdir(snapshotsDir, { recursive: true })
+  const entries = await readdir(snapshotsDir)
+  for (const name of entries) {
+    if (name.endsWith('.tmp')) {
+      await retryOnWinBusy(() => unlink(join(snapshotsDir, name))).catch((err: unknown) => {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          log.warn(`清理临时快照失败：${name}`, err)
+        }
+      })
     }
   }
+  const existing: Array<{ name: string; timeMs: number }> = []
+  for (const name of entries) {
+    if (!AUTO_SNAPSHOT_GLOB.test(name)) continue
+    const info = await stat(join(snapshotsDir, name)).catch(() => null)
+    if (!info || !info.isFile() || info.size <= 0) continue
+    existing.push({ name, timeMs: snapshotTimeMs(name, info.mtimeMs) })
+  }
+  existing.sort((a, b) => b.timeMs - a.timeMs || b.name.localeCompare(a.name))
+  const newest = existing[0]
+  if (newest && now.getTime() - newest.timeMs < minIntervalMs) {
+    return null
+  }
+  const { pg } = getDatabase()
+  const dump = await pg.dumpDataDir('gzip')
+  const bytes = Buffer.from(await dump.arrayBuffer())
+  const filename = autoSnapshotName(now)
+  const target = join(snapshotsDir, filename)
+  await atomicWriteFile(target, bytes)
+  const updated = [{ name: filename, timeMs: now.getTime() }, ...existing.filter((item) => item.name !== filename)]
+    .sort((a, b) => b.timeMs - a.timeMs || b.name.localeCompare(a.name))
+  const stale = updated.slice(Math.max(0, keep))
+  for (const item of stale) {
+    await retryOnWinBusy(() => unlink(join(snapshotsDir, item.name))).catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        log.warn(`清理旧快照失败：${item.name}`, err)
+      }
+    })
+  }
+  log.info(`已生成自动快照：${target}（保留 ${Math.min(updated.length, Math.max(0, keep))} 份）`)
+  return target
 }
 
 // 删掉 backgrounds 里除了 keep 以外的旧背景图；还被占用的留到下次（换图或启动时）再删

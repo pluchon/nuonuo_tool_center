@@ -2,6 +2,7 @@ import type { BrowserWindow, Rectangle } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { getLogger } from '../common/logger'
+import { retryOnWinBusySync } from '../common/winFs'
 
 const log = getLogger('window')
 
@@ -112,7 +113,7 @@ export function trackWindowState(win: BrowserWindow, file: string): void {
     const tmp = `${file}.${randomUUID()}.tmp`
     try {
       writeFileSync(tmp, JSON.stringify(state), { flush: true })
-      renameSync(tmp, file)
+      retryOnWinBusySync(() => renameSync(tmp, file))
     } catch (err) {
       log.warn('记不下窗口位置', err)
       try {

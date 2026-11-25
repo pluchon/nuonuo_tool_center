@@ -4,6 +4,7 @@ import { DIR_NAME_MAX, type FolderRefDTO } from '@shared/api'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isValidDirName, normalizeRelDir } from '../../common/pathUtil'
+import { retryOnWinBusy } from '../../common/winFs'
 import { getDatabase } from '../../db/client'
 import {
   hideRowsUnder,
@@ -119,7 +120,7 @@ export async function createFolder(parent: FolderRefDTO, rawName: unknown): Prom
         continue
       }
       try {
-        await mkdir(join(folder.abs, name))
+        await retryOnWinBusy(() => mkdir(join(folder.abs, name)))
         if (folder.kind === 'category') {
           invalidateCategoryTree()
           const path = folder.rel ? join(folder.rel, name) : name
@@ -164,7 +165,7 @@ export async function ensureSuggestionTarget(rawName: string, mustExist = false)
     if (mustExist) throw new BizError('NOT_FOUND', '建议中的类目录已不存在')
     const name = checkName(path)
     await ensureCategoryRoot(categoryHomeOverride, true)
-    await mkdir(join(home, name))
+    await retryOnWinBusy(() => mkdir(join(home, name)))
     await observeOrganizeTarget(name)
     invalidateCategoryTree()
     return join(home, name)
@@ -207,7 +208,7 @@ export async function renameCategoryFolder(ref: FolderRefDTO, rawName: unknown):
     })
     const [op] = await findPendingOps(batchId)
     try {
-      await rename(folder.abs, join(parentAbs, name))
+      await retryOnWinBusy(() => rename(folder.abs, join(parentAbs, name)))
     } catch (err) {
       await db.transaction(async (tx) => {
         await updateOpStatus(tx, op.id, 'FAILED', (err as Error).message)

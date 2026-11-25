@@ -66,12 +66,13 @@ function nameOf(row: GalleryRow): string {
 }
 
 // 校验并规范化查询条件，转成仓库层的过滤条件
-async function toFilter(q: GalleryQueryDTO): Promise<GalleryFilter> {
+async function toFilter(q: GalleryQueryDTO, now: Date = new Date()): Promise<GalleryFilter> {
   if (!q || !VIEWS.includes(q.view) || !SORT_KEYS.includes(q.sort)) {
     throw new BizError('BAD_REQUEST', '查询条件不对')
   }
   const text = typeof q.q === 'string' ? q.q.trim().toLowerCase().slice(0, MAX_QUERY) : ''
-  const filter: GalleryFilter = { scope: 'dir', recentDays: RECENT_DAYS, q: text || undefined }
+  const more = q.view === 'all' || q.view === 'r18' || q.view === 'category' ? q.more : undefined
+  const filter: GalleryFilter = { scope: 'dir', recentDays: RECENT_DAYS, q: text || undefined, sort: q.sort, now }
   if (q.view === 'source') {
     const root = Number.isInteger(q.sourceId) ? await findActiveRootById(q.sourceId as number) : undefined
     if (!root || root.kind !== 'SOURCE') {
@@ -91,7 +92,7 @@ async function toFilter(q: GalleryQueryDTO): Promise<GalleryFilter> {
     }
     const [catRoot] = await findActiveRootsByKind('CATEGORY')
     if (!catRoot) {
-      return { ...filter, rootId: -1 }
+      return { ...filter, rootId: -1, more }
     }
     return {
       ...filter,
@@ -100,7 +101,8 @@ async function toFilter(q: GalleryQueryDTO): Promise<GalleryFilter> {
       onlyHere: q.onlyHere === true,
       byTag: true,
       onlyR18: q.onlyR18 === true,
-      tagIds: checkTagIds(q.tagIds)
+      tagIds: checkTagIds(q.tagIds),
+      more
     }
   }
   // 还没打标签、最近导入只按图片名搜；全部图片、R-18 图还按标签名，并能按标签筛选
@@ -111,7 +113,8 @@ async function toFilter(q: GalleryQueryDTO): Promise<GalleryFilter> {
     byTag,
     onlyR18: q.view === 'all' && q.onlyR18 === true,
     tagIds: byTag ? checkTagIds(q.tagIds) : undefined,
-    dirs: q.view === 'recent' ? undefined : await resolveDirs(q.dirs)
+    dirs: q.view === 'recent' ? undefined : await resolveDirs(q.dirs),
+    more
   }
 }
 
@@ -184,15 +187,50 @@ export function matchMore(item: GalleryItemVO, more: MoreFilterDTO | undefined, 
   })
 }
 
-// 这些目录现在能不能访问
-async function offlineRoots(rows: GalleryRow[]): Promise<Set<number>> {
+export const DEFAULT_ROOT_TTL_MS = 2000
+
+interface RootOnlineEntry {
+  path: string
+  online: boolean
+  checkedAt: number
+}
+
+const rootOnlineCache = new Map<number, RootOnlineEntry>()
+
+// 清空根目录在线状态缓存（恢复唤醒、扫描结束或主动刷新时调用）
+export function invalidateRootOnlineCache(rootId?: number): void {
+  if (rootId === undefined) {
+    rootOnlineCache.clear()
+  } else {
+    rootOnlineCache.delete(rootId)
+  }
+}
+
+// 这些目录现在能不能访问（短 TTL 缓存仅用于只读视图；破坏性文件操作必须传 fresh: true 实查）
+export async function offlineRoots(
+  rows: Array<{ rootId: number; rootPath: string }>,
+  options?: { fresh?: boolean; ttlMs?: number; now?: number }
+): Promise<Set<number>> {
   const roots = new Map(rows.map((r) => [r.rootId, r.rootPath]))
   const off = new Set<number>()
+  const fresh = options?.fresh === true
+  const ttlMs = options?.ttlMs ?? (process.env.VITEST ? 0 : DEFAULT_ROOT_TTL_MS)
+  const now = options?.now ?? Date.now()
   await Promise.all(
     [...roots].map(async ([id, path]) => {
+      if (!fresh && ttlMs > 0) {
+        const cached = rootOnlineCache.get(id)
+        if (cached && cached.path === path && now - cached.checkedAt < ttlMs) {
+          if (!cached.online) {
+            off.add(id)
+          }
+          return
+        }
+      }
       const ok = await stat(path)
         .then((s) => s.isDirectory())
         .catch(() => false)
+      rootOnlineCache.set(id, { path, online: ok, checkedAt: now })
       if (!ok) {
         off.add(id)
       }
@@ -248,7 +286,8 @@ function sortItems(items: GalleryItemVO[], sort: GalleryQueryDTO['sort']): Galle
 
 // 网格数据：按视图和条件查出图片，同一内容只出一张，按排序排好
 export async function listGallery(query: GalleryQueryDTO): Promise<GalleryListVO> {
-  const filter = await toFilter(query)
+  const now = new Date()
+  const filter = await toFilter(query, now)
   const rows = await findGalleryRows(filter)
   const offline = await offlineRoots(rows)
   const byImage = new Map<number, GalleryRow[]>()
@@ -260,15 +299,15 @@ export async function listGallery(query: GalleryQueryDTO): Promise<GalleryListVO
       byImage.set(row.imageId, [row])
     }
   }
-  // 更多筛选只在全部图片、R-18 图、类目录里生效
+  // 更多筛选只在全部图片、R-18 图、类目录里生效（PG 已下推，此处保留做兜底）
   const more = query.view === 'all' || query.view === 'r18' || query.view === 'category' ? query.more : undefined
   const items = [...byImage.values()]
     .map((list) => toItem(pickRepresentative(list, offline), offline))
-    .filter((item) => matchMore(item, more))
+    .filter((item) => matchMore(item, more, now))
   if (query.view === 'ai') {
     return { items: await withAiOrder(items) }
   }
-  return { items: sortItems(items, query.sort) }
+  return { items: query.sort === 'name' ? sortItems(items, query.sort) : items }
 }
 
 // “AI 建议”视图：按建议生成的先后排（后来的接在最后），带上建议放进的类目录（目录还不存在的标成新建）
@@ -321,7 +360,7 @@ export async function filesForAction(query: GalleryQueryDTO, imageIds: number[])
   } else {
     rows = await findRowsOfImages(imageIds)
   }
-  const offline = await offlineRoots(rows)
+  const offline = await offlineRoots(rows, { fresh: true })
   return rows.map((r) => ({ ...r, offline: offline.has(r.rootId) }))
 }
 

@@ -22,16 +22,35 @@ export function registerLtmSchemePrivileges(): void {
   ])
 }
 
+// 缩略图内容按内容哈希寻址，长期不变，补齐强缓存与默认 MIME 头
+export function buildThumbResponse(upstream: Response): Response {
+  const headers = new Headers(upstream.headers)
+  headers.set('Cache-Control', 'public, max-age=31536000, immutable')
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', 'image/webp')
+  }
+  return new Response(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers
+  })
+}
+
 // app ready 之后注册处理器
 export function handleLtmProtocol(thumbsDir: string, backgroundsDir: string, resolveOriginal: OriginalResolver): void {
   protocol.handle(LTM_SCHEME, async (request) => {
     const url = new URL(request.url)
     const name = url.pathname.replace(/^\//, '')
-    // 缩略图：先确认文件在（被手动删掉时 net.fetch 会一直挂着），在就照常流式给，不在马上回 404
+    // 缩略图：先确认文件在（被手动删掉时 net.fetch 会一直挂着），在就照常流式给并带强缓存，不在马上回 404
     if (url.host === 'thumb' && THUMB_NAME.test(name)) {
       const file = join(thumbsDir, name)
       const isFile = await stat(file).then((s) => s.isFile(), () => false)
-      if (isFile) return net.fetch(pathToFileURL(file).toString()).catch(() => new Response('Not Found', { status: 404 }))
+      if (isFile) {
+        return net
+          .fetch(pathToFileURL(file).toString())
+          .then((res) => (res.ok ? buildThumbResponse(res) : res))
+          .catch(() => new Response('Not Found', { status: 404 }))
+      }
     }
     // 自定义背景图：只认应用自己生成的文件名；整张读进内存再给（不留文件句柄，换图时旧图马上能删）
     if (url.host === 'bg' && CUSTOM_BACKGROUND_NAME.test(name)) {

@@ -4,6 +4,7 @@ import { readFile, rename, rm } from 'node:fs/promises'
 import sharp from 'sharp'
 import type { ScanFormat } from '@shared/settings'
 import { getLogger } from '../../common/logger'
+import { retryOnWinBusy } from '../../common/winFs'
 import { openBmp } from './bmpDecoder'
 import { parseExif, type ExifInfo, type ParsedExif } from './exifInfo'
 import { hasTiffHeader, largestEmbeddedJpeg } from './rawPreview'
@@ -116,14 +117,14 @@ async function writeThumbnail(input: SharpImage, thumbPath: string): Promise<boo
       .webp({ quality: THUMB_QUALITY, effort: THUMB_EFFORT })
       .toFile(tmp)
     if (existsSync(thumbPath)) {
-      await rm(tmp, { force: true })
+      await retryOnWinBusy(() => rm(tmp, { force: true }))
     } else {
-      await rename(tmp, thumbPath)
+      await retryOnWinBusy(() => rename(tmp, thumbPath))
     }
     return true
   } catch (err) {
     log.info(`生成缩略图失败：${thumbPath}`, err)
-    await rm(tmp, { force: true }).catch(() => undefined)
+    await retryOnWinBusy(() => rm(tmp, { force: true })).catch(() => undefined)
     return false
   }
 }

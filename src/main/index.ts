@@ -11,10 +11,10 @@ import { bootDatabase, shutdownDatabase, type DatabaseLocation } from './service
 import { configureFileOps, flushPendingDeletes, recoverFileOps } from './services/fileOps/fileOpsService'
 import { configureTransfer } from './services/fileOps/transferService'
 import { configureFolderOps } from './services/fileOps/folderOpsService'
-import { originalPathOf } from './services/galleryService'
+import { invalidateRootOnlineCache, originalPathOf } from './services/galleryService'
 import { configureScan, getScanState, isScanningRoot, onScanState, requeueScan, resumeScan, runQueuedScans, startScan, stopScanAndWait } from './services/scan/scanService'
-import { configureRating, isRatingBusy, scheduleRating, stopRating, thresholdFromEnv } from './services/rating/ratingService'
-import { configureLook, enqueueNewImages, initLook, isLookBusy, scheduleLook, stopLook } from './services/ai/lookService'
+import { configureRating, isRatingBusy, resetRatingDegradation, scheduleRating, stopRating, thresholdFromEnv } from './services/rating/ratingService'
+import { configureLook, enqueueNewImages, initLook, isLookBusy, pauseLookForSuspend, resumeLookAfterSuspend, scheduleLook, stopLook } from './services/ai/lookService'
 import { checkLooking, configureOrganize, isOrganizing, onLookResult, onRatingBatch, restoreOrganize, resumeOrganize } from './services/ai/organizeService'
 import { startDreaming, stopDreaming } from './services/ai/dreamService'
 import { isAnswering } from './services/ai/assistantService'
@@ -28,7 +28,7 @@ import { windowBackground } from './window/windowControl'
 import { loadWindowState, MIN_HEIGHT, MIN_WIDTH, trackWindowState } from './window/windowState'
 import { attachCloseBehavior, markQuitting, showWindow } from './window/trayControl'
 import { applySystemSettings } from './window/systemSettings'
-import { pruneBackgrounds } from './services/systemService'
+import { pruneBackgrounds, rotateAutoSnapshot } from './services/systemService'
 
 const currentDir = fileURLToPath(new URL('.', import.meta.url))
 
@@ -114,8 +114,34 @@ function createMainWindow(theme: ThemeMode): BrowserWindow {
     }
     return { action: 'deny' }
   })
+  let crashReloadTimes: number[] = []
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null
+  win.on('closed', () => {
+    if (reloadTimer) {
+      clearTimeout(reloadTimer)
+      reloadTimer = null
+    }
+  })
   win.webContents.on('render-process-gone', (_event, details) => {
     log.error(`渲染进程退出：${details.reason}（${details.exitCode}）`)
+    if (details.reason === 'clean-exit' || closing || win.isDestroyed()) {
+      return
+    }
+    const now = Date.now()
+    crashReloadTimes = crashReloadTimes.filter((t) => now - t < 60_000)
+    if (crashReloadTimes.length >= 2) {
+      log.error('渲染进程 60 秒内连续异常退出超过 2 次，停止自动重载')
+      return
+    }
+    crashReloadTimes.push(now)
+    if (reloadTimer) clearTimeout(reloadTimer)
+    reloadTimer = setTimeout(() => {
+      reloadTimer = null
+      if (!closing && !win.isDestroyed()) {
+        log.info('尝试自动重载渲染进程')
+        win.webContents.reload()
+      }
+    }, 800)
   })
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -253,6 +279,7 @@ async function bootstrap(): Promise<void> {
   onScanState((state) => {
     broadcastScanState(state)
     if (scanning && !state.progress) {
+      invalidateRootOnlineCache()
       void syncWatching()
       scheduleRating()
       scheduleLook()
@@ -269,6 +296,26 @@ async function bootstrap(): Promise<void> {
   })
   if (state === 'READY') await restoreLibrary()
   createMainWindow(await initialTheme(state === 'READY'))
+  powerMonitor.on('suspend', () => {
+    log.info('系统进入休眠，暂停后台监听与看图调度')
+    pauseLookForSuspend()
+    void stopWatching()
+  })
+  powerMonitor.on('resume', () => {
+    log.info('系统已唤醒，恢复后台监听与任务调度')
+    invalidateRootOnlineCache()
+    void syncWatching()
+    resumeLookAfterSuspend()
+    resetRatingDegradation()
+    scheduleRating()
+    scheduleEmbedding()
+    void resumeOrganize()
+  })
+  powerMonitor.on('shutdown', () => {
+    log.info('系统即将关机，准备退出')
+    markQuitting()
+    app.quit()
+  })
   if (state === 'READY') await resumeLibraryServices()
 }
 
@@ -285,6 +332,19 @@ async function restoreLibrary(): Promise<void> {
     })
     .catch((err: unknown) => log.warn('读取关闭窗口设置失败，按退出应用处理', err))
   await restoreOrganize().catch((err: unknown) => log.error('恢复整理状态失败', err))
+}
+
+// 启动后延迟安排一次自动快照（不阻塞启动，也不阻止进程退出）
+let snapshotTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleAutoSnapshot(): void {
+  if (closing || snapshotTimer || process.env.LTM_FAKE_TRASH_DIR) return
+  snapshotTimer = setTimeout(() => {
+    snapshotTimer = null
+    if (!closing) {
+      void rotateAutoSnapshot(join(paths.root, 'snapshots')).catch((err: unknown) => log.warn('自动快照失败', err))
+    }
+  }, 15_000)
+  snapshotTimer.unref()
 }
 
 async function resumeLibraryServices(): Promise<void> {
@@ -306,6 +366,7 @@ async function resumeLibraryServices(): Promise<void> {
   startDreaming({ isBusy: () => getScanState().progress !== null || isRatingBusy() || isLookBusy() || isAnswering() || isEmbedBusy() })
   // 上次没补完的向量接着补
   scheduleEmbedding()
+  scheduleAutoSnapshot()
 }
 
 // 单实例：同一个数据目录只允许一个进程，第二个实例只负责唤起已有窗口
@@ -327,6 +388,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => markQuitting())
 
 // 退出前关闭数据库并释放锁，确保写入落盘
+const SHUTDOWN_TIMEOUT_MS = 12_000
 let closing = false
 app.on('will-quit', (event) => {
   if (closing) {
@@ -334,10 +396,14 @@ app.on('will-quit', (event) => {
   }
   closing = true
   event.preventDefault()
+  if (snapshotTimer) {
+    clearTimeout(snapshotTimer)
+    snapshotTimer = null
+  }
   const lookingStopped = stopLook().catch((err: unknown) => log.warn('退出前停止看图失败', err))
   const embeddingStopped = stopEmbedding().catch((err: unknown) => log.warn('退出前停止向量索引失败', err))
   // 等着进回收站的删除马上执行，再让扫描停下（手上的文件写完），最后关数据库
-  void stopWatching()
+  const stopWorkers = stopWatching()
     .then(() => flushPendingDeletes())
     .catch((err: unknown) => log.error('退出前执行删除失败', err))
     .then(() => stopScanAndWait())
@@ -348,6 +414,20 @@ app.on('will-quit', (event) => {
     .then(() => lookingStopped)
     .then(() => embeddingStopped)
     .then(waitForAiCredentialSaves)
+  let deadlineTimer: ReturnType<typeof setTimeout> | null = null
+  const deadline = new Promise<void>((resolve) => {
+    deadlineTimer = setTimeout(() => {
+      log.warn(`退出前等待后台任务超时（${SHUTDOWN_TIMEOUT_MS}ms），强制继续关闭数据库`)
+      resolve()
+    }, SHUTDOWN_TIMEOUT_MS)
+  })
+  void Promise.race([stopWorkers, deadline])
+    .finally(() => {
+      if (deadlineTimer) {
+        clearTimeout(deadlineTimer)
+        deadlineTimer = null
+      }
+    })
     .then(() => shutdownDatabase(paths.lockFile))
     .catch((err: unknown) => log.error('关闭数据库失败', err))
     .finally(() => app.exit(0))

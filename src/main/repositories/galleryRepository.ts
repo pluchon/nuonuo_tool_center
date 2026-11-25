@@ -1,4 +1,6 @@
-import { and, eq, inArray, ne, or, sql, type SQL } from 'drizzle-orm'
+import { and, asc, between, desc, eq, gt, gte, inArray, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm'
+import type { MoreFilterDTO } from '@shared/api'
+import type { SortKey } from '@shared/settings'
 import { getDatabase } from '../db/client'
 import { col, likeEscape } from '../db/sqlUtil'
 import { image, imageFile, imageTag, libraryRoot, tag } from '../db/schema'
@@ -43,6 +45,106 @@ export interface GalleryFilter {
   tagIds?: number[]
   // 文件在其中任一目录里：整个源目录，或某个目录下以 prefix 开头的子路径
   dirs?: Array<{ rootId: number; prefix: string }>
+  // 更多筛选条件与排序方式（下推到 PG）
+  more?: MoreFilterDTO
+  sort?: SortKey
+  now?: Date
+}
+
+const ONE_MB = 1024 * 1024
+const TEN_MB = 10 * ONE_MB
+const THIRTY_DAYS_MS = 30 * 24 * 3600 * 1000
+
+// 将「更多筛选」条件转成 PG WHERE 子句，与服务层 matchMore 语义保持一致
+function moreConditions(more: MoreFilterDTO, base: Date): Array<SQL | undefined> {
+  const conds: Array<SQL | undefined> = []
+  if (more.fmt && more.fmt.length > 0) {
+    conds.push(inArray(image.format, more.fmt))
+  }
+  if (more.ori && more.ori.length > 0) {
+    const ratio = sql`(${image.width}::double precision / ${image.height})`
+    conds.push(
+      and(
+        gt(image.width, 0),
+        gt(image.height, 0),
+        or(
+          ...more.ori.map((v) =>
+            v === 'h'
+              ? sql`${ratio} > 1.05`
+              : v === 'v'
+                ? sql`${ratio} < 0.95`
+                : sql`${ratio} between 0.95 and 1.05`
+          )
+        )
+      )
+    )
+  }
+  if (more.res && more.res.length > 0) {
+    const longEdge = sql`greatest(coalesce(${image.width}, 0), coalesce(${image.height}, 0))`
+    conds.push(
+      and(
+        sql`${longEdge} > 0`,
+        or(
+          ...more.res.map((v) =>
+            v === '4k'
+              ? sql`${longEdge} >= 3840`
+              : v === 'fhd'
+                ? sql`${longEdge} >= 1920`
+                : sql`${longEdge} < 1000`
+          )
+        )
+      )
+    )
+  }
+  if (more.size && more.size.length > 0) {
+    conds.push(
+      or(
+        ...more.size.map((v) =>
+          v === 's' ? lt(image.byteSize, ONE_MB) : v === 'm' ? between(image.byteSize, ONE_MB, TEN_MB) : gt(image.byteSize, TEN_MB)
+        )
+      )
+    )
+  }
+  if (more.date && more.date.length > 0) {
+    const cutoff30d = new Date(base.getTime() - THIRTY_DAYS_MS)
+    const thisYearStart = new Date(base.getFullYear(), 0, 1)
+    const nextYearStart = new Date(base.getFullYear() + 1, 0, 1)
+    const lastYearStart = new Date(base.getFullYear() - 1, 0, 1)
+    conds.push(
+      or(
+        ...more.date.map((v) => {
+          if (v === 'none') {
+            return isNull(image.takenAt)
+          }
+          if (v === '30d') {
+            return gte(image.takenAt, cutoff30d)
+          }
+          if (v === 'ly') {
+            return and(gte(image.takenAt, lastYearStart), lt(image.takenAt, thisYearStart))
+          }
+          return and(gte(image.takenAt, thisYearStart), lt(image.takenAt, nextYearStart))
+        })
+      )
+    )
+  }
+  return conds
+}
+
+// 网格排序下推到 PG；末尾总是带 imageFile.id 保证同图多位置顺序稳定
+function orderColumns(sort: SortKey | undefined): SQL[] {
+  if (sort === 'new') {
+    return [desc(image.createTime), desc(image.id), asc(imageFile.id)]
+  }
+  if (sort === 'old') {
+    return [asc(image.createTime), asc(image.id), asc(imageFile.id)]
+  }
+  if (sort === 'taken') {
+    return [sql`${image.takenAt} desc nulls last`, desc(image.createTime), desc(image.id), asc(imageFile.id)]
+  }
+  if (sort === 'size') {
+    return [desc(image.byteSize), desc(image.createTime), desc(image.id), asc(imageFile.id)]
+  }
+  return [asc(imageFile.id)]
 }
 
 // 打过标签：至少有一个已确认的标签
@@ -129,13 +231,16 @@ export async function findGalleryRows(f: GalleryFilter): Promise<GalleryRow[]> {
     const tagHit = sql`exists (select 1 from ${imageTag} join ${tag} on ${col(tag.id)} = ${col(imageTag.tagId)} where ${col(imageTag.imageId)} = ${col(image.id)} and ${imageTag.deleteState} = 0 and ${imageTag.status} = 'ACCEPTED' and ${tag.deleteState} = 0 and lower(${tag.name}) like ${pattern})`
     conds.push(f.byTag ? sql`(${nameHit} or ${tagHit})` : nameHit)
   }
+  if (f.more) {
+    conds.push(...moreConditions(f.more, f.now ?? new Date()))
+  }
   return db
     .select(ROW_COLUMNS)
     .from(imageFile)
     .innerJoin(image, eq(image.id, imageFile.imageId))
     .innerJoin(libraryRoot, eq(libraryRoot.id, imageFile.rootId))
     .where(and(...conds))
-    .orderBy(imageFile.id)
+    .orderBy(...orderColumns(f.sort))
 }
 
 // 一张图的全部位置和图片本身（详情面板）

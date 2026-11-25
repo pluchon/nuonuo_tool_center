@@ -4,6 +4,7 @@ import type { DeleteResultVO, FileOpDoneVO, GalleryQueryDTO } from '@shared/api'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { pathKey } from '../../common/pathUtil'
+import { retryOnWinBusy } from '../../common/winFs'
 import { getDatabase } from '../../db/client'
 import {
   findBatch,
@@ -202,7 +203,7 @@ async function applyDelete(op: FileOpEntity, fileId: number): Promise<string | n
     }
     try {
       await verifyImageFile(op.fromPath, op.contentHash)
-      await deps.trash(op.fromPath)
+      await retryOnWinBusy(() => deps.trash(op.fromPath))
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
       // 只有源目录仍在线才能确认图片已消失。断开磁盘时保留原有索引。

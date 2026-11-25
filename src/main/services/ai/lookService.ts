@@ -90,6 +90,7 @@ let config: LookConfig | null = null
 let since: Date | null = null
 let active = 0
 let stopping = false
+let suspended = false
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 let polling = false
 let batchRegistration: Promise<void> | null = null
@@ -331,7 +332,7 @@ function lookError(err: unknown): { message: string; inputImageRejected?: true }
 
 // 开始干活：两个并发逐张实时看（马上就有结果），同时把超出 50 张的部分打成批量
 export function scheduleLook(): void {
-  if (!config || stopping || !cloudReady()) {
+  if (!config || stopping || suspended || !cloudReady()) {
     return
   }
   void fillRealtime().catch((err: unknown) => log.error('看图队列出错', err))
@@ -363,7 +364,7 @@ async function fillRealtime(): Promise<void> {
 
 // 排着的超出 50 张的部分、攒够的补图，打成批量交上去
 async function submitQueued(): Promise<void> {
-  if (!config?.canRun()) {
+  if (suspended || !config?.canRun()) {
     return
   }
   const queued = (await findOpenLookJobs()).filter((j) => j.status === 'QUEUED' && !j.remoteId && !runningIds.has(j.id) && !packingIds.has(j.id))
@@ -382,14 +383,14 @@ async function submitQueued(): Promise<void> {
 
 // 取下一张实时看；没有可做的返回 false
 async function pumpOne(): Promise<boolean> {
-  if (stopping || !config!.canRun()) {
+  if (stopping || suspended || !config!.canRun()) {
     return false
   }
   // 补图（优先级为负）只走批量，不在这里实时看；正在打包交批量的也不碰
   const pick = (j: AiJobEntity): boolean => j.status === 'QUEUED' && !j.remoteId && !runningIds.has(j.id) && !packingIds.has(j.id) && j.priority >= 0
   const next = (await findOpenLookJobs()).find(pick)
   // 查库期间别的地方可能已经拿走了它或占满了空位
-  if (stopping || !next || !pick(next) || active >= CONCURRENCY) {
+  if (stopping || suspended || !next || !pick(next) || active >= CONCURRENCY) {
     return false
   }
   active++
@@ -585,9 +586,27 @@ export async function changeLookBatchKey<T>(save: () => Promise<T>): Promise<T> 
   }
 }
 
+// 系统休眠时暂停轮询与新任务调度，不破坏进行中的状态
+export function pauseLookForSuspend(): void {
+  suspended = true
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+}
+
+// 系统唤醒后恢复看图队列与批量轮询
+export function resumeLookAfterSuspend(): void {
+  suspended = false
+  scheduleLook()
+  if (config && !stopping && cloudReady()) {
+    schedulePoll(BATCH_RETRY_MS)
+  }
+}
+
 // 过一会儿查一次批量任务
 function schedulePoll(ms: number): void {
-  if (pollTimer || stopping) {
+  if (pollTimer || stopping || suspended) {
     return
   }
   pollTimer = setTimeout(() => {
@@ -598,7 +617,7 @@ function schedulePoll(ms: number): void {
 
 // 一个批次查询失败时继续查其余批次，下一轮再试未取回的结果。
 async function pollBatches(): Promise<void> {
-  if (stopping || !cloudReady()) {
+  if (stopping || suspended || !cloudReady()) {
     return
   }
   if (polling) {

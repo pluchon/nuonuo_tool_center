@@ -47,3 +47,19 @@ export function normalizeRelDir(raw: unknown): string | null {
 export function pathKey(relPath: string): string {
   return relPath.toLowerCase()
 }
+
+// 拆分相对路径（同时兼容 \ 与 / 分隔符，去掉空段）
+export function splitWinPath(rel: string): string[] {
+  return rel.split(/[\\/]+/).filter(Boolean)
+}
+
+// 转成 POSIX 风格的相对路径（统一用 / 分隔）
+export function toPosixRel(rel: string): string {
+  return rel.replace(/\\/g, '/')
+}
+
+// 取路径最后一段文件名/目录名（兼容 \ 与 /）
+export function winBasename(rel: string): string {
+  const parts = splitWinPath(rel)
+  return parts.at(-1) ?? ''
+}

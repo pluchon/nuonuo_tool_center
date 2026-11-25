@@ -6,6 +6,7 @@ import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isWithin } from '../../common/pathUtil'
 import { publishExclusive } from '../../common/publishFile'
+import { retryOnWinBusy } from '../../common/winFs'
 import { getDatabase } from '../../db/client'
 import {
   findBatch,
@@ -104,7 +105,7 @@ function candidate(dir: string, name: string, n: number): string {
 // 目标写入成功才移除源文件。
 async function moveExclusive(from: string, to: string): Promise<void> {
   await publishExclusive(from, to)
-  await unlink(from)
+  await retryOnWinBusy(() => unlink(from))
 }
 
 // 在写入磁盘前记录候选路径。遇到同名文件时，先更新日志再尝试下一个名称。
@@ -117,7 +118,7 @@ async function transferInto(op: FileOpEntity, dir: string): Promise<string> {
     await updateOpToPath(db, op.id, to)
     try {
       if (op.opType === 'MOVE') await moveExclusive(op.fromPath, to)
-      else await copyFile(op.fromPath, to, constants.COPYFILE_EXCL)
+      else await retryOnWinBusy(() => copyFile(op.fromPath, to, constants.COPYFILE_EXCL))
       return to
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
