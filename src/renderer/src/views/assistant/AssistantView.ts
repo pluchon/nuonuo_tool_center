@@ -248,8 +248,13 @@ export default defineComponent({
 
     const onNewChat = async (): Promise<void> => {
       if (store.waiting || store.changingTurn) return
-      cancelRead()
       closeMenus()
+      if (store.currentId === null && store.messages.length === 0) {
+        await store.newChat()
+        inputRef.value?.focus()
+        return
+      }
+      cancelRead()
       picked.value = null
       await store.newChat()
       inputRef.value?.focus()

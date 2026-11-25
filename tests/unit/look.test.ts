@@ -333,7 +333,15 @@ describe('看图队列和 AI 建议', () => {
     vi.mocked(searchCall).mockRejectedValueOnce(inputRejected)
     await look.lookNow(1)
     await idle()
-    expect(await look.getLookState()).toEqual({ count: 0, activity: 'idle', rows: [], canCancel: false, needsApiKey: false })
+    expect(await look.getLookState()).toEqual({
+      count: 0,
+      activity: 'idle',
+      rows: [],
+      canCancel: false,
+      needsApiKey: false,
+      reorganizing: false,
+      activeImageIds: []
+    })
     expect(await sugg.listSuggestions(1)).toEqual([
       { key: 'r18Review', kind: 'r18Review', value: '云端内容审核未通过', origin: 'NONO' }
     ])
@@ -616,5 +624,125 @@ describe('看图队列和 AI 建议', () => {
       'who:刻晴',
       'src:https://new.example/2'
     ])
+  })
+
+  it('AI 建议单图重新识别：尾部排队不走批量、第④层注入反面参考、第 3 次起深度思考、原子替换且最多 5 次', async () => {
+    const { searchCall } = await import('../../src/main/services/ai/bailianClient')
+    const { pg } = getDatabase()
+    const refreshFile = join(source, 'refresh-suggest.jpg')
+    await sharp({ create: { width: 800, height: 600, channels: 3, background: { r: 90, g: 110, b: 150 } } }).jpeg().toFile(refreshFile)
+    const refreshHash = await hashFile(refreshFile)
+    const inserted = await pg.query<{ id: number }>(
+      `INSERT INTO image (content_hash, format, byte_size, width, height, thumb_ready, rating, rating_source, is_r18)
+       VALUES ($1, 'JPG', 1, 800, 600, 1, 'GENERAL', 'MODEL', false) RETURNING id`,
+      [refreshHash]
+    )
+    const imgId = Number(inserted.rows[0].id)
+    await pg.query(`INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES ($1, 1, 'refresh-suggest.jpg', now())`, [imgId])
+    await pg.query(
+      `INSERT INTO image_ai_result (image_id, kind, model, result, field_status) VALUES
+       ($1, 'IDENTIFY', 'm', '{"name":"初版误判","character":"错角色","work":"错作品","tags":["旧标签"],"source":"https://old.example/wrong","description":"初版描述"}',
+        '{"name":"PENDING","who":"PENDING","work":"PENDING","tag:旧标签":"PENDING","src":"PENDING"}'),
+       ($1, 'ORGANIZE', 'm', '{"dir":"示例目录"}', '{"dir":"PENDING"}')`,
+      [imgId]
+    )
+
+    // R-18 与未分级图均被拒绝
+    await expect(look.refreshSuggestion(3)).rejects.toThrow('R-18')
+    expect(await look.getSuggestionRefreshStatus(imgId)).toEqual({ refreshCount: 0, maxRefreshes: 5, active: false })
+
+    // 先拍一次普通看图记录 instructions 基准
+    calls.length = 0
+    vi.mocked(searchCall).mockImplementation(async (meta) => {
+      recordSearchCall(meta)
+      return {
+        text: '```json\n{"name":"第一轮结果","character":"刻晴","work":"原神","tags":["紫发"],"source":"https://example.com/r1","description":"第一轮描述"}\n```',
+        sources: [{ url: 'https://example.com/r1' }],
+        usage: {}
+      } as never
+    })
+    await look.lookNow(1)
+    await idle()
+    const baselineInstructions = calls[0].instructions
+
+    // 若本次重看请求失败，原有待确认建议必须保留不被删除
+    calls.length = 0
+    vi.mocked(searchCall).mockRejectedValueOnce(Object.assign(new Error('Request timed out.'), { name: 'APIConnectionTimeoutError' }))
+    const failedSt = await look.refreshSuggestion(imgId)
+    expect(failedSt).toEqual({ refreshCount: 1, maxRefreshes: 5, active: true })
+    await idle()
+    expect((await sugg.listSuggestions(imgId)).map((s) => `${s.kind}:${s.value}`)).toContain('name:初版误判')
+    // 失败任务不计入已成功/排队的刷新次数
+    expect(await look.getSuggestionRefreshStatus(imgId)).toEqual({ refreshCount: 0, maxRefreshes: 5, active: false })
+
+    // 第 1 次有效刷新：带反面参考（不改 instructions）、原子替换旧 IDENTIFY 建议并保留 ORGANIZE
+    calls.length = 0
+    const beforeSuggested = suggested
+    vi.mocked(searchCall).mockImplementation(async (meta) => {
+      recordSearchCall(meta)
+      return {
+        text: '```json\n{"name":"第1次刷新","character":"刻晴","work":"原神","tags":["双马尾"],"source":"https://example.com/r1","description":"新描述"}\n```',
+        sources: [{ url: 'https://example.com/r1' }],
+        usage: {}
+      } as never
+    })
+    const st1 = await look.refreshSuggestion(imgId)
+    expect(st1).toEqual({ refreshCount: 1, maxRefreshes: 5, active: true })
+    await idle()
+    expect(calls).toHaveLength(1)
+    expect(calls[0].instructions).toBe(baselineInstructions)
+    expect(calls[0].enableThinking).toBe(false)
+    expect(calls[0].text).toContain('[上一次识别结果（用户不满意，可能存在误判或漏判，仅作反面参考，切勿盲从，请独立重新观察画面并核实）]')
+    expect(calls[0].text).toContain('- 名字：初版误判')
+    expect(calls[0].text).toContain('- 角色：错角色')
+    expect(suggested).toBeGreaterThan(beforeSuggested)
+
+    const afterR1 = await sugg.listSuggestions(imgId)
+    expect(afterR1.map((s) => `${s.kind}:${s.value}`)).toEqual([
+      'name:第1次刷新',
+      'tag:双马尾',
+      'who:刻晴',
+      'work:原神',
+      'src:https://example.com/r1',
+      'dir:示例目录'
+    ])
+    expect(await look.getSuggestionRefreshStatus(imgId)).toEqual({ refreshCount: 1, maxRefreshes: 5, active: false })
+
+    // 第 2 次刷新：仍不强制思考
+    calls.length = 0
+    vi.mocked(searchCall).mockImplementation(async (meta) => {
+      recordSearchCall(meta)
+      return {
+        text: '```json\n{"name":"第2次刷新","character":"刻晴","work":"原神","tags":["雷系"],"source":"","description":""}\n```',
+        sources: [],
+        usage: {}
+      } as never
+    })
+    await look.refreshSuggestion(imgId)
+    await idle()
+    expect(calls[0].enableThinking).toBe(false)
+    expect(calls[0].text).toContain('- 名字：第1次刷新')
+
+    // 第 3 次刷新：直接开启深度思考 (enableThinking: true, thinkingBudget: 2048, search: true)，单次完成不二次升级
+    for (const round of [3, 4, 5]) {
+      calls.length = 0
+      vi.mocked(searchCall).mockImplementation(async (meta) => {
+        recordSearchCall(meta)
+        return {
+          text: `\`\`\`json\n{"name":"第${round}次刷新","character":"","work":"","tags":["深度核查"],"source":"","description":"","needs_thinking":true}\n\`\`\``,
+          sources: [],
+          usage: {}
+        } as never
+      })
+      const st = await look.refreshSuggestion(imgId)
+      expect(st).toEqual({ refreshCount: round, maxRefreshes: 5, active: true })
+      await idle()
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ enableThinking: true, thinkingBudget: 2048, search: true })
+    }
+
+    expect(await look.getSuggestionRefreshStatus(imgId)).toEqual({ refreshCount: 5, maxRefreshes: 5, active: false })
+    // 超过 5 次上限后拒绝
+    await expect(look.refreshSuggestion(imgId)).rejects.toMatchObject({ code: 'CONFLICT' })
   })
 })

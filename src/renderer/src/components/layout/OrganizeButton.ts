@@ -1,4 +1,5 @@
 import { computed, defineComponent, onMounted } from 'vue'
+import { useLookStore } from '@/stores/look'
 import { useOrganizeStore } from '@/stores/organize'
 import OrganizeDialog from '@/components/dialogs/OrganizeDialog.vue'
 
@@ -18,6 +19,7 @@ export default defineComponent({
   components: { OrganizeDialog },
   setup() {
     const org = useOrganizeStore()
+    const look = useLookStore()
     onMounted(() => {
       void org.init()
     })
@@ -29,8 +31,8 @@ export default defineComponent({
       return LABELS[org.phase]
     })
     const busy = computed(() => org.phase === 'LOOKING' || org.phase === 'PLANNING' || org.phase === 'ASSIGNING' || org.phase === 'FOLLOWING')
-    // 还没开始整理、本地分级还在跑：先等它判完
-    const waiting = computed(() => org.phase === 'IDLE' && org.rating.running)
+    // 还没开始整理、本地分级或重新整理还在跑：先等它完成
+    const waiting = computed(() => org.phase === 'IDLE' && (org.rating.running || org.reorganizeBusy || look.reorganizing))
     return { org, label, busy, waiting }
   }
 })

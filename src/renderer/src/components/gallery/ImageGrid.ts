@@ -4,6 +4,7 @@ import { thumbUrl } from '@/api/gallery'
 import { startNativeDrag } from '@/api/files'
 import { hasInteractiveModal } from '@/components/dialogs/modal'
 import { useGalleryStore } from '@/stores/gallery'
+import { useLookStore } from '@/stores/look'
 import { useToastStore } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
 import { useViewerStore } from '@/stores/viewer'
@@ -37,11 +38,13 @@ export default defineComponent({
   components: { GridScrollbar, GridRow },
   setup() {
     const gallery = useGalleryStore()
+    const look = useLookStore()
     const toast = useToastStore()
     const settings = useSettingsStore()
     const viewer = useViewerStore()
     const viewStore = useViewStore()
     const suggest = useSuggestStore()
+    const aiView = computed(() => viewStore.page === 'gallery' && viewStore.view === 'ai')
     const gridRef = ref<HTMLElement | null>(null)
     const galleryWidth = ref(0)
 
@@ -315,6 +318,6 @@ export default defineComponent({
       }
     )
 
-    return { gallery, viewer, suggest, gridRef, groups, virtual, visibleRows, mountRow, unmountRow, item, masked, thumbUrl, onTileClick, onTileDown, onGridMove, onDragStart, onWheel }
+    return { gallery, look, aiView, viewer, suggest, gridRef, groups, virtual, visibleRows, mountRow, unmountRow, item, masked, thumbUrl, onTileClick, onTileDown, onGridMove, onDragStart, onWheel }
   }
 })

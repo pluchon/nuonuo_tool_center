@@ -16,7 +16,7 @@ import { retryOnWinBusy } from '../../common/winFs'
 import { getDatabase } from '../../db/client'
 import { col } from '../../db/sqlUtil'
 import { aiJob, image, imageAiResult, imageFile, imageTag, libraryRoot } from '../../db/schema'
-import { LOOK_CONTENT_REJECTED } from '../../repositories/aiResultRepository'
+import { hasPendingSuggestion, LOOK_CONTENT_REJECTED } from '../../repositories/aiResultRepository'
 import { relocateImageFile, retireRowsAt } from '../../repositories/fileOpRepository'
 import { findActiveRootsByKind } from '../../repositories/libraryRootRepository'
 import { verifyImageFile } from '../fileOps/fileOpRecovery'
@@ -24,7 +24,7 @@ import { enqueue, trashPath } from '../fileOps/fileOpsService'
 import { isRatingBusy } from '../rating/ratingService'
 import { getScanState } from '../scan/scanService'
 import { scheduleLook } from './lookService'
-import { isOrganizing } from './organizeService'
+import { getOrganizeState, isOrganizing } from './organizeService'
 
 const log = getLogger('reorganize')
 
@@ -58,25 +58,13 @@ const hasAcceptedTagSql = sql`exists (
     and ${col(imageTag.status)} = 'ACCEPTED'
 )`
 
-const hasMetaTextSql = sql`(
-  coalesce(${col(image.displayName)}, '') <> ''
-  or coalesce(${col(image.description)}, '') <> ''
-  or coalesce(${col(image.source)}, '') <> ''
-)`
-
-const hasAiResultSql = sql`exists (
-  select 1 from ${imageAiResult}
-  where ${col(imageAiResult.imageId)} = ${col(image.id)}
-    and ${col(imageAiResult.deleteState)} = 0
-    and ${col(imageAiResult.kind)} in ('IDENTIFY', 'ORGANIZE')
-)`
-
-// 已整理图片：未删除、非 R-18、有至少一个活跃 NORMAL 文件，且满足四项整理状态之一
+// 已整理图片：未删除、非 R-18、有活跃 NORMAL 文件、无待确认 AI 建议，且已确认入库（有已采用标签或在类目录中）
 const organizedWhereSql = sql`(
   ${col(image.deleteState)} = 0
   and ${col(image.isR18)} = false
   and ${hasNormalFileSql}
-  and (${inCategorySql} or ${hasAcceptedTagSql} or ${hasMetaTextSql} or ${hasAiResultSql})
+  and not ${hasPendingSuggestion}
+  and (${hasAcceptedTagSql} or ${inCategorySql})
 )`
 
 const cloudAllowedSql = sql`(
@@ -133,9 +121,43 @@ async function trashCategoryFile(catAbs: string, catRootPath: string): Promise<b
   }
 }
 
-function assertIdleForReorganize(): void {
-  if (isOrganizing() || getScanState().progress !== null) {
-    throw new BizError('CONFLICT', '正在扫描或一键整理，请稍后再试')
+let resettingOrganized = false
+
+export function isResettingOrganized(): boolean {
+  return resettingOrganized
+}
+
+async function isReorganizeRelookBusy(): Promise<boolean> {
+  const { pg } = getDatabase()
+  const res = await pg.query<{ busy: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM ai_job
+       WHERE kind = 'LOOK'
+         AND delete_state = 0
+         AND status IN ('QUEUED', 'RUNNING')
+         AND payload->>'reorganize' = 'true'
+     ) AS busy`
+  )
+  return res.rows[0]?.busy === true
+}
+
+export async function isReorganizeBusy(): Promise<boolean> {
+  return resettingOrganized || (await isReorganizeRelookBusy())
+}
+
+function assertIdleBaseForReorganize(): void {
+  if (isOrganizing() || getOrganizeState().phase !== 'IDLE') {
+    throw new BizError('CONFLICT', '正在一键整理，请先完成或停止')
+  }
+  if (getScanState().progress !== null) {
+    throw new BizError('CONFLICT', '正在扫描，请稍后再试')
+  }
+}
+
+async function assertIdleForReorganize(): Promise<void> {
+  assertIdleBaseForReorganize()
+  if (await isReorganizeBusy()) {
+    throw new BizError('CONFLICT', '正在重新整理，请先等待完成或停止当前队列')
   }
 }
 
@@ -197,46 +219,52 @@ interface OrganizedFileRow {
 
 // 模式 1：归回源目录（不调用任何大模型，安全保留唯一原图副本）
 export async function resetOrganizedToSource(): Promise<ReorganizeResetResultVO> {
-  assertIdleForReorganize()
-  return enqueue(async () => {
-    assertIdleForReorganize()
-    const { db, pg } = getDatabase()
-    const res = await pg.query<{
-      image_id: number
-      content_hash: string
-      file_id: number
-      root_id: number
-      root_kind: 'SOURCE' | 'CATEGORY'
-      root_path: string
-      rel_path: string
-    }>(
-      `SELECT i.id AS image_id, i.content_hash, f.id AS file_id, f.root_id, r.kind AS root_kind, r.path AS root_path, f.rel_path
-         FROM image i
-         JOIN image_file f ON f.image_id = i.id AND f.delete_state = 0 AND f.status = 'NORMAL'
-         JOIN library_root r ON r.id = f.root_id AND r.delete_state = 0
-        WHERE i.delete_state = 0
-          AND i.is_r18 = false
-          AND (
-            EXISTS (
-              SELECT 1 FROM image_file fc
-              JOIN library_root rc ON rc.id = fc.root_id
-              WHERE fc.image_id = i.id AND fc.delete_state = 0 AND fc.status = 'NORMAL'
-                AND rc.delete_state = 0 AND rc.kind = 'CATEGORY'
-            )
-            OR EXISTS (
-              SELECT 1 FROM image_tag it
-              WHERE it.image_id = i.id AND it.delete_state = 0 AND it.status = 'ACCEPTED'
-            )
-            OR coalesce(i.display_name, '') <> ''
-            OR coalesce(i.description, '') <> ''
-            OR coalesce(i.source, '') <> ''
-            OR EXISTS (
+  await assertIdleForReorganize()
+  resettingOrganized = true
+  try {
+    return await enqueue(async () => {
+      assertIdleBaseForReorganize()
+      if (await isReorganizeRelookBusy()) {
+        throw new BizError('CONFLICT', '正在重新整理，请先等待完成或停止当前队列')
+      }
+      const { db, pg } = getDatabase()
+      const res = await pg.query<{
+        image_id: number
+        content_hash: string
+        file_id: number
+        root_id: number
+        root_kind: 'SOURCE' | 'CATEGORY'
+        root_path: string
+        rel_path: string
+      }>(
+        `SELECT i.id AS image_id, i.content_hash, f.id AS file_id, f.root_id, r.kind AS root_kind, r.path AS root_path, f.rel_path
+           FROM image i
+           JOIN image_file f ON f.image_id = i.id AND f.delete_state = 0 AND f.status = 'NORMAL'
+           JOIN library_root r ON r.id = f.root_id AND r.delete_state = 0
+          WHERE i.delete_state = 0
+            AND i.is_r18 = false
+            AND NOT EXISTS (
               SELECT 1 FROM image_ai_result a
-              WHERE a.image_id = i.id AND a.delete_state = 0 AND a.kind IN ('IDENTIFY', 'ORGANIZE')
+              WHERE a.image_id = i.id AND a.delete_state = 0
+                AND EXISTS (
+                  SELECT 1 FROM jsonb_each_text(coalesce(a.field_status, '{}'::jsonb)) AS fs
+                  WHERE fs.value = 'PENDING' AND (NOT i.is_r18 OR fs.key <> 'dir')
+                )
             )
-          )
-        ORDER BY i.id, f.id`
-    )
+            AND (
+              EXISTS (
+                SELECT 1 FROM image_tag it
+                WHERE it.image_id = i.id AND it.delete_state = 0 AND it.status = 'ACCEPTED'
+              )
+              OR EXISTS (
+                SELECT 1 FROM image_file fc
+                JOIN library_root rc ON rc.id = fc.root_id
+                WHERE fc.image_id = i.id AND fc.delete_state = 0 AND fc.status = 'NORMAL'
+                  AND rc.delete_state = 0 AND rc.kind = 'CATEGORY'
+              )
+            )
+          ORDER BY i.id, f.id`
+      )
 
     const byImage = new Map<number, { contentHash: string; files: OrganizedFileRow[] }>()
     for (const r of res.rows) {
@@ -404,13 +432,16 @@ export async function resetOrganizedToSource(): Promise<ReorganizeResetResultVO>
     log.info(
       `归回源目录：重置 ${resetImageIds.length} 张，移回源目录 ${movedToSource} 张，清理副本 ${removedCopies} 份，跳过 ${skippedOnlyInCategory} 张`
     )
-    return {
-      resetImages: resetImageIds.length,
-      removedCopies,
-      movedToSource,
-      skippedOnlyInCategory
-    }
-  })
+      return {
+        resetImages: resetImageIds.length,
+        removedCopies,
+        movedToSource,
+        skippedOnlyInCategory
+      }
+    })
+  } finally {
+    resettingOrganized = false
+  }
 }
 
 // 模式 2：已整理图片携带已有信息上下文重新看图，结果进“AI 建议”
@@ -418,7 +449,7 @@ export async function startReorganizeRelook(): Promise<ReorganizeRelookResultVO>
   if (!readCloudCredentials().dashscopeApiKey) {
     throw new BizError('DEPENDENCY_FAILED', LOOK_KEY_HINT)
   }
-  assertIdleForReorganize()
+  await assertIdleForReorganize()
   if (isRatingBusy()) {
     throw new BizError('CONFLICT', '本地分级还在进行，判完才能重新整理')
   }

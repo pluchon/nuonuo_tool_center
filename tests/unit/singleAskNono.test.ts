@@ -59,6 +59,7 @@ type AssistantStoreModule = {
     references: AiImageReference[]
     usingGalleryReferences: boolean
     enter: () => Promise<void>
+    newChat: () => Promise<void>
     addReferences: (items: AiImageReference[]) => void
   }
 }
@@ -167,5 +168,36 @@ describe('single ask nono session continuity (useAssistantStore)', () => {
 
     expect(store.references).toEqual([first, second])
     expect(store.usingGalleryReferences).toBe(true)
+  })
+
+  it('shows toast and keeps ideas intact when clicking newChat() on an already-empty new conversation', async () => {
+    const store = useAssistantStore()
+    store.currentId = null
+    store.messages = []
+    store.ideas = ['保留的示例 1', '保留的示例 2']
+
+    await store.newChat()
+
+    expect(mockApi.toastShow).toHaveBeenCalledTimes(1)
+    expect(mockApi.toastShow).toHaveBeenCalledWith('已经是新对话了')
+    expect(mockApi.fetchIdeas).not.toHaveBeenCalled()
+    expect(store.ideas).toEqual(['保留的示例 1', '保留的示例 2'])
+    expect(store.currentId).toBeNull()
+  })
+
+  it('transitions to currentId = null and refreshes ideas when clicking newChat() inside an existing conversation', async () => {
+    const store = useAssistantStore()
+    store.currentId = 42
+    store.messages = [makeMessage(1, '已有消息')]
+    store.ideas = ['旧示例']
+    mockApi.fetchIdeas.mockResolvedValue(['新示例 1', '新示例 2'])
+
+    await store.newChat()
+
+    expect(store.currentId).toBeNull()
+    expect(store.messages).toEqual([])
+    expect(mockApi.fetchIdeas).toHaveBeenCalledTimes(1)
+    expect(store.ideas).toEqual(['新示例 1', '新示例 2'])
+    expect(mockApi.toastShow).not.toHaveBeenCalled()
   })
 })

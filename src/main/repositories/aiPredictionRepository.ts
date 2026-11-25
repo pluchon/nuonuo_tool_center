@@ -2,9 +2,18 @@ import { getDatabase } from '../db/client'
 
 export interface PredictionContextRow {
   saved: string | null
-  ids: number[]
+  ids: number[] | null
   question: string
   reply: string
+  how: string | null
+  allAlreadyShown: boolean
+}
+
+export interface RecentTurnRow {
+  role: 'user' | 'assistant'
+  text: string
+  how?: string | null
+  count?: number
 }
 
 export async function findPredictionContext(
@@ -13,8 +22,19 @@ export async function findPredictionContext(
   scopeName: string | null
 ): Promise<PredictionContextRow | null> {
   const { rows: [row] } = await getDatabase().pg.query<PredictionContextRow>(
-    `select a.content->>'nextPrediction' as saved, a.content->'imageIds' as ids, left(q.content->>'text',150) as question,
-      left(a.content->>'text',160) as reply
+    `select a.content->>'nextPrediction' as saved,
+      a.content->'imageIds' as ids,
+      left(coalesce(q.content->>'text', ''), 240) as question,
+      left(coalesce(a.content->>'text', ''), 360) as reply,
+      a.content->>'how' as how,
+      (
+        coalesce((a.content->>'allAlreadyShown')::boolean, false)
+        or (
+          a.content->>'how' is not null
+          and coalesce(jsonb_array_length(case when jsonb_typeof(a.content->'imageIds') = 'array' then a.content->'imageIds' else '[]'::jsonb end), 0) = 0
+          and coalesce(a.content->>'text', '') ~ '(展示过|都看过|没有其他|没有别的|全展示)'
+        )
+      ) as "allAlreadyShown"
     from ai_message a join ai_conversation c on c.id=a.conversation_id and c.delete_state=0
     join lateral (select content from ai_message where conversation_id=c.id and role='USER' and delete_state=0 and id<a.id order by id desc limit 1) q on true
     where c.id=$1 and a.id=$2 and a.delete_state=0 and a.role='ASSISTANT'
@@ -24,6 +44,47 @@ export async function findPredictionContext(
     [conversationId, replyId, scopeName]
   )
   return row ?? null
+}
+
+// 获取截至指定回复的最近若干条普通对话轮次，严格排除任何开启 R-18 的提问及其配对回复。
+export async function findRecentTurns(
+  conversationId: number,
+  upToReplyId: number,
+  limit = 4
+): Promise<RecentTurnRow[]> {
+  const { rows } = await getDatabase().pg.query<{
+    role: 'USER' | 'ASSISTANT'
+    text: string
+    how: string | null
+    count: number | null
+  }>(
+    `select m.role,
+      case when m.role = 'USER' then left(coalesce(m.content->>'text', ''), 240)
+           else left(coalesce(m.content->>'text', ''), 360) end as text,
+      case when m.role = 'ASSISTANT' then m.content->>'how' else null end as how,
+      case when m.role = 'ASSISTANT' and jsonb_typeof(m.content->'imageIds') = 'array'
+           then jsonb_array_length(m.content->'imageIds')::int else null end as count
+    from ai_message m
+    left join lateral (
+      select u.content from ai_message u
+      where u.conversation_id = m.conversation_id and u.role = 'USER' and u.delete_state = 0 and u.id < m.id
+      order by u.id desc limit 1
+    ) q on m.role = 'ASSISTANT'
+    where m.conversation_id = $1
+      and m.delete_state = 0
+      and m.id <= $2
+      and m.role in ('USER', 'ASSISTANT')
+      and not coalesce((m.content->>'includeR18')::boolean, false)
+      and (m.role = 'USER' or (q.content is not null and not coalesce((q.content->>'includeR18')::boolean, false)))
+    order by m.id desc
+    limit $3`,
+    [conversationId, upToReplyId, limit]
+  )
+  return rows.reverse().map((r) =>
+    r.role === 'USER'
+      ? { role: 'user', text: r.text }
+      : { role: 'assistant', text: r.text, how: r.how, ...(r.count !== null ? { count: r.count } : {}) }
+  )
 }
 
 export async function findRecentUserTexts(

@@ -1,4 +1,4 @@
-import type { AiSuggestionVO, LookStateVO, SuggestionBatchVO } from '@shared/api'
+import type { AiSuggestionVO, LookStateVO, SuggestionBatchVO, SuggestionRefreshStatusVO } from '@shared/api'
 import { unwrap } from './request'
 
 // 看图队列的当前状态
@@ -59,4 +59,12 @@ export function fetchAssistPrompt(imageId: number): Promise<string> {
 // 把其他 AI 回的结果交给诺诺整理，返回整理出几项
 export function importAssist(imageId: number, raw: unknown): Promise<number> {
   return unwrap(window.api.suggestion.assistImport(imageId, raw))
+}
+
+export function refreshSuggestion(imageId: number): Promise<SuggestionRefreshStatusVO> {
+  return unwrap(window.api.look.refreshSuggestion(imageId))
+}
+
+export function fetchSuggestionRefreshStatus(imageId: number): Promise<SuggestionRefreshStatusVO> {
+  return unwrap(window.api.look.refreshStatus(imageId))
 }

@@ -4,7 +4,13 @@
 import { createReadStream } from 'node:fs'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { LookStateVO } from '@shared/api'
+import {
+  LOOK_KEY_HINT,
+  SUGGESTION_REFRESH_DEEP_AT,
+  SUGGESTION_REFRESH_MAX,
+  type LookStateVO,
+  type SuggestionRefreshStatusVO
+} from '@shared/api'
 import { BAILIAN_CONFIG, ORGANIZE_COST, readCloudCredentials } from '../../config/cloudConfig'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
@@ -16,12 +22,15 @@ import {
   attachLookBatch,
   cancelOpenLookJobs,
   completeLookJob,
+  countSuggestionRefreshes,
   enqueueNewLookJobs,
+  enqueueSuggestionRefresh,
   failLookBatch,
   findExistingLookContext,
   findLookBriefs,
   findLookInfo,
   findOpenLookJobs,
+  findPendingIdentifyAttempt,
   insertLookJobs,
   lookBatchFileId,
   LOOK_BACKLOG_PRIORITY,
@@ -160,9 +169,12 @@ export async function getLookState(): Promise<LookStateVO> {
   }
   const canCancel = jobs.some((j) => (j.status === 'QUEUED' || j.status === 'FAILED') && !j.remoteId && !runningIds.has(j.id) && !packingIds.has(j.id))
   // 队列预览只取前几行，底栏状态要包含后面的任务。
+  const activeJobs = jobs.filter((j) => j.status === 'QUEUED' || j.status === 'RUNNING')
+  const activeImageIds = [...new Set(activeJobs.map((j) => j.imageId).filter((id): id is number => id !== null))]
+  const reorganizing = activeJobs.some((j) => (j.payload as { reorganize?: boolean } | null)?.reorganize === true)
   const working = jobs.some(j => j.status !== 'FAILED' && (runningIds.has(j.id) || packingIds.has(j.id) || j.remoteId || lookBatchFileId(j)))
   const activity = working ? 'working' : jobs.some(j => j.status !== 'FAILED') ? 'queued' : 'idle'
-  return { count: jobs.length, activity, rows, canCancel, needsApiKey: !cloudReady() }
+  return { count: jobs.length, activity, rows, canCancel, needsApiKey: !cloudReady(), reorganizing, activeImageIds }
 }
 
 // 密钥恢复后继续处理原队列，包括已经提交、等待查询结果的批次。
@@ -250,7 +262,8 @@ async function saveLookResult(
   model: string,
   usage: unknown,
   knownTags?: Map<string, string>,
-  precomputed?: { existing?: string[]; fields?: SuggestionFields }
+  precomputed?: { existing?: string[]; fields?: SuggestionFields },
+  supersedePendingIdentify = false
 ): Promise<boolean> {
   if (stopping) return false
   let fields: SuggestionFields
@@ -276,7 +289,12 @@ async function saveLookResult(
   if (!fields.character && clues.character) {
     fields.character = clues.character
   }
-  return completeLookJob(jobId, { imageId, kind: 'IDENTIFY', origin: 'NONO', model, result: fields, fieldStatus: pendingStatus(fields), usage: usage ?? null }, fields.description)
+  return completeLookJob(
+    jobId,
+    { imageId, kind: 'IDENTIFY', origin: 'NONO', model, result: fields, fieldStatus: pendingStatus(fields), usage: usage ?? null },
+    fields.description,
+    supersedePendingIdentify
+  )
 }
 
 type VisualHints = NonNullable<Parameters<typeof localClues>[2]>['visualHints']
@@ -317,8 +335,12 @@ async function lookOne(job: AiJobEntity): Promise<void> {
     ? info.visualFeatures
     : await getVisualHintsForLook(info.id)
   const clues = cluesOf(info, visualHints)
-  const isReorganize = (job.payload as { reorganize?: boolean } | null)?.reorganize === true
+  const payload = (job.payload ?? null) as { reorganize?: boolean; refreshSuggestion?: boolean; forceThinking?: boolean } | null
+  const isReorganize = payload?.reorganize === true
+  const isRefreshSuggestion = payload?.refreshSuggestion === true
+  const forceThinking = isRefreshSuggestion && payload?.forceThinking === true
   const existingContext = isReorganize ? await findExistingLookContext(info.id) : null
+  const refreshAttempt = isRefreshSuggestion ? await findPendingIdentifyAttempt(info.id) : null
   const instructions = await realtimeLookInstructions()
   if (!(await allowedLookImages([info.id])).has(info.id)) {
     await updateJob(job.id, { status: 'CANCELLED', finishedAt: new Date() })
@@ -331,10 +353,11 @@ async function lookOne(job: AiJobEntity): Promise<void> {
       model: BAILIAN_CONFIG.chatModel,
       imageId: info.id,
       instructions,
-      text: lookTail(clues, { existingContext }),
+      text: lookTail(clues, { existingContext, refreshAttempt }),
       imageDataUrl: url,
       search: !clues.photo,
-      enableThinking: false,
+      enableThinking: forceThinking,
+      ...(forceThinking ? { thinkingBudget: 2048 } : {}),
       timeoutMs: TIMEOUT_MS,
       signal: realtimeAbort.signal
     })
@@ -353,14 +376,14 @@ async function lookOne(job: AiJobEntity): Promise<void> {
       existing = existingMap.get(info.id) ?? []
       const preliminaryFields = normalizeFields(raw1, { canonical, existing })
       finalFields = preliminaryFields
-      if (shouldEscalateThinking(raw1, preliminaryFields, clues, visualHints) && !stopping) {
+      if (!forceThinking && shouldEscalateThinking(raw1, preliminaryFields, clues, visualHints) && !stopping) {
         try {
           const res2 = await searchCall({
             kind: 'look',
             model: BAILIAN_CONFIG.chatModel,
             imageId: info.id,
             instructions,
-            text: lookTail(clues, { existingContext, thinkingRetry: true }),
+            text: lookTail(clues, { existingContext, refreshAttempt, thinkingRetry: true }),
             imageDataUrl: url,
             search: true,
             enableThinking: true,
@@ -385,7 +408,20 @@ async function lookOne(job: AiJobEntity): Promise<void> {
       }
     }
 
-    if (await saveLookResult(job.id, info.id, finalText, clues, finalSources, BAILIAN_CONFIG.chatModel, finalUsage, canonical, canonical ? { existing, fields: finalFields } : undefined)) {
+    if (
+      await saveLookResult(
+        job.id,
+        info.id,
+        finalText,
+        clues,
+        finalSources,
+        BAILIAN_CONFIG.chatModel,
+        finalUsage,
+        canonical,
+        canonical ? { existing, fields: finalFields } : undefined,
+        isRefreshSuggestion
+      )
+    ) {
       config?.onSuggested()
     }
   } catch (err) {
@@ -458,8 +494,9 @@ async function submitQueued(): Promise<void> {
     return
   }
   const queued = (await findOpenLookJobs()).filter((j) => j.status === 'QUEUED' && !j.remoteId && !runningIds.has(j.id) && !packingIds.has(j.id))
-  const normal = queued.filter((j) => j.priority >= 0)
-  const batch = [...queued.filter((j) => j.priority === LOOK_BATCH_PRIORITY), ...normal.slice(BATCH_OVER).filter((j) => j.priority === 0)]
+  const isRefreshJob = (j: AiJobEntity): boolean => (j.payload as { refreshSuggestion?: boolean } | null)?.refreshSuggestion === true
+  const normal = queued.filter((j) => j.priority >= 0 && !isRefreshJob(j))
+  const batch = [...queued.filter((j) => j.priority === LOOK_BATCH_PRIORITY && !isRefreshJob(j)), ...normal.slice(BATCH_OVER).filter((j) => j.priority === 0)]
   if (batch.length > 0) {
     await submitBatches(batch)
   }
@@ -544,6 +581,51 @@ export async function cancelAllLooks(): Promise<number> {
   const n = await cancelOpenLookJobs([...runningIds, ...packingIds])
   await pushState()
   return n
+}
+
+export async function getSuggestionRefreshStatus(imageId: number): Promise<SuggestionRefreshStatusVO> {
+  if (!Number.isInteger(imageId) || imageId <= 0) {
+    throw new BizError('BAD_REQUEST', 'id 不对')
+  }
+  const [refreshCount, open] = await Promise.all([countSuggestionRefreshes(imageId), findOpenLookJobs()])
+  const active = open.some((j) => j.imageId === imageId && (j.status === 'QUEUED' || j.status === 'RUNNING'))
+  return { refreshCount, maxRefreshes: SUGGESTION_REFRESH_MAX, active }
+}
+
+export async function refreshSuggestion(imageId: number): Promise<SuggestionRefreshStatusVO> {
+  if (!Number.isInteger(imageId) || imageId <= 0) {
+    throw new BizError('BAD_REQUEST', 'id 不对')
+  }
+  if (!cloudReady()) {
+    throw new BizError('DEPENDENCY_FAILED', LOOK_KEY_HINT)
+  }
+  const info = await findLookInfo(imageId)
+  if (!info) {
+    throw new BizError('NOT_FOUND', '这张图已经不在图库里了')
+  }
+  if (info.isR18) {
+    throw new BizError('CONFLICT', 'R-18 图不发给云端')
+  }
+  if (!info.cloudAllowed) {
+    throw new BizError('CONFLICT', '本地分级还没判完这张，判完再看')
+  }
+  const open = await findOpenLookJobs()
+  if (open.some((j) => j.imageId === imageId && (j.status === 'QUEUED' || j.status === 'RUNNING'))) {
+    throw new BizError('CONFLICT', '这张图正在队列中，请稍候')
+  }
+  const used = await countSuggestionRefreshes(imageId)
+  if (used >= SUGGESTION_REFRESH_MAX) {
+    throw new BizError('CONFLICT', `每张图最多重新识别 ${SUGGESTION_REFRESH_MAX} 次`)
+  }
+  const refreshRound = used + 1
+  const forceThinking = refreshRound >= SUGGESTION_REFRESH_DEEP_AT
+  const enqueued = await enqueueSuggestionRefresh(imageId, refreshRound, forceThinking)
+  if (!enqueued) {
+    throw new BizError('CONFLICT', '这张图正在队列中，请稍候')
+  }
+  await pushState()
+  scheduleLook()
+  return getSuggestionRefreshStatus(imageId)
 }
 
 // ===== 批量推理 =====

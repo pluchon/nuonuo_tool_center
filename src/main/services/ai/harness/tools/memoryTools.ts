@@ -1,4 +1,5 @@
 import { insertMemory } from '../../../../repositories/aiConversationRepository'
+import { sanitizePrediction } from '../../nextPrediction'
 import { defineTool } from '../toolRegistry'
 
 export const replyWithFollowupTool = defineTool({
@@ -10,18 +11,22 @@ export const replyWithFollowupTool = defineTool({
     required: ['answer', 'suggestion'],
     properties: {
       answer: { type: 'string', description: '本轮给用户的回答。' },
-      suggestion: { type: 'string', description: '用户口吻的下一条指令，单行，最多 32 字。' }
+      suggestion: {
+        type: 'string',
+        description: '用户口吻的下一条具体指令（6~24字，单行，最多32字），直接推进当前讨论下一步；禁止空洞客套或泛泛提问（如“介绍一下”“有哪些标签”“还有什么可以帮你的”“谢谢”）。'
+      }
     }
   },
-  execute(args) {
+  execute(args, env) {
     if (typeof args.answer !== 'string' || !args.answer.trim()) {
       return { content: JSON.stringify({ error: '缺少本轮回答。' }), outcome: { type: 'none' } }
     }
-    const suggestion = typeof args.suggestion === 'string' ? args.suggestion.trim() : ''
-    const validSuggestion = suggestion && !/[\r\n]/u.test(suggestion) && Array.from(suggestion).length <= 32 ? suggestion : undefined
+    const suggestion = typeof args.suggestion === 'string'
+      ? sanitizePrediction(args.suggestion, env?.userText ? [env.userText] : []) ?? undefined
+      : undefined
     return {
       content: '{}',
-      outcome: { type: 'discussion', text: args.answer.trim(), suggestion: validSuggestion }
+      outcome: { type: 'discussion', text: args.answer.trim(), suggestion }
     }
   }
 })

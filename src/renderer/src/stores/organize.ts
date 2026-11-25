@@ -105,6 +105,10 @@ export const useOrganizeStore = defineStore('organize', {
         this.dialog = 'stop'
         return
       }
+      if (this.reorganizeBusy || useLookStore().reorganizing) {
+        useToastStore().show('正在重新整理，请先等待完成或停止当前队列')
+        return
+      }
       // 本地分级还在跑：只提示，不弹确认框
       if (this.rating.running) {
         useToastStore().show('本地分级判完才能整理')
@@ -207,6 +211,10 @@ export const useOrganizeStore = defineStore('organize', {
     },
     async openReorganize(): Promise<void> {
       if (this.busy || this.reorganizeBusy || this.dialog || this.reorganizeDialog) {
+        return
+      }
+      if (useLookStore().reorganizing) {
+        useToastStore().show('正在重新整理，请先等待完成或停止当前队列')
         return
       }
       if (this.phase !== 'IDLE') {

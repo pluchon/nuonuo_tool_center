@@ -1,7 +1,8 @@
-import { defineComponent, nextTick, ref, watch } from 'vue'
-import type { AiSuggestionVO } from '@shared/api'
+import { computed, defineComponent, nextTick, ref, watch } from 'vue'
+import { SUGGESTION_REFRESH_MAX, type AiSuggestionVO } from '@shared/api'
 import { fetchSuggestions } from '@/api/look'
 import { useGalleryStore } from '@/stores/gallery'
+import { useLookStore } from '@/stores/look'
 import { useSuggestStore } from '@/stores/suggest'
 import { useToastStore } from '@/stores/toast'
 import { ICON } from '@/theme/icons'
@@ -28,10 +29,15 @@ export default defineComponent({
   },
   setup(props) {
     const gallery = useGalleryStore()
+    const look = useLookStore()
     const suggest = useSuggestStore()
     const toast = useToastStore()
     const items = ref<AiSuggestionVO[]>([])
     const busy = ref(false)
+    const refreshCount = ref(0)
+    const refreshSubmitting = ref(false)
+    const refreshing = computed(() => refreshSubmitting.value || look.isActive(props.imageId))
+    const exhausted = computed(() => refreshCount.value >= SUGGESTION_REFRESH_MAX)
     const drafts = ref<Record<string, string>>({})
     const editingKey = ref<string | null>(null)
     const editingText = ref('')
@@ -40,11 +46,24 @@ export default defineComponent({
     const isEditable = (kind: AiSuggestionVO['kind']): boolean => kind !== 'r18Review'
 
     const load = async (): Promise<void> => {
+      const id = props.imageId
       try {
-        items.value = await fetchSuggestions(props.imageId)
+        const list = await fetchSuggestions(id)
+        if (props.imageId === id) {
+          items.value = list
+        }
       } catch (err) {
-        items.value = []
-        toast.show(err instanceof Error ? err.message : String(err), 'error')
+        if (props.imageId === id) {
+          items.value = []
+          toast.show(err instanceof Error ? err.message : String(err), 'error')
+        }
+      }
+    }
+    const loadRefreshStatus = async (): Promise<void> => {
+      const id = props.imageId
+      const st = await look.fetchRefreshStatus(id)
+      if (props.imageId === id && st) {
+        refreshCount.value = st.refreshCount
       }
     }
     watch(
@@ -53,6 +72,7 @@ export default defineComponent({
         drafts.value = {}
         editingKey.value = null
         editingText.value = ''
+        refreshCount.value = 0
       }
     )
     watch(items, (list) => {
@@ -74,10 +94,26 @@ export default defineComponent({
         editingText.value = ''
       }
     })
-    watch([() => props.imageId, () => props.isR18], () => void load(), { immediate: true })
+    watch(
+      [() => props.imageId, () => props.isR18],
+      () => {
+        void load()
+        void loadRefreshStatus()
+      },
+      { immediate: true }
+    )
+    watch(
+      [() => props.imageId, () => look.isActive(props.imageId)],
+      ([id, active], [prevId, wasActive]) => {
+        if (id === prevId && wasActive && !active) {
+          void load()
+          void loadRefreshStatus()
+        }
+      }
+    )
 
     const startEdit = async (g: AiSuggestionVO): Promise<void> => {
-      if (busy.value || !isEditable(g.kind)) {
+      if (busy.value || refreshing.value || !isEditable(g.kind)) {
         return
       }
       editingKey.value = g.key
@@ -179,9 +215,26 @@ export default defineComponent({
       )
     }
 
+    const refresh = async (): Promise<void> => {
+      if (busy.value || refreshing.value || exhausted.value || props.isR18) {
+        return
+      }
+      refreshSubmitting.value = true
+      try {
+        const st = await look.refreshSuggestion(props.imageId)
+        if (st) {
+          refreshCount.value = st.refreshCount
+        }
+      } finally {
+        refreshSubmitting.value = false
+      }
+    }
+
     return {
       items,
       busy,
+      refreshing,
+      exhausted,
       drafts,
       editingKey,
       editingText,
@@ -195,6 +248,7 @@ export default defineComponent({
       onEditEscape,
       decide,
       acceptAll,
+      refresh,
       icons: ICONS,
       kinds: KINDS,
       starPath: ICON.spark

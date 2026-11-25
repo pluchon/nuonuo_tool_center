@@ -54,7 +54,9 @@ export function usePrediction(blocked: () => boolean, revision: () => number) {
       store.includeR18 === (question.includeR18 === true)
     if (!sameScope || store.includeR18) return null
     const references = store.references.slice(0, 3).map(r => ({ ...r, name: '' }))
-    if (!references.length && !reply.images.length && !reply.canPredict) return null
+    const canSuggest = references.length > 0 || reply.images.length > 0 || Boolean(reply.canPredict) ||
+      (!reply.hasStoredResults && (reply.text.trim().length >= 16 || Boolean(reply.how)))
+    if (!canSuggest) return null
     const dto = { conversationId: store.currentId, replyId: reply.id, scope, includeR18: false, references, selectionCount: store.references.length }
     const key = JSON.stringify([dto, question.id, reply.createdAt, revision()])
     return { key, dto }

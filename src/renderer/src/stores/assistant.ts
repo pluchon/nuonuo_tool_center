@@ -109,6 +109,10 @@ export const useAssistantStore = defineStore('assistant', {
     // 新对话：清空当前对话，换一批示例问题
     async newChat(): Promise<void> {
       if (this.waiting || this.changingTurn) return
+      if (this.currentId === null && this.messages.length === 0) {
+        useToastStore().show('已经是新对话了')
+        return
+      }
       const unsent = this.currentId !== null ? this.draftsByChat.get(null) : undefined
       if (this.currentId !== null && !this.loadingMessages) this.keepDraft()
       ++messagesVersion

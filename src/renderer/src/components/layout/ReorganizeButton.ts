@@ -1,5 +1,6 @@
 import { computed, defineComponent } from 'vue'
 import ReorganizeDialog from '@/components/dialogs/ReorganizeDialog.vue'
+import { useLookStore } from '@/stores/look'
 import { useOrganizeStore } from '@/stores/organize'
 import { useScanStore } from '@/stores/scan'
 
@@ -9,8 +10,9 @@ export default defineComponent({
   components: { ReorganizeDialog },
   setup() {
     const org = useOrganizeStore()
+    const look = useLookStore()
     const scan = useScanStore()
-    const busy = computed(() => org.reorganizeBusy)
+    const busy = computed(() => org.reorganizeBusy || look.reorganizing)
     const waiting = computed(() => org.rating.running || scan.running || org.phase !== 'IDLE')
     return { org, busy, waiting }
   }

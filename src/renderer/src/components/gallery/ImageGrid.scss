@@ -8,6 +8,12 @@
   }
 }
 
+@keyframes tile-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
 // 外层：滚动区和自绘滚动条叠在一起
 .image-grid-wrap {
   position: relative;
@@ -224,15 +230,16 @@
   &--on {
     border-color: var(--a);
     background: rgba(var(--w), 0.78);
+
+    .tile__chk {
+      opacity: 1;
+      background: var(--a);
+    }
   }
 
   // 多选时所有图都显示勾选圈
   &--multi .tile__chk {
     opacity: 1;
-  }
-
-  &--multi.tile--on .tile__chk {
-    background: var(--a);
   }
 
   &__chk {
@@ -294,6 +301,31 @@
     background: linear-gradient(100deg, var(--shim1) 30%, var(--shim2) 50%, var(--shim1) 70%);
     background-size: 200% 100%;
     animation: tile-shim 1.3s linear infinite;
+
+    @media (prefers-reduced-motion: reduce) {
+      animation: none;
+    }
+  }
+
+  &__refreshing {
+    position: absolute;
+    z-index: 2;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(128, 128, 138, 0.36);
+    backdrop-filter: blur(2px);
+    pointer-events: none;
+  }
+
+  &__spinner {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2.5px solid rgba(255, 255, 255, 0.38);
+    border-top-color: #ffffff;
+    animation: tile-spin 0.8s linear infinite;
 
     @media (prefers-reduced-motion: reduce) {
       animation: none;

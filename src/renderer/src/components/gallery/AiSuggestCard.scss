@@ -21,12 +21,67 @@
     color: var(--a-ink);
   }
 
+  &__actions {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  &__refresh {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    box-sizing: border-box;
+    border-radius: 999px;
+    border: 1px solid var(--a-line2);
+    background: color-mix(in srgb, var(--look-field-bg) 40%, transparent);
+    color: var(--a-ink);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      border-color 0.15s,
+      color 0.15s,
+      opacity 0.15s;
+
+    &:hover:not(:disabled),
+    &:focus-visible {
+      background: var(--look-chip-bg);
+      border-color: var(--a);
+    }
+
+    &:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
+
+    &--exhausted,
+    &--exhausted:disabled {
+      border-color: var(--look-edge);
+      color: var(--c-i-7F7494);
+      opacity: 0.45;
+      filter: grayscale(1);
+      cursor: not-allowed;
+    }
+
+    &--spinning svg {
+      animation: sugg-refresh-spin 0.9s linear infinite;
+
+      @media (prefers-reduced-motion: reduce) {
+        animation: none;
+      }
+    }
+  }
+
   &__all:hover:not(:disabled), &__all:focus-visible {
     background: var(--look-chip-bg);
   }
 
   &__all {
-    margin-left: auto;
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -41,6 +96,11 @@
     font-size: 11px;
     font-weight: 700;
     cursor: pointer;
+
+    &:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
   }
 
   &__row {
@@ -177,5 +237,11 @@
   &__no {
     background: color-mix(in srgb, var(--c-b-FCE7EE) 55%, transparent);
     color: var(--c-i-C25B85);
+  }
+}
+
+@keyframes sugg-refresh-spin {
+  to {
+    transform: rotate(1turn);
   }
 }

@@ -88,6 +88,8 @@ export const IpcChannel = {
   lookRetry: 'look:retry',
   lookNow: 'look:now',
   lookCancelAll: 'look:cancelAll',
+  lookRefreshSuggestion: 'look:refreshSuggestion',
+  lookRefreshStatus: 'look:refreshStatus',
   suggestionList: 'suggestion:list',
   suggestionDecide: 'suggestion:decide',
   suggestionAcceptAll: 'suggestion:acceptAll',
@@ -663,6 +665,17 @@ export interface LookStateVO {
   rows: LookRowVO[]
   canCancel: boolean
   needsApiKey: boolean
+  reorganizing: boolean
+  activeImageIds: number[]
+}
+
+export const SUGGESTION_REFRESH_DEEP_AT = 3
+export const SUGGESTION_REFRESH_MAX = 5
+
+export interface SuggestionRefreshStatusVO {
+  refreshCount: number
+  maxRefreshes: number
+  active: boolean
 }
 
 export const LOOK_KEY_HINT = '请在「设置 → AI」中配置百炼 API Key'

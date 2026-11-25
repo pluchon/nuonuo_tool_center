@@ -6,7 +6,9 @@
   --assistant-muted: color-mix(in srgb, var(--c-i-7F7494) 68%, var(--a-ink));
   --assistant-field: color-mix(in srgb, var(--look-field-bg) 85%, var(--a-soft));
   --assistant-field-hover: color-mix(in srgb, var(--look-field-hover-bg) 82%, var(--a-soft));
-  --ai-menu-bg: color-mix(in srgb, var(--c-surface) 94%, var(--a));
+  --ai-menu-bg: color-mix(in srgb, var(--look-field-bg) 42%, color-mix(in srgb, var(--c-surface) 94%, var(--a-soft)));
+  --ai-ctx-bg: color-mix(in srgb, var(--look-field-bg) 48%, color-mix(in srgb, var(--c-surface) 95%, var(--a-soft)));
+  --ai-menu-blur: blur(18px) saturate(1.45);
   --ai-menu-line: var(--a-line2);
 
   flex: 1;
@@ -103,6 +105,8 @@
     padding: 6px;
     border-radius: 16px;
     background: var(--ai-menu-bg);
+    backdrop-filter: var(--ai-menu-blur);
+    -webkit-backdrop-filter: var(--ai-menu-blur);
     border: 1px solid var(--ai-menu-line);
     box-shadow: var(--ai-menu-shadow);
   }
@@ -117,21 +121,26 @@
     position: absolute;
     width: 12px;
     height: 12px;
-    background: var(--ai-menu-bg);
+    box-sizing: border-box;
+    background: color-mix(in srgb, var(--ai-menu-bg) 72%, var(--c-surface));
+    backdrop-filter: var(--ai-menu-blur);
+    -webkit-backdrop-filter: var(--ai-menu-blur);
     transform: rotate(45deg);
 
     &--up {
-      top: -7px;
+      top: -6px;
       right: 11px;
       border-left: 1px solid var(--ai-menu-line);
       border-top: 1px solid var(--ai-menu-line);
+      clip-path: polygon(0 0, 100% 0, 0 100%);
     }
 
     &--down {
       left: 18px;
-      bottom: -7px;
+      bottom: -6px;
       border-right: 1px solid var(--ai-menu-line);
       border-bottom: 1px solid var(--ai-menu-line);
+      clip-path: polygon(100% 0, 100% 100%, 0 100%);
     }
   }
 
@@ -791,6 +800,8 @@
     padding: 6px;
     border-radius: 16px;
     background: var(--ai-menu-bg);
+    backdrop-filter: var(--ai-menu-blur);
+    -webkit-backdrop-filter: var(--ai-menu-blur);
     border: 1px solid var(--ai-menu-line);
     box-shadow: var(--ai-menu-shadow);
   }

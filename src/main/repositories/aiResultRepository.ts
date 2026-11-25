@@ -102,13 +102,153 @@ export async function updateFieldStatus(id: number, fieldStatus: Record<string, 
 }
 
 // 建议和任务完成状态同时落盘，避免重启后重复处理已收到的结果。
-export async function completeLookJob(id: number, row: typeof imageAiResult.$inferInsert, description: string): Promise<boolean> {
+export async function completeLookJob(
+  id: number,
+  row: typeof imageAiResult.$inferInsert,
+  description: string,
+  supersedePendingIdentify = false
+): Promise<boolean> {
   return getDatabase().db.transaction(async (tx) => {
-    const changed = await tx.update(aiJob).set({ status: 'DONE', error: null, finishedAt: new Date(), payload: null })
-      .where(and(eq(aiJob.id, id), eq(aiJob.kind, 'LOOK'), eq(aiJob.status, 'RUNNING'))).returning({ id: aiJob.id })
+    const changed = await tx
+      .update(aiJob)
+      .set({
+        status: 'DONE',
+        error: null,
+        finishedAt: new Date(),
+        payload: sql`CASE WHEN ${aiJob.payload}->>'refreshSuggestion' = 'true' THEN ${aiJob.payload} ELSE NULL END`
+      })
+      .where(and(eq(aiJob.id, id), eq(aiJob.kind, 'LOOK'), eq(aiJob.status, 'RUNNING')))
+      .returning({ id: aiJob.id })
     if (changed.length === 0) return false
+    if (supersedePendingIdentify) {
+      await tx
+        .update(imageAiResult)
+        .set({ deleteState: 1 })
+        .where(
+          and(
+            eq(imageAiResult.imageId, row.imageId),
+            eq(imageAiResult.deleteState, 0),
+            eq(imageAiResult.kind, 'IDENTIFY'),
+            sql`coalesce(${imageAiResult.fieldStatus}->>'r18Review', '') <> 'PENDING'`,
+            sql`exists (
+              select 1 from jsonb_each_text(coalesce(${imageAiResult.fieldStatus}, '{}'::jsonb)) as f
+              where f.value = 'PENDING'
+            )`
+          )
+        )
+    }
     await tx.insert(imageAiResult).values(row)
     await fillDescription(tx, row.imageId, description)
+    return true
+  })
+}
+
+export async function countSuggestionRefreshes(imageId: number): Promise<number> {
+  const { db } = getDatabase()
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(aiJob)
+    .where(
+      and(
+        eq(aiJob.kind, 'LOOK'),
+        eq(aiJob.imageId, imageId),
+        eq(aiJob.deleteState, 0),
+        inArray(aiJob.status, ['QUEUED', 'RUNNING', 'DONE']),
+        sql`${aiJob.payload}->>'refreshSuggestion' = 'true'`
+      )
+    )
+  return Number(row?.n ?? 0)
+}
+
+export async function findPendingIdentifyAttempt(imageId: number): Promise<ExistingLookContext | null> {
+  const { pg } = getDatabase()
+  const res = await pg.query<{ result: Record<string, unknown> | null; field_status: Record<string, FieldState> | null }>(
+    `SELECT a.result, a.field_status
+       FROM image_ai_result a
+       JOIN image i ON i.id = a.image_id
+      WHERE a.image_id = $1
+        AND a.delete_state = 0
+        AND a.kind = 'IDENTIFY'
+        AND i.delete_state = 0
+        AND i.is_r18 = false
+      ORDER BY a.id ASC`,
+    [imageId]
+  )
+  let displayName: string | null = null
+  let source: string | null = null
+  const characters: string[] = []
+  const works: string[] = []
+  const tags: string[] = []
+  for (const row of res.rows) {
+    const status = row.field_status ?? {}
+    const result = row.result ?? {}
+    if (status.name === 'PENDING' && !displayName && typeof result.name === 'string' && result.name.trim()) {
+      displayName = result.name.trim()
+    }
+    if (status.who === 'PENDING' && typeof result.character === 'string' && result.character.trim() && !characters.includes(result.character.trim())) {
+      characters.push(result.character.trim())
+    }
+    if (status.work === 'PENDING' && typeof result.work === 'string' && result.work.trim() && !works.includes(result.work.trim())) {
+      works.push(result.work.trim())
+    }
+    if (status.src === 'PENDING' && !source && typeof result.source === 'string' && result.source.trim()) {
+      source = result.source.trim()
+    }
+    for (const [key, state] of Object.entries(status)) {
+      if (state === 'PENDING' && key.startsWith('tag:')) {
+        const tagName = key.slice(4).trim()
+        if (tagName && !tags.includes(tagName)) {
+          tags.push(tagName)
+        }
+      }
+    }
+  }
+  if (!displayName && !source && characters.length === 0 && works.length === 0 && tags.length === 0) {
+    return null
+  }
+  return { displayName, source, characters, works, tags, categoryDir: null }
+}
+
+export async function enqueueSuggestionRefresh(
+  imageId: number,
+  refreshRound: number,
+  forceThinking: boolean
+): Promise<boolean> {
+  const { db } = getDatabase()
+  return db.transaction(async (tx) => {
+    const [active] = await tx
+      .select({ id: aiJob.id })
+      .from(aiJob)
+      .where(
+        and(
+          eq(aiJob.kind, 'LOOK'),
+          eq(aiJob.imageId, imageId),
+          eq(aiJob.deleteState, 0),
+          inArray(aiJob.status, ['QUEUED', 'RUNNING'])
+        )
+      )
+      .limit(1)
+    if (active) {
+      return false
+    }
+    await tx
+      .update(aiJob)
+      .set({ status: 'CANCELLED', remoteId: null, finishedAt: new Date() })
+      .where(
+        and(
+          eq(aiJob.kind, 'LOOK'),
+          eq(aiJob.imageId, imageId),
+          eq(aiJob.deleteState, 0),
+          eq(aiJob.status, 'FAILED'),
+          sql`${aiJob.error} is distinct from ${LOOK_CONTENT_REJECTED}`
+        )
+      )
+    await tx.insert(aiJob).values({
+      kind: 'LOOK',
+      imageId,
+      priority: 0,
+      payload: { refreshSuggestion: true, refreshRound, forceThinking }
+    })
     return true
   })
 }
@@ -359,7 +499,7 @@ export async function requeueLookJob(id: number, priority?: number): Promise<voi
     .set({
       status: 'QUEUED',
       remoteId: null,
-      payload: sql`CASE WHEN ${aiJob.payload}->>'reorganize' = 'true' THEN '{"reorganize":true}'::jsonb ELSE NULL END`,
+      payload: sql`CASE WHEN ${aiJob.payload}->>'refreshSuggestion' = 'true' THEN ${aiJob.payload} WHEN ${aiJob.payload}->>'reorganize' = 'true' THEN '{"reorganize":true}'::jsonb ELSE NULL END`,
       error: null,
       startedAt: null,
       finishedAt: null,

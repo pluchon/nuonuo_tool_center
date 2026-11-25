@@ -61,10 +61,10 @@
               <span
                 class="tile__chk"
                 role="checkbox"
-                :aria-checked="gallery.multi && gallery.isSelected(t.id)"
+                :aria-checked="gallery.isSelected(t.id)"
                 aria-label="选择这张图"
                 @click.stop="gallery.toggle(t.id)"
-              >{{ gallery.multi && gallery.isSelected(t.id) ? '✓' : '' }}</span>
+              >{{ gallery.isSelected(t.id) ? '✓' : '' }}</span>
               <div
                 class="tile__img"
                 :class="{ 'tile__img--offline': item(t.id).offline }"
@@ -80,6 +80,9 @@
                   draggable="false"
                 />
                 <span v-if="item(t.id).thumb === 'PENDING' && !item(t.id).missing" class="tile__shim" role="img" aria-label="缩略图生成中" />
+                <span v-if="aiView && look.isActive(t.id)" class="tile__refreshing" role="status" aria-label="重新识别中">
+                  <span class="tile__spinner" />
+                </span>
                 <span v-if="item(t.id).missing" class="tile__bad tile__bad--missing">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M9.5 12.5l5 5M14.5 12.5l-5 5" /></svg>文件不见了
                 </span>

@@ -24,10 +24,25 @@ export const LOOK_RULES = [
   '```'
 ].join('\n')
 
-// 每张图附带的文字：本地线索（文件名、元信息）与可选的已有整理信息/深度核查提示
+function formatContextLines(ctx: ExistingLookContext): string[] {
+  const contextLines: string[] = []
+  if (ctx.displayName) contextLines.push(`- 名字：${ctx.displayName}`)
+  if (ctx.characters.length > 0) contextLines.push(`- 角色：${ctx.characters.join('、')}`)
+  if (ctx.works.length > 0) contextLines.push(`- 作品：${ctx.works.join('、')}`)
+  if (ctx.tags.length > 0) contextLines.push(`- 标签：${ctx.tags.join('、')}`)
+  if (ctx.source) contextLines.push(`- 出处：${ctx.source}`)
+  if (ctx.categoryDir) contextLines.push(`- 当前类目录：${ctx.categoryDir}`)
+  return contextLines
+}
+
+// 每张图附带的文字：本地线索（文件名、元信息）与可选的已有整理信息/重看反面参考/深度核查提示
 export function lookTail(
   clues: LocalClues,
-  options?: { existingContext?: ExistingLookContext | null; thinkingRetry?: boolean }
+  options?: {
+    existingContext?: ExistingLookContext | null
+    refreshAttempt?: ExistingLookContext | null
+    thinkingRetry?: boolean
+  }
 ): string {
   const lines = ['[软件附注] 这张图的本地线索：', ...clues.notes.map((n) => `- ${n}`)]
   if (clues.source) {
@@ -36,17 +51,16 @@ export function lookTail(
   if (clues.photo) {
     lines.push('- 这是相机拍的照片，不用查出处。')
   }
-  const existing = options?.existingContext
-  if (existing) {
-    const contextLines: string[] = []
-    if (existing.displayName) contextLines.push(`- 名字：${existing.displayName}`)
-    if (existing.characters.length > 0) contextLines.push(`- 角色：${existing.characters.join('、')}`)
-    if (existing.works.length > 0) contextLines.push(`- 作品：${existing.works.join('、')}`)
-    if (existing.tags.length > 0) contextLines.push(`- 标签：${existing.tags.join('、')}`)
-    if (existing.source) contextLines.push(`- 出处：${existing.source}`)
-    if (existing.categoryDir) contextLines.push(`- 当前类目录：${existing.categoryDir}`)
+  if (options?.existingContext) {
+    const contextLines = formatContextLines(options.existingContext)
     if (contextLines.length > 0) {
       lines.push('[已有整理信息（仅供参考，其中可能有误，请结合画面重新独立核实并纠正）]', ...contextLines)
+    }
+  }
+  if (options?.refreshAttempt) {
+    const attemptLines = formatContextLines(options.refreshAttempt)
+    if (attemptLines.length > 0) {
+      lines.push('[上一次识别结果（用户不满意，可能存在误判或漏判，仅作反面参考，切勿盲从，请独立重新观察画面并核实）]', ...attemptLines)
     }
   }
   if (options?.thinkingRetry) {

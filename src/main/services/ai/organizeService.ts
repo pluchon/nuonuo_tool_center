@@ -36,6 +36,7 @@ import { recordLocalReuse } from '../../repositories/aiSearchCacheRepository'
 import { isRatingBusy } from '../rating/ratingService'
 import { chatCall } from './bailianClient'
 import { scheduleLook } from './lookService'
+import { isReorganizeBusy } from './reorganizeService'
 import { habitLines } from './suggestionService'
 
 const log = getLogger('organize')
@@ -202,6 +203,9 @@ export async function startOrganize(): Promise<OrganizeStateVO> {
   }
   starting = true
   try {
+    if (await isReorganizeBusy()) {
+      throw new BizError('CONFLICT', '正在重新整理，请先等待完成或停止当前队列')
+    }
     const ratingLeft = await countRatingCandidates()
     if (isRatingBusy() || ratingLeft > 0) {
       throw new BizError('CONFLICT', ratingLeft > 0 ? `本地分级还剩 ${ratingLeft.toLocaleString('zh-CN')} 张，判完才能整理` : '本地分级还在进行，判完才能整理')

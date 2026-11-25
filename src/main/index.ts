@@ -16,6 +16,7 @@ import { configureScan, getScanState, isScanningRoot, onScanState, requeueScan, 
 import { configureRating, isRatingBusy, resetRatingDegradation, scheduleRating, stopRating, thresholdFromEnv } from './services/rating/ratingService'
 import { configureLook, enqueueNewImages, initLook, isLookBusy, pauseLookForSuspend, resumeLookAfterSuspend, scheduleLook, stopLook } from './services/ai/lookService'
 import { checkLooking, configureOrganize, isOrganizing, onLookResult, onRatingBatch, restoreOrganize, resumeOrganize } from './services/ai/organizeService'
+import { isResettingOrganized } from './services/ai/reorganizeService'
 import { startDreaming, stopDreaming } from './services/ai/dreamService'
 import { isAnswering } from './services/ai/assistantService'
 import { configureEmbedding, isEmbedBusy, scheduleEmbedding, stopEmbedding } from './services/ai/embeddingService'
@@ -211,7 +212,7 @@ async function bootstrap(): Promise<void> {
   log.info(`启动，数据目录：${paths.root}`)
   const [state] = await Promise.all([bootDatabase(dbLocation), initAiCredentialSettings(paths.root)])
   handleLtmProtocol(paths.thumbs, paths.backgrounds, originalPathOf)
-  configureScan({ thumbsDir: paths.thumbs, categoryHomeOverride: paths.categoryHomeOverride, canRunAuto: () => !isOrganizing() })
+  configureScan({ thumbsDir: paths.thumbs, categoryHomeOverride: paths.categoryHomeOverride, canRunAuto: () => !isOrganizing() && !isResettingOrganized() })
   let queueingAfterRating = 0
   // 本地分级：扫描进行中让路；判出 R-18 时通知界面刷新
   configureRating({

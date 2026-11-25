@@ -4,7 +4,8 @@ import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
 import { insertConversation, insertMessage } from '../../src/main/repositories/aiConversationRepository'
-import { predictNext } from '../../src/main/services/ai/nextPrediction'
+import { findRecentTurns } from '../../src/main/repositories/aiPredictionRepository'
+import { predictNext, sanitizePrediction } from '../../src/main/services/ai/nextPrediction'
 import { chatCall } from '../../src/main/services/ai/bailianClient'
 
 vi.mock('../../src/main/services/ai/bailianClient', () => ({ chatCall: vi.fn() }))
@@ -87,5 +88,67 @@ it('按普通图片与偏好生成有界预测，并发和重开复用，分级�
     await current.exec('update image set is_r18=true where id=1')
     expect(await predictNext(dto)).toBeNull()
     expect(model).toHaveBeenCalledTimes(4)
+  } finally { vi.unstubAllEnvs() }
+})
+
+it('sanitizePrediction 清洗引号并拦截低价值水词、多行、超长及近期重复建议', () => {
+  expect(sanitizePrediction('  `只看竖图里的猫耳`  ', ['找猫耳图'])).toBe('只看竖图里的猫耳')
+  expect(sanitizePrediction('“换个冷色调参考”', ['找图'])).toBe('换个冷色调参考')
+  expect(sanitizePrediction('-', ['找图'])).toBeNull()
+  expect(sanitizePrediction('', ['找图'])).toBeNull()
+  expect(sanitizePrediction('第一行\n第二行', ['找图'])).toBeNull()
+  expect(sanitizePrediction('一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五', ['找图'])).toBeNull()
+  expect(sanitizePrediction('这些图有哪些标签', ['找蓝色图'])).toBeNull()
+  expect(sanitizePrediction('帮我介绍一下这张图', ['找蓝色图'])).toBeNull()
+  expect(sanitizePrediction('还有什么可以帮你的', ['找蓝色图'])).toBeNull()
+  expect(sanitizePrediction('谢谢', ['找蓝色图'])).toBeNull()
+  expect(sanitizePrediction('好的！', ['找蓝色图'])).toBeNull()
+  expect(sanitizePrediction('这些图有哪些标签？', ['这些图有哪些标签'])).toBeNull()
+  expect(sanitizePrediction('这些图有哪些标签？', ['请问有哪些标签'])).toBe('这些图有哪些标签？')
+  expect(sanitizePrediction('找蓝色的图片', ['找蓝色的图'])).toBeNull()
+})
+
+it('多轮普通对话与纯文本长回复可生成预测，并严格剔除 R-18 轮次与低价值输出', async () => {
+  const c = await insertConversation('多轮轨迹测试', null)
+  await insertMessage(c.id, 'USER', { text: '先看几张夜景配色参考', scope: null, includeR18: false })
+  await insertMessage(c.id, 'ASSISTANT', { text: '先放这几张给你参考。', how: '找到 2 张', imageIds: [2, 3] })
+  await insertMessage(c.id, 'USER', { text: 'SECRET_R18_USER_PROMPT', scope: null, includeR18: true })
+  await insertMessage(c.id, 'ASSISTANT', { text: 'SECRET_R18_REPLY_NAME', how: '找到 1 张', imageIds: [99] })
+  await insertMessage(c.id, 'USER', { text: '刚才冷色调和暖色调怎么选？', scope: null, includeR18: false })
+  const reply = await insertMessage(c.id, 'ASSISTANT', {
+    text: '如果人物主体偏亮，背景用冷色调更容易拉开层次，主体会更突出。',
+    how: null,
+    imageIds: []
+  })
+
+  const turns = await findRecentTurns(c.id, reply.id, 6)
+  expect(turns.map((t) => t.text)).toEqual([
+    '先看几张夜景配色参考',
+    '先放这几张给你参考。',
+    '刚才冷色调和暖色调怎么选？',
+    '如果人物主体偏亮，背景用冷色调更容易拉开层次，主体会更突出。'
+  ])
+  expect(JSON.stringify(turns)).not.toContain('SECRET_R18')
+
+  const callsBefore = model.mock.calls.length
+  vi.stubEnv('DASHSCOPE_API_KEY', 'fixture')
+  try {
+    const answer = (content: string): Awaited<ReturnType<typeof chatCall>> => ({
+      message: { role: 'assistant', content, refusal: null }, finishReason: 'stop',
+      usage: { inputTokens: 120, outputTokens: 12, cachedTokens: 0, cacheWriteTokens: 0, imageTokens: 0, searchCount: 0 }
+    })
+    model.mockResolvedValueOnce(answer('帮我介绍一下这张图'))
+    const dto = { conversationId: c.id, replyId: reply.id, scope: null, includeR18: false }
+    expect(await predictNext(dto)).toBeNull()
+
+    model.mockResolvedValueOnce(answer('用霓虹冷色举个构图例子'))
+    expect(await predictNext(dto)).toBe('用霓虹冷色举个构图例子')
+    expect(model).toHaveBeenCalledTimes(callsBefore + 2)
+
+    const sentPayload = JSON.stringify(model.mock.calls[callsBefore + 1][0].messages)
+    expect(sentPayload).toContain('纯文本讨论')
+    expect(sentPayload).toContain('先看几张夜景配色参考')
+    expect(sentPayload).not.toContain('SECRET_R18_USER_PROMPT')
+    expect(sentPayload).not.toContain('SECRET_R18_REPLY_NAME')
   } finally { vi.unstubAllEnvs() }
 })

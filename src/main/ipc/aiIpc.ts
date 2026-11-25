@@ -23,7 +23,7 @@ import {
 } from '../services/ai/assistantService'
 import { decideCategoryProposal, getCategoryProposal } from '../services/ai/categoryProposalService'
 import { scheduleEmbedding } from '../services/ai/embeddingService'
-import { cancelAllLooks, getLookState, lookNow, retryLook } from '../services/ai/lookService'
+import { cancelAllLooks, getLookState, getSuggestionRefreshStatus, lookNow, refreshSuggestion, retryLook } from '../services/ai/lookService'
 import { predictNext } from '../services/ai/nextPrediction'
 import { approveOrganize, cancelOrganize, estimateOrganize, getOrganizeState, startOrganize } from '../services/ai/organizeService'
 import { estimateReorganize, resetOrganizedToSource, startReorganizeRelook } from '../services/ai/reorganizeService'
@@ -161,6 +161,20 @@ export function registerAiIpc(paths: DataPaths): void {
       throw new BizError('CONFLICT', '请从一键整理停止当前整理')
     }
     return cancelAllLooks()
+  })
+  handle(IpcChannel.lookRefreshSuggestion, async (_event, imageId: number) => {
+    requireDatabase()
+    if (!Number.isInteger(imageId) || imageId <= 0) {
+      throw new BizError('BAD_REQUEST', '图片 id 不对')
+    }
+    return refreshSuggestion(imageId)
+  })
+  handle(IpcChannel.lookRefreshStatus, async (_event, imageId: number) => {
+    requireDatabase()
+    if (!Number.isInteger(imageId) || imageId <= 0) {
+      throw new BizError('BAD_REQUEST', '图片 id 不对')
+    }
+    return getSuggestionRefreshStatus(imageId)
   })
   handle(IpcChannel.suggestionList, async (_event, imageId: number) => {
     requireDatabase()

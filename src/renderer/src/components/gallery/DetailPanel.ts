@@ -3,6 +3,7 @@ import { NAME_MAX, type ExifInfoVO, type ImageDetailVO, type ImageLocationVO } f
 import { openFileWithDefault, showFileInFolder, thumbUrl } from '@/api/gallery'
 import { useGalleryStore } from '@/stores/gallery'
 import { useAssistantStore } from '@/stores/assistant'
+import { useLookStore } from '@/stores/look'
 import { useToastStore } from '@/stores/toast'
 import { useTransferStore } from '@/stores/transfer'
 import { useViewerStore } from '@/stores/viewer'
@@ -73,6 +74,7 @@ export default defineComponent({
   setup() {
     const gallery = useGalleryStore()
     const assistant = useAssistantStore()
+    const look = useLookStore()
     const viewer = useViewerStore()
     const toast = useToastStore()
     const viewStore = useViewStore()
@@ -205,6 +207,7 @@ export default defineComponent({
     return {
       aiView,
       gallery,
+      look,
       viewer,
       transfer,
       canTransfer,

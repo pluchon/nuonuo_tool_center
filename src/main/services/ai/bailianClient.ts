@@ -138,10 +138,26 @@ export async function chatCall(input: ChatCallInput): Promise<ChatCallResult> {
     }
     const timeout = input.timeoutMs ?? BAILIAN_CONFIG.chatTimeoutMs
     if (input.onDelta) {
-      const stream = (await getBailianClient().chat.completions.create(
-        { ...body, stream: true, stream_options: { include_usage: true } } as never,
-        { timeout, signal: input.signal }
-      )) as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
+      const { data: stream, response } = (await getBailianClient().chat.completions
+        .create({ ...body, stream: true, stream_options: { include_usage: true } } as never, {
+          timeout,
+          signal: input.signal
+        })
+        .withResponse()) as unknown as {
+        data: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
+        response: Response
+      }
+      const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+      if (contentType.includes('application/json') && !response.bodyUsed) {
+        const res = (await response.json()) as OpenAI.Chat.Completions.ChatCompletion
+        const usage = normalizeChatUsage(res.usage)
+        await record(input, usage, Date.now() - t0)
+        const choice = res.choices[0]
+        if (typeof choice.message.content === 'string' && choice.message.content.length > 0) {
+          input.onDelta(choice.message.content)
+        }
+        return { message: choice.message, finishReason: choice.finish_reason, usage, cacheUsage: reportedChatCache(res.usage) }
+      }
       let text = ''
       let finishReason: string | null = null
       let rawUsage: unknown

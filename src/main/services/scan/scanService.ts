@@ -32,6 +32,8 @@ import {
   type LibraryRootEntity
 } from '../../repositories/libraryRootRepository'
 import { ensureCategoryRoot } from '../categoryHome'
+import { getOrganizeState } from '../ai/organizeService'
+import { isResettingOrganized } from '../ai/reorganizeService'
 import { loadCheckpoint, PENDING_AUTO_SCANS, saveCheckpoint, SCAN_CHECKPOINT } from '../progressCheckpoint'
 import { getSettings } from '../settingsService'
 import { shouldProcess } from './formats'
@@ -130,6 +132,9 @@ function push(force: boolean): void {
 
 // 排一个扫描任务：rootId 为空扫全部。已经排着或正在扫的任务覆盖了它就不重复排；用户手动要求的会把自动任务改成手动（完成时弹提示）
 export function startScan(rootId: number | null, auto = false): ScanStateVO {
+  if (isResettingOrganized() || getOrganizeState().phase === 'ASSIGNING') {
+    throw new BizError('CONFLICT', '正在整理文件，请稍候再扫描')
+  }
   return enqueueScan({ rootId, auto })
 }
 

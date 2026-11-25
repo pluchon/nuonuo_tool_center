@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
-import { LOOK_KEY_HINT, type LookStateVO } from '@shared/api'
-import { cancelAllLooks, fetchLookState, lookNow, onLookState, retryLook } from '@/api/look'
+import { LOOK_KEY_HINT, type LookStateVO, type SuggestionRefreshStatusVO } from '@shared/api'
+import {
+  cancelAllLooks,
+  fetchLookState,
+  fetchSuggestionRefreshStatus,
+  lookNow,
+  onLookState,
+  refreshSuggestion,
+  retryLook
+} from '@/api/look'
 import { useToastStore } from './toast'
 
 // 错误信息
@@ -18,11 +26,17 @@ export const useLookStore = defineStore('look', {
     rows: [] as LookStateVO['rows'],
     canCancel: false,
     needsApiKey: false,
+    reorganizing: false,
+    activeImageIds: [] as number[],
     open: false
   }),
   getters: {
     busy: (s): boolean => !s.needsApiKey && s.activity === 'working',
-    waitingForKey: (s): boolean => s.needsApiKey && s.activity !== 'idle'
+    waitingForKey: (s): boolean => s.needsApiKey && s.activity !== 'idle',
+    isActive: (s): ((imageId: number) => boolean) => {
+      const activeSet = new Set(s.activeImageIds)
+      return (imageId: number): boolean => activeSet.has(imageId)
+    }
   },
   actions: {
     // 读一次状态并订阅之后的变化
@@ -41,6 +55,8 @@ export const useLookStore = defineStore('look', {
       this.rows = state.rows
       this.canCancel = state.canCancel
       this.needsApiKey = state.needsApiKey
+      this.reorganizing = state.reorganizing
+      this.activeImageIds = state.activeImageIds
     },
     toggle(): void {
       this.open = !this.open
@@ -72,6 +88,25 @@ export const useLookStore = defineStore('look', {
         }
       } catch (err) {
         useToastStore().show(errText(err), 'error')
+      }
+    },
+    async refreshSuggestion(imageId: number): Promise<SuggestionRefreshStatusVO | null> {
+      try {
+        const status = await refreshSuggestion(imageId)
+        if (!this.activeImageIds.includes(imageId)) {
+          this.activeImageIds = [...this.activeImageIds, imageId]
+        }
+        return status
+      } catch (err) {
+        useToastStore().show(errText(err), 'error')
+        return null
+      }
+    },
+    async fetchRefreshStatus(imageId: number): Promise<SuggestionRefreshStatusVO | null> {
+      try {
+        return await fetchSuggestionRefreshStatus(imageId)
+      } catch {
+        return null
       }
     }
   }

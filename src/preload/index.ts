@@ -50,7 +50,8 @@ import {
   type AiStatusVO,
   type AiStreamEvent,
   type AiSuggestionVO,
-  type LookStateVO
+  type LookStateVO,
+  type SuggestionRefreshStatusVO
 } from '@shared/api'
 import type { AiCredentialPatch, AiCredentialStatus } from '@shared/settings'
 
@@ -156,6 +157,10 @@ const api = {
     retry: (jobId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.lookRetry, jobId),
     now: (imageId: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.lookNow, imageId),
     cancelAll: (): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.lookCancelAll),
+    refreshSuggestion: (imageId: number): Promise<ApiResponse<SuggestionRefreshStatusVO>> =>
+      ipcRenderer.invoke(IpcChannel.lookRefreshSuggestion, imageId),
+    refreshStatus: (imageId: number): Promise<ApiResponse<SuggestionRefreshStatusVO>> =>
+      ipcRenderer.invoke(IpcChannel.lookRefreshStatus, imageId),
     // 订阅看图队列的变化，返回取消订阅的函数
     onState: (listener: (state: LookStateVO) => void): (() => void) => {
       const handler = (_event: IpcRendererEvent, state: LookStateVO): void => listener(state)

@@ -95,7 +95,7 @@ describe('重新整理（估算、归回源目录、参考上下文重看）', (
         ('${hashBuffer(bufA)}', 'JPG', ${bufA.length}, '名字A', '描述A', 'https://example.com/a', 'GENERAL', 'MODEL', false, 1),
         ('${hashBuffer(bufB)}', 'JPG', ${bufB.length}, NULL, NULL, NULL, 'SENSITIVE', 'MANUAL', false, 1),
         ('${hashBuffer(bufC)}', 'JPG', ${bufC.length}, '待重看C', NULL, NULL, 'GENERAL', 'MODEL', false, 1),
-        ('${hashBuffer(bufD)}', 'JPG', ${bufD.length}, NULL, NULL, NULL, 'GENERAL', 'MODEL', false, 1),
+        ('${hashBuffer(bufD)}', 'JPG', ${bufD.length}, '仅名字D', NULL, NULL, 'GENERAL', 'MODEL', false, 1),
         ('${hashBuffer(bufE)}', 'JPG', ${bufE.length}, 'R18图', NULL, NULL, 'EXPLICIT', 'MODEL', true, 1),
         ('${hashBuffer(bufF)}', 'JPG', ${bufF.length}, '未分级F', NULL, NULL, 'UNKNOWN', NULL, false, 1);
       INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES
@@ -105,12 +105,16 @@ describe('重新整理（估算、归回源目录、参考上下文重看）', (
         (4, 1, 'd.jpg', now()),
         (5, 2, 'R18\\e.jpg', now()),
         (6, 1, 'f.jpg', now());
-      INSERT INTO image_tag (image_id, tag_id, source, status) VALUES (2, 1, 'MANUAL', 'ACCEPTED'), (5, 1, 'MANUAL', 'ACCEPTED');
+      INSERT INTO image_tag (image_id, tag_id, source, status) VALUES
+        (2, 1, 'MANUAL', 'ACCEPTED'),
+        (3, 1, 'MANUAL', 'ACCEPTED'),
+        (5, 1, 'MANUAL', 'ACCEPTED'),
+        (6, 1, 'MANUAL', 'ACCEPTED');
       INSERT INTO ai_job (kind, image_id, status) VALUES ('LOOK', 1, 'DONE'), ('LOOK', 3, 'QUEUED');
     `)
 
-    // 已整理且非 R-18：1(在类目录+元信息), 2(有ACCEPTED标签), 3(display_name), 6(display_name，未分级) => 4 张
-    // 4 无任何整理特征不计入；5 是 R-18 不计入
+    // 已整理且非 R-18：1(在类目录), 2(有ACCEPTED标签), 3(有ACCEPTED标签), 6(有ACCEPTED标签，未分级) => 4 张
+    // 4 仅有 display_name 无已采用标签/类目录，不计入；5 是 R-18 不计入
     // toLook：1(DONE,可重看), 2(无job,可重看) => 2 张；3 有 QUEUED 不重复算；6 未分级不进 toLook 进 ratingLeft(1)
     const est = await reorg.estimateReorganize()
     expect(est.organizedCount).toBe(4)
@@ -276,10 +280,13 @@ describe('重新整理（估算、归回源目录、参考上下文重看）', (
     const { pg } = getDatabase()
     scheduleLookMock.mockClear()
 
-    // 把 1、2 重新标为已整理（1 有名字，2 有标签），4 仍未整理，5 仍是 R-18，6 先设为未分级且有名字
+    // 把 1、2、6 标为已整理（有 ACCEPTED 标签），4 仍仅名字未入库，5 仍是 R-18，6 设为未分级
     await pg.exec(`
       UPDATE image SET display_name = '已整理1' WHERE id = 1;
-      INSERT INTO image_tag (image_id, tag_id, source, status) VALUES (2, 1, 'MANUAL', 'ACCEPTED');
+      INSERT INTO image_tag (image_id, tag_id, source, status) VALUES
+        (1, 1, 'MANUAL', 'ACCEPTED'),
+        (2, 1, 'MANUAL', 'ACCEPTED'),
+        (6, 1, 'MANUAL', 'ACCEPTED');
       UPDATE image SET display_name = '未分级6', rating_source = NULL, rating = 'UNKNOWN', thumb_ready = 1 WHERE id = 6;
       INSERT INTO ai_job (kind, image_id, status, error) VALUES
         ('LOOK', 1, 'FAILED', '网络异常'),
@@ -300,8 +307,8 @@ describe('重新整理（估算、归回源目录、参考上下文重看）', (
       message: '本地分级还剩 1 张，判完才能重新整理'
     })
 
-    // 标为非整理图（清空名字），使待分级为 0
-    await pg.exec(`UPDATE image SET display_name = NULL WHERE id = 6`)
+    // 取消 6 的已整理标签，使待分级为 0
+    await pg.exec(`UPDATE image_tag SET delete_state = 1 WHERE image_id = 6`)
 
     const hId = Number((await pg.query<{ id: number }>(`SELECT id FROM image WHERE display_name = '离线保留H'`)).rows[0].id)
     const res = await reorg.startReorganizeRelook()
@@ -328,5 +335,51 @@ describe('重新整理（估算、归回源目录、参考上下文重看）', (
       )
     ).rows[0]
     expect(rejected2.status).toBe('FAILED')
+  })
+
+  it('严格排除带待确认 AI 建议的图片，并与一键整理及扫描写盘阶段互斥', async () => {
+    const { pg } = getDatabase()
+    // 清理上一轮的排队任务，先验证互斥再验证严格范围
+    expect(await reorg.isReorganizeBusy()).toBe(true)
+    await expect(org.startOrganize()).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: '正在重新整理，请先等待完成或停止当前队列'
+    })
+    await expect(reorg.startReorganizeRelook()).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(reorg.resetOrganizedToSource()).rejects.toMatchObject({ code: 'CONFLICT' })
+
+    // 扫描协同：重新整理看图队列中允许手动扫描；仅 ASSIGNING / resetting 才阻塞 startScan
+    scan.configureScan({ thumbsDir: join(dir, 'thumbs'), categoryHomeOverride: libraryDir, canRunAuto: () => true })
+    expect(() => scan.startScan(null)).not.toThrow()
+    await scan.stopScanAndWait()
+
+    const assignSpy = vi.spyOn(org, 'getOrganizeState').mockReturnValue({ phase: 'ASSIGNING', plan: null, error: null })
+    expect(() => scan.startScan(null)).toThrow('正在整理文件，请稍候再扫描')
+    assignSpy.mockRestore()
+
+    const planReadySpy = vi.spyOn(org, 'getOrganizeState').mockReturnValue({ phase: 'PLAN_READY', plan: [], error: null })
+    expect(() => scan.startScan(null)).not.toThrow()
+    await scan.stopScanAndWait()
+    await expect(reorg.startReorganizeRelook()).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(reorg.resetOrganizedToSource()).rejects.toMatchObject({ code: 'CONFLICT' })
+    planReadySpy.mockRestore()
+
+    // 结束排队中的重新整理任务
+    await pg.exec(`UPDATE ai_job SET status = 'DONE' WHERE kind = 'LOOK' AND status IN ('QUEUED', 'RUNNING')`)
+    expect(await reorg.isReorganizeBusy()).toBe(false)
+
+    // 给图 1 加上 PENDING AI 建议（保留图 1 的 ACCEPTED 标签），给图 4 仅保留 display_name（无 tag / 类目录）
+    await pg.exec(`
+      INSERT INTO image_ai_result (image_id, kind, model, result, field_status)
+      VALUES (1, 'IDENTIFY', 'm', '{"name":"待审名字"}', '{"name":"PENDING"}')
+    `)
+    const estPending = await reorg.estimateReorganize()
+    // 1 有 PENDING 建议被排除，4 仅 display_name 被排除；仅剩 2(ACCEPTED标签) 和 H(类目录) => 2 张
+    expect(estPending.organizedCount).toBe(2)
+
+    // 验证归回源目录也严格排除带 PENDING 建议的图 1
+    const resetRes = await reorg.resetOrganizedToSource()
+    expect(resetRes.resetImages).toBe(2)
+    expect((await pg.query(`SELECT 1 FROM image_tag WHERE image_id = 1 AND delete_state = 0`)).rows).toHaveLength(1)
   })
 })
