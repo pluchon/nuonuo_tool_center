@@ -1,12 +1,15 @@
 // 本地分级：扫描完、启动后在后台给还没分级的图逐张判一遍（WD 模型，跑在单独的 utilityProcess 里）。
 // 判为明显 R-18 的直接打上（诺诺判的）；手动开关过的图永远不改。扫描进行中让路，空闲一段时间后关掉工作进程释放内存
 import { join } from 'node:path'
+import { and, eq } from 'drizzle-orm'
 import { utilityProcess, type UtilityProcess } from 'electron'
 import { getLogger } from '../../common/logger'
 import type { RatingProgressVO } from '@shared/api'
+import { getDatabase } from '../../db/client'
+import { image } from '../../db/schema'
 import { countRatingCandidates, findRatingCandidates, saveModelRating } from '../../repositories/imageRepository'
 import { findSearchVisualFeatures, saveSearchVisualFeatures } from '../../repositories/aiSearchRepository'
-import { WD_GENERAL_THRESHOLD, type RatingRequest, type RatingResponse } from './ratingProtocol'
+import { WD_GENERAL_THRESHOLD, type RatingRequest, type RatingResponse, type WdCharacterHint } from './ratingProtocol'
 import { loadCheckpoint, RATING_CHECKPOINT, saveCheckpoint } from '../progressCheckpoint'
 import { pickModelFile } from './modelFile'
 import { ensureModel, isModelReady, MODEL_NAME, modelDirOf } from './modelStore'
@@ -280,13 +283,62 @@ export function getVisualTagsForSearch(imageId: number): Promise<string[] | null
     if (!cfg || !(await isModelReady(cfg.modelsRoot))) return null
     const res = await rateFile(join(cfg.thumbsDir, row.contentHash + '.webp'), modelDirOf(cfg.modelsRoot), threads)
     if (!res.ok || stopping) return null
-    return await saveSearchVisualFeatures(imageId, FEATURE_REVISION, res.tags) ? res.tags : null
+    return await saveSearchVisualFeatures(imageId, FEATURE_REVISION, res.tags, res.characters) ? res.tags : null
   })().catch((error: unknown) => {
     log.warn(`图片 ${imageId} 无法校验本地画面特征`, error)
     return null
   }).finally(() => pendingFeatures.delete(imageId))
   pendingFeatures.set(imageId, request)
   return request
+}
+
+// 为看图提取本地 WD 角色与画面特征线索（只读普通图，不抛错，模型不可用时降级返回已有特征或 null）
+export async function getVisualHintsForLook(
+  imageId: number
+): Promise<{ tags: string[]; characters: WdCharacterHint[] } | null> {
+  let fallback: { tags: string[]; characters: WdCharacterHint[] } | null = null
+  try {
+    const { db } = getDatabase()
+    const [row] = await db
+      .select({ contentHash: image.contentHash, visualFeatures: image.visualFeatures })
+      .from(image)
+      .where(and(eq(image.id, imageId), eq(image.deleteState, 0), eq(image.isR18, false)))
+      .limit(1)
+    if (!row) return null
+
+    const cached = row.visualFeatures
+    const cachedTags = Array.isArray(cached?.tags)
+      ? cached.tags.filter((tag): tag is string => typeof tag === 'string')
+      : null
+    if (Array.isArray(cached?.characters)) {
+      return { tags: cachedTags ?? [], characters: cached.characters }
+    }
+    if (cachedTags) {
+      fallback = { tags: cachedTags, characters: [] }
+    }
+
+    const cfg = config
+    if (!cfg || stopping || !(await isModelReady(cfg.modelsRoot))) {
+      return fallback
+    }
+    const res = await rateFile(join(cfg.thumbsDir, `${row.contentHash}.webp`), modelDirOf(cfg.modelsRoot), threads)
+    if (!res.ok || stopping) {
+      return fallback
+    }
+    if (isObviousR18(res.scores, cfg.threshold)) {
+      return null
+    }
+    const characters = res.characters ?? []
+    const nextFeatures = { revision: FEATURE_REVISION, tags: res.tags, characters }
+    await db
+      .update(image)
+      .set({ visualFeatures: nextFeatures })
+      .where(and(eq(image.id, imageId), eq(image.deleteState, 0), eq(image.isR18, false)))
+    return { tags: res.tags, characters }
+  } catch (error: unknown) {
+    log.warn(`图片 ${imageId} 无法提取本地角色与画面特征`, error)
+    return fallback
+  }
 }
 
 // 跑一轮：一批一批取还没分级的图，直到没有了、扫描开始了或要退出了
@@ -328,7 +380,9 @@ async function runOnce(): Promise<void> {
       if (stopping && !res.ok) break
       if (res.ok) {
         const hit = isObviousR18(res.scores, cfg.threshold)
-        const features = hit ? undefined : { revision: FEATURE_REVISION, tags: res.tags }
+        const features = hit
+          ? undefined
+          : { revision: FEATURE_REVISION, tags: res.tags, ...(res.characters?.length ? { characters: res.characters } : {}) }
         if ((await saveModelRating(img.id, ratingOf(res.scores), res.scores, hit, features)) && hit) {
           r18++
         }

@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm'
 import { getDatabase } from '../db/client'
 import { col, likeEscape } from '../db/sqlUtil'
 import { aiJob, image, imageEmbedding, imageFile, imageTag, libraryRoot, tag, tagAlias } from '../db/schema'
+import type { WdCharacterHint } from '../services/rating/ratingProtocol'
 import { hasPendingSuggestion } from './aiResultRepository'
 
 // 诺诺找图的检索条件（服务层已经解析好：词已对到标签 id，对不上的留作关键词）
@@ -161,9 +162,15 @@ export async function matchCachedVisualFeatures(
   ))
 }
 
-export async function saveSearchVisualFeatures(imageId: number, revision: string, tags: string[]): Promise<boolean> {
+export async function saveSearchVisualFeatures(
+  imageId: number,
+  revision: string,
+  tags: string[],
+  characters?: WdCharacterHint[]
+): Promise<boolean> {
+  const visualFeatures = { revision, tags, ...(characters !== undefined ? { characters } : {}) }
   const rows = await getDatabase().db.update(image)
-    .set({ visualFeatures: { revision, tags } })
+    .set({ visualFeatures })
     .where(visualFeatureScope(imageId))
     .returning({ id: image.id })
   return rows.length > 0

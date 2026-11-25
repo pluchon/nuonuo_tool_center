@@ -109,7 +109,11 @@ export const image = pgTable(
     ratingSource: ratingSourceEnum('rating_source'),
     ratingScores: jsonb('rating_scores'),
     // 本地模型识别出的画面特征，仅用于检索校验，不计入用户标签。
-    visualFeatures: jsonb('visual_features').$type<{ revision: string; tags: string[] }>(),
+    visualFeatures: jsonb('visual_features').$type<{
+      revision: string
+      tags: string[]
+      characters?: Array<{ name: string; score: number }>
+    }>(),
     // R-18 开关：用户手动标记，打开后网格里遮挡
     isR18: boolean('is_r18').notNull().default(false),
     // 拍摄时间与拍摄信息（机身、镜头、焦距、光圈、快门、ISO），没有 EXIF 时为空

@@ -1,11 +1,12 @@
 // AI 建议：列出一张图待确认的各项、逐项采用或不要、全部采用；其他 AI 辅助整理的提示词和贴回结果的整理（设计 6.5、6.6）
-import { TAGS_PER_IMAGE, type AiSuggestionVO, type SuggestionBatchVO } from '@shared/api'
+import { NAME_MAX, TAGS_PER_IMAGE, TAG_NAME_MAX, type AiSuggestionVO, type SuggestionBatchVO } from '@shared/api'
 import { isAssistRecord, parseAssistJson } from '@shared/assistJson'
 import { BAILIAN_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
 import { chatCall } from './bailianClient'
 import { prepareImage } from './imagePrep'
 import type { ContentPart } from './promptPrefix'
 import { BizError } from '../../common/bizError'
+import { isSkippedDir, normalizeRelDir } from '../../common/pathUtil'
 import { categoryPaths, ensureSuggestionTarget } from '../fileOps/folderOpsService'
 import { categoryPathIndex } from '../fileOps/categoryPaths'
 import { copyImages } from '../fileOps/transferService'
@@ -106,8 +107,44 @@ async function mark(imageId: number, key: string, state: FieldState): Promise<vo
   }
 }
 
+// 校验行内修改的建议内容：去首尾空白，按字段规则检查并规范化
+export function validateOverride(kind: AiSuggestionVO['kind'], raw: string): string {
+  if (kind === 'r18Review') {
+    throw new BizError('BAD_REQUEST', '分级复核不支持编辑内容')
+  }
+  if (kind === 'name') {
+    const v = raw.trim()
+    if (!v) throw new BizError('BAD_REQUEST', '内容不能为空')
+    if (Array.from(v).length > NAME_MAX) {
+      throw new BizError('BAD_REQUEST', `名字最多 ${NAME_MAX} 个字`)
+    }
+    return v
+  }
+  if (kind === 'tag' || kind === 'who' || kind === 'work') {
+    const v = raw.trim().replace(/\s+/g, ' ')
+    if (!v) throw new BizError('BAD_REQUEST', '内容不能为空')
+    if (Array.from(v).length > TAG_NAME_MAX) {
+      throw new BizError('BAD_REQUEST', `标签名最多 ${TAG_NAME_MAX} 个字`)
+    }
+    return v
+  }
+  if (kind === 'src') {
+    const v = raw.trim()
+    if (!/^https?:\/\/\S+$/i.test(v)) {
+      throw new BizError('BAD_REQUEST', '出处需要是完整的 http 或 https 链接')
+    }
+    return v
+  }
+  const v = raw.trim()
+  const normalized = normalizeRelDir(v.replaceAll('/', '\\'))
+  if (!normalized || normalized.split('\\').some((seg) => isSkippedDir(seg) || seg.length > 255)) {
+    throw new BizError('BAD_REQUEST', '目录路径格式不对')
+  }
+  return normalized
+}
+
 // 采用或不要一项，返回剩下的
-export async function decideSuggestion(imageId: number, key: string, accept: boolean): Promise<AiSuggestionVO[]> {
+export async function decideSuggestion(imageId: number, key: string, accept: boolean, customValue?: string): Promise<AiSuggestionVO[]> {
   checkId(imageId)
   const item = (await listSuggestions(imageId)).find((s) => s.key === key)
   if (!item) {
@@ -117,24 +154,48 @@ export async function decideSuggestion(imageId: number, key: string, accept: boo
     if (!(await updateR18([imageId], accept, true))) throw new BizError('NOT_FOUND', '这条建议已经处理过了')
     return listSuggestions(imageId)
   }
+  const finalValue = accept && typeof customValue === 'string' ? validateOverride(item.kind, customValue) : item.value
   if (accept) {
-    await apply(imageId, item.kind, item.value, item.isNew === false)
+    const mustExist = finalValue === item.value && item.isNew === false
+    await apply(imageId, item.kind, finalValue, mustExist)
   }
   await mark(imageId, key, accept ? 'ACCEPTED' : 'REJECTED')
-  await recordEvent(accept ? 'suggestion.accept' : 'suggestion.reject', imageId, { kind: item.kind, value: item.value, origin: item.origin })
+  await recordEvent(accept ? 'suggestion.accept' : 'suggestion.reject', imageId, {
+    kind: item.kind,
+    value: accept ? finalValue : item.value,
+    origin: item.origin,
+    ...(accept && finalValue !== item.value ? { originalValue: item.value, edited: true } : {})
+  })
   return listSuggestions(imageId)
 }
 
 // 全部采用（标签满了的那几项留着，报一次原因）
-export async function acceptAllSuggestions(imageId: number): Promise<AiSuggestionVO[]> {
+export async function acceptAllSuggestions(imageId: number, overrides?: Record<string, string>): Promise<AiSuggestionVO[]> {
   checkId(imageId)
+  const items = await listSuggestions(imageId)
+  const resolved = new Map<string, string>()
+  if (overrides) {
+    for (const item of items) {
+      if (item.kind === 'r18Review') continue
+      if (Object.prototype.hasOwnProperty.call(overrides, item.key) && typeof overrides[item.key] === 'string') {
+        resolved.set(item.key, validateOverride(item.kind, overrides[item.key]))
+      }
+    }
+  }
   let firstError: unknown = null
-  for (const item of await listSuggestions(imageId)) {
+  for (const item of items) {
     if (item.kind === 'r18Review') continue
+    const finalValue = resolved.get(item.key) ?? item.value
+    const mustExist = finalValue === item.value && item.isNew === false
     try {
-      await apply(imageId, item.kind, item.value, item.isNew === false)
+      await apply(imageId, item.kind, finalValue, mustExist)
       await mark(imageId, item.key, 'ACCEPTED')
-      await recordEvent('suggestion.accept', imageId, { kind: item.kind, value: item.value, origin: item.origin })
+      await recordEvent('suggestion.accept', imageId, {
+        kind: item.kind,
+        value: finalValue,
+        origin: item.origin,
+        ...(finalValue !== item.value ? { originalValue: item.value, edited: true } : {})
+      })
     } catch (err) {
       firstError ??= err
     }

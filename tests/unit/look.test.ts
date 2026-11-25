@@ -47,6 +47,44 @@ describe('本地线索', () => {
     expect(photo.notes.join()).toContain('Canon EOS R6')
     expect(localClues('随便一张.jpg', null)).toMatchObject({ source: null, photo: false, notes: ['文件名：随便一张.jpg'] })
   })
+
+  it('提取有意义的父目录线索并过滤通用目录与日期，格式化本地模型角色与视觉特征', () => {
+    const withFolders = localClues('001.jpg', null, { relPath: 'pics\\2025-01\\原神\\甘雨\\001.jpg' })
+    expect(withFolders.notes).toContain('目录线索：原神 / 甘雨')
+
+    const genericOnly = localClues('002.jpg', null, { relPath: 'Downloads/壁纸/2025/新建文件夹/002.jpg' })
+    expect(genericOnly.notes.some((n) => n.startsWith('目录线索：'))).toBe(false)
+
+    const withVisual = localClues('12345678_p0.png', null, {
+      relPath: '图库/明日方舟/阿米娅/12345678_p0.png',
+      visualHints: {
+        characters: [
+          { name: 'amiya_(arknights)', score: 0.874 },
+          { name: 'texas', score: 0.412 },
+          { name: 'c3', score: 0.39 },
+          { name: 'c4', score: 0.38 },
+          { name: 'c5', score: 0.37 },
+          { name: 'c6', score: 0.36 }
+        ],
+        tags: [
+          '1girl', 'solo', 'looking_at_viewer', 'simple_background',
+          'brown_hair', 'blue_eyes', 'rabbit_ears', 'ahoge', 'coat',
+          'hair_ornament', 'dress', 'sword', 'halo', 'glasses',
+          'twintails', 'wings', 'tail', 'witch_hat'
+        ]
+      }
+    })
+    const joined = withVisual.notes.join('\n')
+    expect(joined).toContain('目录线索：明日方舟 / 阿米娅')
+    expect(joined).toContain('本地模型候选角色（仅供参考，请结合画面细节与联网搜索核实后再采用）：amiya (arknights) 87%、texas 41%、c3 39%、c4 38%、c5 37%')
+    expect(joined).not.toContain('c6 36%')
+    const traitsLine = withVisual.notes.find((n) => n.startsWith('本地模型视觉特征：')) ?? ''
+    expect(traitsLine).toContain('brown_hair')
+    expect(traitsLine).toContain('rabbit_ears')
+    expect(traitsLine).not.toContain('1girl')
+    expect(traitsLine).not.toContain('looking_at_viewer')
+    expect(traitsLine.replace('本地模型视觉特征：', '').split('、')).toHaveLength(12)
+  })
 })
 
 describe('建议整理', () => {
@@ -165,7 +203,7 @@ describe('看图队列和 AI 建议', () => {
     throw new Error('队列一直没空')
   }
 
-  it('只排过了闸门的非 R-18 新图；看图带本地线索，有出处线索的不联网；结果进 AI 建议，描述直接补上', async () => {
+  it('只排过了闸门的非 R-18 新图；看图带本地线索，Pixiv 图也开启联网核查；结果进 AI 建议，描述直接补上', async () => {
     reply = {
       text: '```json\n{"name": "落叶小猫", "character": "椰羊", "work": "", "tags": ["猫", "秋天"], "source": "https://example.com/made-up", "description": "一只猫"}\n```',
       sources: [{ url: 'https://example.com/real' }]
@@ -195,7 +233,7 @@ describe('看图队列和 AI 建议', () => {
     expect(calls).toHaveLength(2)
     expect(calls.every((c) => c.image)).toBe(true)
     const pixiv = calls.find((call) => call.text.includes('Pixiv 作品 12345678'))
-    expect(pixiv?.search).toBe(false)
+    expect(pixiv?.search).toBe(true)
     expect(calls.find((call) => call !== pixiv)?.search).toBe(true)
     expect(suggested).toBe(2)
 
@@ -343,5 +381,39 @@ describe('看图队列和 AI 建议', () => {
     expect(await look.cancelAllLooks()).toBe(1)
     await look.enqueueNewImages()
     expect((await look.getLookState()).count).toBe(0)
+  })
+
+  it('相机拍摄的照片看图时不开启联网搜索', async () => {
+    const { searchCall } = await import('../../src/main/services/ai/bailianClient')
+    vi.mocked(searchCall).mockReset()
+    vi.mocked(searchCall).mockImplementation(async (meta: { text: string; search?: boolean; imageDataUrl?: string }) => {
+      calls.push({ text: meta.text, search: meta.search, image: !!meta.imageDataUrl?.startsWith('data:image/jpeg;base64,') })
+      return { ...reply, usage: {} } as never
+    })
+    const photoFile = join(source, 'IMG_9999.jpg')
+    await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 100, g: 140, b: 200 } } }).jpeg().toFile(photoFile)
+    const photoHash = await hashFile(photoFile)
+    const { pg } = getDatabase()
+    const inserted = await pg.query<{ id: number }>(
+      `INSERT INTO image (content_hash, format, byte_size, width, height, thumb_ready, rating, rating_source, is_r18, exif)
+       VALUES ($1, 'JPG', 1, 1600, 900, 1, 'GENERAL', 'MODEL', false, '{"make":"Sony","model":"ILCE-7M4"}'::jsonb)
+       RETURNING id`,
+      [photoHash]
+    )
+    const photoId = Number(inserted.rows[0].id)
+    await pg.query(`INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES ($1, 1, 'IMG_9999.jpg', now())`, [photoId])
+
+    look.configureLook({
+      thumbsDir: join(dir, 'thumbs'),
+      tempDir: join(dir, 'tmp'),
+      canRun: () => true,
+      onState: (s) => states.push(s.count),
+      onSuggested: () => suggested++
+    })
+    await look.lookNow(photoId)
+    await idle()
+    const last = calls.at(-1)
+    expect(last?.search).toBe(false)
+    expect(last?.text).toContain('Sony ILCE-7M4')
   })
 })

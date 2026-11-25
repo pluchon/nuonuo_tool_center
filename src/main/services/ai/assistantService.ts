@@ -301,10 +301,17 @@ async function standalonePlanKey(
   tags: Array<DictTag & { general: boolean }>,
   version: number | null
 ) {
+  const hasShownInHistory = history.some(
+    (m) => m.role === 'ASSISTANT' && ((m.content as AssistantContent).imageIds?.length ?? 0) > 0
+  )
+  const followUpOrConversational =
+    /[这那它她他]|上次|刚才|前面|继续|再来|其中|剩下|其他|另外|一样|相似|要求|记住|偏好|喜欢|推荐|解释|比较|第.{0,4}张|按.*(?:筛选|描述)|还有|换|别|看过|爱了|好看|可爱|漂亮|不错|萌|绝了|太棒|诺诺/u
   if (
     attachmentsOf(u).length ||
     query.length > 120 ||
-    /[这那它她他]|上次|刚才|前面|继续|再来|其中|剩下|其他|另外|一样|相似|要求|记住|偏好|喜欢|推荐|解释|比较|第.{0,4}张|按.*(?:筛选|描述)/u.test(query)
+    followUpOrConversational.test(query) ||
+    followUpOrConversational.test(u.text) ||
+    (hasShownInHistory && /(?:还有|换|别|再|更多|没看够|类似|差不多的|[？?吗呢]$)/u.test(u.text.trim()))
   ) {
     return
   }
@@ -398,6 +405,7 @@ export async function answer(
     })
 
     let content: AssistantContent
+    let allAlreadyShown = false
     if (fast.content) {
       content = fast.content
     } else {
@@ -416,6 +424,31 @@ export async function answer(
         ? '前文讨论的图库图片（当前元数据，仅在用户承接话题时参考）：' + JSON.stringify({ 图片: ordinaryFocus, 近期回应: recentRemarks })
         : undefined
       const latestPlan = history.findLast((m) => m.role === 'ASSISTANT' && (m.content as AssistantContent).categoryProposalId)
+      const shownIdOrder: number[] = []
+      const seenShownIds = new Set<number>()
+      for (let i = history.length - 1; i >= 0 && shownIdOrder.length < 40; i--) {
+        const row = history[i]
+        if (row.role !== 'ASSISTANT') continue
+        const ids = (row.content as AssistantContent).imageIds
+        if (!Array.isArray(ids)) continue
+        for (const id of ids) {
+          if (Number.isInteger(id) && id > 0 && !seenShownIds.has(id)) {
+            seenShownIds.add(id)
+            shownIdOrder.push(id)
+            if (shownIdOrder.length >= 40) break
+          }
+        }
+      }
+      let shownImages: Array<{ id: number; name: string | null }> | undefined
+      if (shownIdOrder.length > 0) {
+        const visibleIds = await visibleForTurn(shownIdOrder)
+        const visibleOrdered = shownIdOrder.filter((id) => visibleIds.has(id))
+        if (visibleOrdered.length > 0) {
+          const ordinaryItems = await itemsOfImages(visibleOrdered, false, dirs)
+          const nameById = new Map(ordinaryItems.map((item) => [item.imageId, item.name]))
+          shownImages = visibleOrdered.map((id) => ({ id, name: nameById.get(id) ?? null }))
+        }
+      }
       const env: ToolEnv = {
         userText: u.text,
         query: fast.query,
@@ -428,6 +461,7 @@ export async function answer(
         userMessageId: user.id,
         candidateIds: fast.candidateIds,
         previousResults,
+        shownImages,
         previousProposal: latestPlan
           ? { id: (latestPlan.content as AssistantContent).categoryProposalId!, messageId: latestPlan.id }
           : undefined,
@@ -522,10 +556,13 @@ export async function answer(
         const outcome = state.lastSearch?.outcome
         const imageIds = outcome?.imageIds ?? []
         const found = imageIds.length
+        allAlreadyShown = Boolean(outcome?.allAlreadyShown)
         content = {
           text:
             state.directoryProposal?.text ??
-            (outcome && !state.needsDetails ? state.lastSearch?.caption ?? localReplyText(found) : text || '诺诺没想好怎么回答，换个说法再问一次吧。'),
+            (outcome && !state.needsDetails
+              ? state.lastSearch?.caption ?? (text || localReplyText(found))
+              : text || '诺诺没想好怎么回答，换个说法再问一次吧。'),
           ...(state.lastSearch?.caption && !state.needsDetails ? { cardCaption: true } : {}),
           ...(state.directoryProposal?.categoryProposalId
             ? { categoryProposalId: state.directoryProposal.categoryProposalId, proposalNote: state.directoryProposal.proposalNote }
@@ -543,7 +580,7 @@ export async function answer(
             : {}),
           memoryIds: state.memoryIds ?? []
         }
-        if (outcome && !found && !(await hasSearchableImage(dirs, u.includeR18))) {
+        if (outcome && !found && !allAlreadyShown && !(await hasSearchableImage(dirs, u.includeR18))) {
           content.text = await emptyScopeText(dirs, u.includeR18)
           content.how = null
           content.incomplete = undefined
@@ -558,7 +595,7 @@ export async function answer(
         cachedTokens: a.cachedTokens + b.cachedTokens
       }))
     }
-    if (content.incomplete && !content.imageIds.length) content.text = '目前只完成了部分检索。'
+    if (content.incomplete && !content.imageIds.length && !allAlreadyShown) content.text = '目前只完成了部分检索。'
     if (content.imageIds.length && !content.text) {
       const previous = history.findLast((row) => row.role === 'ASSISTANT')?.content as AssistantContent | undefined
       content.text = cardCaption(

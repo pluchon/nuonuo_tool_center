@@ -11,8 +11,28 @@
     <div v-for="g in items" :key="g.key" class="sugg__row">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="icons[g.kind]" /></svg>
       <span class="sugg__kind">{{ kinds[g.kind] }}</span>
-      <span class="sugg__val">{{ g.value }}</span>
-      <span v-if="g.isNew" class="sugg__new">新建</span>
+      <input
+        v-if="editingKey === g.key"
+        ref="editInput"
+        v-model="editingText"
+        class="sugg__input"
+        type="text"
+        :disabled="busy"
+        @keydown.enter="onEditEnter($event, g)"
+        @keydown.escape="onEditEscape($event)"
+        @blur="commitDraft(g)"
+      />
+      <button
+        v-else-if="isEditable(g.kind)"
+        type="button"
+        class="sugg__val sugg__val--editable"
+        :class="{ 'sugg__val--edited': Boolean(drafts[g.key]) }"
+        :disabled="busy"
+        :title="drafts[g.key] ?? g.value"
+        @click="startEdit(g)"
+      >{{ drafts[g.key] ?? g.value }}</button>
+      <span v-else class="sugg__val">{{ g.value }}</span>
+      <span v-if="g.isNew && !drafts[g.key]" class="sugg__new">新建</span>
       <button class="sugg__ok" type="button" :aria-label="g.kind === 'r18Review' ? '保留 R-18' : '采用'" :disabled="busy" @click="decide(g.key, true)">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
       </button>

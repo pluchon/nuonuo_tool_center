@@ -96,12 +96,20 @@ export async function historyTurns(history: AiMessageEntity[]): Promise<{
 }
 
 // 第④层：当前时间、范围、是否包含 R-18、检索到的记忆，加上这句话
-export function buildTurnTail(text: string, scope: string | null, includeR18: boolean, now: Date, memories: string[]): PromptMessage[] {
+export function buildTurnTail(
+  text: string,
+  scope: string | null,
+  includeR18: boolean,
+  now: Date,
+  memories: string[],
+  sessionState?: string
+): PromptMessage[] {
   const pad = (n: number): string => String(n).padStart(2, '0')
   const time = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
   const memo = memories.length ? `\n[软件附注] 记得的偏好：\n${memories.map((m) => `- ${m}`).join('\n')}` : ''
+  const session = sessionState ? `\n${sessionState}` : ''
   return [
-    { role: 'system', content: `当前时间 ${time}。图库工具范围为${scope ? `「${scope}」` : '全部类目录'}，${includeR18 ? '包含' : '不包含'} R-18。${memo}` },
+    { role: 'system', content: `当前时间 ${time}。图库工具范围为${scope ? `「${scope}」` : '全部类目录'}，${includeR18 ? '包含' : '不包含'} R-18。${memo}${session}` },
     { role: 'user', content: text }
   ]
 }

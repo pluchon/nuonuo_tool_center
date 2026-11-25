@@ -2,6 +2,12 @@
 import type { WdRating } from './wdTagger'
 
 export const WD_GENERAL_THRESHOLD = 0.35
+export const WD_CHARACTER_HINT_THRESHOLD = 0.35
+
+export interface WdCharacterHint {
+  name: string
+  score: number
+}
 
 // 请求：给一张图（缩略图文件）分级
 export interface RatingRequest {
@@ -14,5 +20,5 @@ export interface RatingRequest {
 
 // 回复：四个分级的分数，或失败原因
 export type RatingResponse =
-  | { id: number; ok: true; scores: Record<WdRating, number>; tags: string[] }
+  | { id: number; ok: true; scores: Record<WdRating, number>; tags: string[]; characters?: WdCharacterHint[] }
   | { id: number; ok: false; error: string }

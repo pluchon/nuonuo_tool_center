@@ -30,6 +30,8 @@ export interface SearchOutcome {
   ordinaryIds: number[]
   evidence: MatchEvidence
   incomplete?: string
+  alreadyShownCount?: number
+  allAlreadyShown?: boolean
 }
 
 // 词典：标签（含分类名、别名）和目录名
@@ -61,7 +63,7 @@ export async function emptyScopeText(dirs: AiSearchFilter['dirs'], includeR18: b
 export function ordinaryCardCaption(value: unknown, outcome: SearchOutcome): string | undefined {
   if (typeof value !== 'string' || !outcome.ordinaryIds.length || outcome.ordinaryIds.length !== outcome.imageIds.length) return
   const text = value.trim()
-  if (!text || text.length > 60 || /[\r\n]|给用户看了|[0-9一二三四五六七八九十几]+\s*张|#\d|R[- ]?18|https?:\/\/|\.(?:png|jpe?g|webp|gif)\b/iu.test(text)) return
+  if (!text || text.length > 90 || /[\r\n]|给用户看了|[0-9一二三四五六七八九十几]+\s*张|#\d|R[- ]?18|https?:\/\/|\.(?:png|jpe?g|webp|gif)\b/iu.test(text)) return
   return text
 }
 

@@ -38,8 +38,9 @@ import {
   type AiJobEntity
 } from '../../repositories/aiResultRepository'
 import { findTagNamesOf, findVocabulary } from '../../repositories/aiSearchRepository'
+import { getVisualHintsForLook } from '../rating/ratingService'
 import { getBailianClient, recordBatchUsage, searchCall } from './bailianClient'
-import { localClues, type ClueExif, type LocalClues } from './localClues'
+import { localClues, type LocalClues } from './localClues'
 import { LOOK_RULES, lookTail } from './lookPrompt'
 import { prepareImage } from './imagePrep'
 import { profileOfConversation } from './profileService'
@@ -63,8 +64,9 @@ const BATCH_RETRY_MS = 15_000
 const BATCH_READ_TIMEOUT_MS = 20_000
 const BATCH_CANCEL_TIMEOUT_MS = 10_000
 const BATCH_CONFIRM_WINDOW_MS = 5 * 60_000
-// 发给模型的图：长边缩到 1024
-const LONG_EDGE = 1024
+// 发给模型的图：实时长边缩到 1280，批量缩到 1024 控制文件体积
+const LONG_EDGE = 1280
+const BATCH_LONG_EDGE = 1024
 // 记在设置里的“从什么时候起导入的图自动看”（第一次启用看图时写入，之前的老图不自动排队，免得一次花掉很多钱）
 const SINCE_KEY = 'ai.lookSince'
 // 状态里最多列多少行
@@ -204,9 +206,12 @@ export async function enqueueNewImages(): Promise<void> {
   scheduleLook()
 }
 
-// 把图缩到长边 1024、去掉元信息，转成 data URL；原图读不了（RAW、目录离线）时用缩略图
-function imageDataUrl(info: NonNullable<Awaited<ReturnType<typeof findLookInfo>>>): Promise<string | null> {
-  return prepareImage(info, config!.thumbsDir, LONG_EDGE)
+// 把图缩到指定长边、去掉元信息，转成 data URL；原图读不了（RAW、目录离线）时用缩略图
+function imageDataUrl(
+  info: NonNullable<Awaited<ReturnType<typeof findLookInfo>>>,
+  longEdge = LONG_EDGE
+): Promise<string | null> {
+  return prepareImage(info, config!.thumbsDir, longEdge)
 }
 
 function realtimeLookInstructions(): Promise<string> {
@@ -257,9 +262,15 @@ async function saveLookResult(jobId: number, imageId: number, content: unknown, 
   return completeLookJob(jobId, { imageId, kind: 'IDENTIFY', origin: 'NONO', model, result: fields, fieldStatus: pendingStatus(fields), usage: usage ?? null }, fields.description)
 }
 
+type VisualHints = NonNullable<Parameters<typeof localClues>[2]>['visualHints']
+
 // 一张图的线索
-function cluesOf(info: NonNullable<Awaited<ReturnType<typeof findLookInfo>>>): LocalClues {
-  return localClues(info.relPath?.split('\\').pop() ?? '', (info.exif as ClueExif | null) ?? null)
+function cluesOf(
+  info: NonNullable<Awaited<ReturnType<typeof findLookInfo>>>,
+  visualHints: VisualHints = info.visualFeatures ?? null
+): LocalClues {
+  const fileName = info.relPath?.split(/[/\\]/).pop() ?? ''
+  return localClues(fileName, info.exif, { relPath: info.relPath, visualHints })
 }
 
 // 实时看一张
@@ -275,7 +286,10 @@ async function lookOne(job: AiJobEntity): Promise<void> {
     await updateJob(job.id, { status: 'FAILED', error: '读不到原图', finishedAt: new Date() })
     return
   }
-  const clues = cluesOf(info)
+  const visualHints = Array.isArray(info.visualFeatures?.characters)
+    ? info.visualFeatures
+    : await getVisualHintsForLook(info.id)
+  const clues = cluesOf(info, visualHints)
   const instructions = await realtimeLookInstructions()
   if (!(await allowedLookImages([info.id])).has(info.id)) {
     await updateJob(job.id, { status: 'CANCELLED', finishedAt: new Date() })
@@ -290,7 +304,7 @@ async function lookOne(job: AiJobEntity): Promise<void> {
       instructions,
       text: lookTail(clues),
       imageDataUrl: url,
-      search: !clues.photo && !clues.source,
+      search: !clues.photo,
       timeoutMs: TIMEOUT_MS,
       signal: realtimeAbort.signal
     })
@@ -465,7 +479,7 @@ async function batchLine(job: AiJobEntity, instructions: string): Promise<string
     await updateJob(job.id, { status: 'CANCELLED', finishedAt: new Date() })
     return null
   }
-  const url = await imageDataUrl(info)
+  const url = await imageDataUrl(info, BATCH_LONG_EDGE)
   if (!url) {
     await updateJob(job.id, { status: 'FAILED', error: '读不到原图', finishedAt: new Date() })
     return null
@@ -475,7 +489,7 @@ async function batchLine(job: AiJobEntity, instructions: string): Promise<string
     enable_thinking: false,
     messages: [
       { role: 'system', content: instructions },
-      { role: 'user', content: [{ type: 'text', text: lookTail(cluesOf(info)) }, { type: 'image_url', image_url: { url } }] }
+      { role: 'user', content: [{ type: 'text', text: lookTail(cluesOf(info, info.visualFeatures ?? null)) }, { type: 'image_url', image_url: { url } }] }
     ]
   }
   return JSON.stringify({ custom_id: String(job.id), method: 'POST', url: '/v1/chat/completions', body })

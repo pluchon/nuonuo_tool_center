@@ -8,6 +8,7 @@ import { defineTool, dispatchTool, validateToolArgs } from '../../src/main/servi
 import { createInitialHarnessState } from '../../src/main/services/ai/harness/types'
 import { evaluateVisualTags, normalizeVisualTags } from '../../src/main/services/ai/search/visualMatcher'
 
+const calls: Array<{ messages: unknown[]; tools: unknown[] }> = []
 const script: Array<{ content?: string; tool_calls?: unknown[] }> = []
 vi.mock('../../src/main/services/ai/embeddingClient', () => ({
   embed: vi.fn(async () => {
@@ -15,7 +16,8 @@ vi.mock('../../src/main/services/ai/embeddingClient', () => ({
   })
 }))
 vi.mock('../../src/main/services/ai/bailianClient', () => ({
-  chatCall: vi.fn(async (input?: { onDelta?: (delta: string) => void }) => {
+  chatCall: vi.fn(async (input?: { messages?: unknown[]; tools?: unknown[]; onDelta?: (delta: string) => void }) => {
+    calls.push({ messages: JSON.parse(JSON.stringify(input?.messages ?? [])), tools: input?.tools ?? [] })
     const next = script.shift() ?? { content: '好的' }
     if (input?.onDelta && next.content) {
       const mid = Math.ceil(next.content.length / 2)
@@ -139,6 +141,7 @@ describe('AgentHarness 集成动态工具与通用视觉过滤', () => {
   })
 
   beforeEach(() => {
+    calls.length = 0
     script.length = 0
   })
 
@@ -260,5 +263,125 @@ describe('AgentHarness 集成动态工具与通用视觉过滤', () => {
     const q = await ask({ conversationId: null, text: '找没有猫耳字面名但有狐耳的图', scope: null, includeR18: false })
     const res = await answer(q.conversation.id)
     expect(res.images.map((i) => i.name)).toEqual(['眼镜狐娘'])
+  })
+
+  it('excludeShown: true 自动排除本段对话已展示过的图片', async () => {
+    script.push({
+      tool_calls: [
+        {
+          id: 'd1',
+          type: 'function',
+          function: {
+            name: 'search_images',
+            arguments: JSON.stringify({ visualInclude: ['glasses'], visualExclude: ['fox_ears'], contrast: [] })
+          }
+        }
+      ]
+    })
+    const q = await ask({ conversationId: null, text: '找戴眼镜但不要狐耳的图', scope: null, includeR18: false })
+    const first = await answer(q.conversation.id)
+    expect(first.images.map((i) => i.name)).toEqual(['眼镜学妹'])
+
+    script.push(
+      {
+        tool_calls: [
+          {
+            id: 'd2',
+            type: 'function',
+            function: {
+              name: 'search_images',
+              arguments: JSON.stringify({ visualInclude: ['glasses'], excludeShown: true, contrast: [] })
+            }
+          }
+        ]
+      },
+      { content: '换一张眼镜狐娘给你看看喵～' }
+    )
+    await ask({ conversationId: q.conversation.id, text: '还有其他的吗', scope: null, includeR18: false })
+    const second = await answer(q.conversation.id)
+    expect(second.images.map((i) => i.name)).toEqual(['眼镜狐娘'])
+    expect(second.text).toBe('换一张眼镜狐娘给你看看喵～')
+  })
+
+  it('对话式追问注入 [会话状态]（绝不泄露 R-18 图名），且 allAlreadyShown 时流式输出第二步暖心回复', async () => {
+    const { pg } = getDatabase()
+    const { rows: [r18] } = await pg.query<{ id: number }>(`
+      INSERT INTO image (content_hash, format, byte_size, width, height, display_name, is_r18, visual_features)
+      VALUES ('g-r18', 'PNG', 10, 100, 100, '绝对机密R18图', true, '{"revision":"harness-test","tags":["1girl","glasses"]}')
+      RETURNING id
+    `)
+    await pg.query("INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES ($1, 1, '二次元/g-r18.png', now())", [r18.id])
+    await pg.query("INSERT INTO image_tag (image_id, tag_id, source, status) VALUES ($1, 1, 'MANUAL', 'ACCEPTED')", [r18.id])
+    try {
+      script.push({
+        tool_calls: [
+          {
+            id: 'a1',
+            type: 'function',
+            function: {
+              name: 'search_images',
+              arguments: JSON.stringify({ tags: ['插画'], visualInclude: ['glasses'], contrast: [] })
+            }
+          }
+        ]
+      })
+      const q = await ask({ conversationId: null, text: '找插画里戴眼镜的图', scope: null, includeR18: true })
+      const first = await answer(q.conversation.id)
+      expect(first.images.map((i) => i.name).sort()).toEqual(['眼镜学妹', '眼镜狐娘', '绝对机密R18图'])
+
+      const events: Array<{ kind: string; text?: string; tool?: string }> = []
+      script.push(
+        {
+          tool_calls: [
+            {
+              id: 'a2',
+              type: 'function',
+              function: {
+                name: 'search_images',
+                arguments: JSON.stringify({ tags: ['插画'], visualInclude: ['glasses'], excludeShown: true, contrast: [] })
+              }
+            }
+          ]
+        },
+        { content: '我也超喜欢这张的喵！图库里戴眼镜的暂时都给你看过啦～' }
+      )
+      await ask({ conversationId: q.conversation.id, text: '诺诺，这张我超喜欢！还有其他的吗', scope: null, includeR18: true })
+      const reply = await answer(q.conversation.id, undefined, (ev) => events.push(ev))
+
+      expect(reply.images).toEqual([])
+      expect(reply.text).toBe('我也超喜欢这张的喵！图库里戴眼镜的暂时都给你看过啦～')
+      expect(reply.text).not.toBe('没找到符合条件的图片。')
+      expect(events.some((e) => e.kind === 'delta')).toBe(true)
+
+      const step1Tail = String((calls[1].messages.at(-2) as { content?: unknown })?.content ?? '')
+      expect(step1Tail).toContain('[会话状态]')
+      expect(step1Tail).toContain('本段对话已展示过 3 张图')
+      expect(step1Tail).toContain('眼镜学妹')
+      expect(step1Tail).not.toContain('绝对机密R18图')
+      expect(JSON.stringify(calls[1].messages[0])).toBe(JSON.stringify(calls[0].messages[0]))
+
+      const toolMsg = (calls[2].messages as Array<{ role: string; content: string }>).find((m) => m.role === 'tool')
+      expect(JSON.parse(toolMsg!.content)).toMatchObject({ total: 0, alreadyShownCount: 3, allAlreadyShown: true })
+    } finally {
+      await pg.query('UPDATE image SET delete_state = 1 WHERE id = $1', [r18.id])
+    }
+  })
+
+  it('同轮重复调用完全相同参数的工具会被拦截并返回提示', async () => {
+    script.push(
+      {
+        tool_calls: [
+          { id: 'dup1', type: 'function', function: { name: 'get_image', arguments: '{"id":1}' } },
+          { id: 'dup2', type: 'function', function: { name: 'get_image', arguments: '{ "id" : 1 }' } }
+        ]
+      },
+      { content: '这张图已经看过了。' }
+    )
+    const q = await ask({ conversationId: null, text: '看看图1', scope: null, includeR18: false })
+    const reply = await answer(q.conversation.id)
+    expect(reply.text).toBe('这张图已经看过了。')
+    const toolMsgs = (calls[1].messages as Array<{ role: string; content: string }>).filter((m) => m.role === 'tool')
+    expect(toolMsgs).toHaveLength(2)
+    expect(toolMsgs[1].content).toContain('本轮已经用完全相同的参数调用过该工具')
   })
 })

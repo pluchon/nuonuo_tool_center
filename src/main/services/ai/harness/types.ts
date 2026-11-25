@@ -113,6 +113,7 @@ export interface ToolEnv {
   previousResults?: PreviousSearchState
   referenceNotes?: string
   preferenceIds?: number[]
+  shownImages?: Array<{ id: number; name: string | null }>
   readReferences: () => Promise<Array<{ imageId: number; name: string; tags: string[] }>>
 }
 

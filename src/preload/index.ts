@@ -168,9 +168,10 @@ const api = {
   },
   suggestion: {
     list: (imageId: number): Promise<ApiResponse<AiSuggestionVO[]>> => ipcRenderer.invoke(IpcChannel.suggestionList, imageId),
-    decide: (imageId: number, key: string, accept: boolean): Promise<ApiResponse<AiSuggestionVO[]>> =>
-      ipcRenderer.invoke(IpcChannel.suggestionDecide, imageId, key, accept),
-    acceptAll: (imageId: number): Promise<ApiResponse<AiSuggestionVO[]>> => ipcRenderer.invoke(IpcChannel.suggestionAcceptAll, imageId),
+    decide: (imageId: number, key: string, accept: boolean, value?: string): Promise<ApiResponse<AiSuggestionVO[]>> =>
+      ipcRenderer.invoke(IpcChannel.suggestionDecide, imageId, key, accept, value),
+    acceptAll: (imageId: number, overrides?: Record<string, string>): Promise<ApiResponse<AiSuggestionVO[]>> =>
+      ipcRenderer.invoke(IpcChannel.suggestionAcceptAll, imageId, overrides),
     assistPrompt: (imageId: number): Promise<ApiResponse<string>> => ipcRenderer.invoke(IpcChannel.assistPrompt, imageId),
     assistImport: (imageId: number, raw: unknown): Promise<ApiResponse<number>> => ipcRenderer.invoke(IpcChannel.assistImport, imageId, raw),
     decideMany: (imageIds: number[], accept: boolean): Promise<ApiResponse<SuggestionBatchVO>> =>

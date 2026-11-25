@@ -3,7 +3,7 @@
 import { constants, setPriority } from 'node:os'
 import sharp from 'sharp'
 import { WdTagger } from '../services/rating/wdTagger'
-import type { RatingRequest, RatingResponse } from '../services/rating/ratingProtocol'
+import { WD_CHARACTER_HINT_THRESHOLD, type RatingRequest, type RatingResponse } from '../services/rating/ratingProtocol'
 
 let tagger: WdTagger | null = null
 let taggerThreads = 0
@@ -53,8 +53,14 @@ process.parentPort.on('message', (event) => {
   void (async () => {
     try {
       const t = await getTagger(req.modelDir, req.threads)
-      const p = await t.predict(req.file)
-      reply({ id: req.id, ok: true, scores: p.ratingScores, tags: p.generalTags.map((tag) => tag.name) })
+      const p = await t.predict(req.file, { characterThreshold: WD_CHARACTER_HINT_THRESHOLD })
+      reply({
+        id: req.id,
+        ok: true,
+        scores: p.ratingScores,
+        tags: p.generalTags.map((tag) => tag.name),
+        characters: p.characterTags.slice(0, 6).map((c) => ({ name: c.name, score: Number(c.score.toFixed(3)) }))
+      })
     } catch (err) {
       reply({ id: req.id, ok: false, error: err instanceof Error ? err.message.slice(0, 200) : String(err) })
     }

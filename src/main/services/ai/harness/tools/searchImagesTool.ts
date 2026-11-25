@@ -39,6 +39,16 @@ export const searchImagesTool = defineTool({
       },
       orientation: { type: 'string', enum: ['portrait', 'landscape', 'square'], description: '竖图、横图、方图' },
       recent: { type: 'boolean', description: '只要最近 30 天导入的' },
+      excludeShown: {
+        type: 'boolean',
+        description: '当用户说“还有其他的吗”“换几张”“看过了”“再找别的”等想看没展示过的图时设为 true，自动排除本段对话已经展示过的图片。'
+      },
+      excludeIds: {
+        type: 'array',
+        items: { type: 'integer' },
+        maxItems: 50,
+        description: '要额外排除的图片编号。'
+      },
       answerFromResults: { type: 'boolean', description: '用户明确要求根据检索结果比较、解读或按指定格式回答时设为 true。只找图时省略。' },
       onMatch: {
         type: 'string',
@@ -94,9 +104,36 @@ export const searchImagesTool = defineTool({
     if (semanticText && !semantic && (await hasSearchableImage(env.dirs, false))) {
       outcome.incomplete ??= '画面相似度检索暂不可用'
     }
+    const excludeSet = new Set<number>()
+    if (args.excludeShown === true && env.shownImages?.length) {
+      for (const img of env.shownImages) {
+        excludeSet.add(img.id)
+      }
+    }
+    if (Array.isArray(args.excludeIds)) {
+      for (const id of args.excludeIds) {
+        if (typeof id === 'number' && Number.isInteger(id) && id > 0) {
+          excludeSet.add(id)
+        }
+      }
+    }
+    const beforeCount = outcome.imageIds.length
+    if (excludeSet.size > 0 && beforeCount > 0) {
+      outcome.imageIds = outcome.imageIds.filter((id) => !excludeSet.has(id))
+      outcome.ordinaryIds = outcome.ordinaryIds.filter((id) => !excludeSet.has(id))
+    }
+    const alreadyShownCount = beforeCount - outcome.imageIds.length
+    const allAlreadyShown = beforeCount > 0 && outcome.imageIds.length === 0
+    if (alreadyShownCount > 0) {
+      outcome.alreadyShownCount = alreadyShownCount
+    }
+    if (allAlreadyShown) {
+      outcome.allAlreadyShown = true
+    }
     // 语气属于当前对话，不随可复用的检索条件一起缓存。受保护的图片只使用本地卡片文案。
     const { onMatch, ...plan } = args
-    const cacheablePlan = !semanticText || semantic ? plan : undefined
+    const hasSessionDedup = args.excludeShown === true || (Array.isArray(args.excludeIds) && args.excludeIds.length > 0)
+    const cacheablePlan = !hasSessionDedup && (!semanticText || semantic) ? plan : undefined
     const finalConds = semantic ? [...conds, ['画面', semanticText] as [string, string]] : conds
     const caption = ordinaryCardCaption(onMatch, outcome)
     const brief = outcome.ordinaryIds.slice(0, BRIEF_MAX)
@@ -106,14 +143,16 @@ export const searchImagesTool = defineTool({
       content: JSON.stringify({
         total: outcome.ordinaryIds.length,
         images: items.map((i) => ({ id: i.imageId, name: i.name, tags: tagNames.get(i.imageId) ?? [] })),
-        ...(env.includeR18 ? { r18Total: outcome.imageIds.length - outcome.ordinaryIds.length } : {})
+        ...(env.includeR18 ? { r18Total: outcome.imageIds.length - outcome.ordinaryIds.length } : {}),
+        alreadyShownCount,
+        allAlreadyShown
       }),
       outcome: {
         type: 'search',
         outcome,
         conds: finalConds,
         caption,
-        needsDetails: args.answerFromResults === true,
+        needsDetails: args.answerFromResults === true || allAlreadyShown,
         cacheablePlan
       }
     }

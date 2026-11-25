@@ -165,16 +165,30 @@ export function registerAiIpc(paths: DataPaths): void {
     requireDatabase()
     return listSuggestions(imageId)
   })
-  handle(IpcChannel.suggestionDecide, async (_event, imageId: number, key: string, accept: boolean) => {
+  handle(IpcChannel.suggestionDecide, async (_event, imageId: number, key: string, accept: boolean, value?: unknown) => {
     requireDatabase()
-    if (typeof key !== 'string' || typeof accept !== 'boolean') {
+    if (typeof key !== 'string' || typeof accept !== 'boolean' || (value !== undefined && typeof value !== 'string')) {
       throw new BizError('BAD_REQUEST', '参数不对')
     }
-    return decideSuggestion(imageId, key, accept).then(refreshImageIndex)
+    return decideSuggestion(imageId, key, accept, value).then(refreshImageIndex)
   })
-  handle(IpcChannel.suggestionAcceptAll, async (_event, imageId: number) => {
+  handle(IpcChannel.suggestionAcceptAll, async (_event, imageId: number, overrides?: unknown) => {
     requireDatabase()
-    return acceptAllSuggestions(imageId).then(refreshImageIndex)
+    let validOverrides: Record<string, string> | undefined
+    if (overrides !== undefined) {
+      const proto = typeof overrides === 'object' && overrides !== null ? Object.getPrototypeOf(overrides) : null
+      if (
+        typeof overrides !== 'object' ||
+        overrides === null ||
+        Array.isArray(overrides) ||
+        (proto !== Object.prototype && proto !== null) ||
+        Object.values(overrides).some((v) => typeof v !== 'string')
+      ) {
+        throw new BizError('BAD_REQUEST', '参数不对')
+      }
+      validOverrides = overrides as Record<string, string>
+    }
+    return acceptAllSuggestions(imageId, validOverrides).then(refreshImageIndex)
   })
   handle(IpcChannel.suggestionDecideMany, async (_event, imageIds: unknown, accept: unknown) => {
     requireDatabase()

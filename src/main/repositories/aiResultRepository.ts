@@ -436,30 +436,31 @@ export async function allowedLookImages(ids: number[]): Promise<Set<number>> {
   return new Set(rows.map(row => Number(row.id)))
 }
 
-// 一张图看图要用的信息：代表文件的位置、名字、元信息、分级状态
-export async function findLookInfo(imageId: number, categoryOnly = false): Promise<
-  | {
-      id: number
-      contentHash: string
-      displayName: string | null
-      exif: unknown
-      isR18: boolean
-      // 上云闸门放行：本地模型判过且不是明显 R-18，或你手动关过 R-18
-      cloudAllowed: boolean
-      relPath: string | null
-      rootPath: string | null
-      width: number | null
-      height: number | null
-      byteSize: number
-    }
-  | undefined
-> {
+// 一张图看图要用的信息：代表文件的位置、名字、元信息、分级状态、本地视觉特征
+export type LookInfo = {
+  id: number
+  contentHash: string
+  displayName: string | null
+  exif: unknown
+  visualFeatures: typeof image.$inferSelect.visualFeatures
+  isR18: boolean
+  // 上云闸门放行：本地模型判过且不是明显 R-18，或你手动关过 R-18
+  cloudAllowed: boolean
+  relPath: string | null
+  rootPath: string | null
+  width: number | null
+  height: number | null
+  byteSize: number
+}
+
+export async function findLookInfo(imageId: number, categoryOnly = false): Promise<LookInfo | undefined> {
   const { pg } = getDatabase()
   const res = await pg.query<{
     id: number
     content_hash: string
     display_name: string | null
     exif: unknown
+    visual_features: typeof image.$inferSelect.visualFeatures
     is_r18: boolean
     cloud_allowed: boolean
     rel_path: string | null
@@ -468,7 +469,7 @@ export async function findLookInfo(imageId: number, categoryOnly = false): Promi
     height: number | null
     byte_size: number
   }>(
-    `SELECT i.id, i.content_hash, i.display_name, i.exif, i.is_r18, (${cloudAllowed}) AS cloud_allowed, i.width, i.height, i.byte_size, f.rel_path, r.path AS root_path
+    `SELECT i.id, i.content_hash, i.display_name, i.exif, i.visual_features, i.is_r18, (${cloudAllowed}) AS cloud_allowed, i.width, i.height, i.byte_size, f.rel_path, r.path AS root_path
      FROM image i
      LEFT JOIN LATERAL (SELECT p.rel_path, p.root_id FROM image_file p JOIN library_root loc ON loc.id = p.root_id
        WHERE p.image_id = i.id AND p.delete_state = 0 AND p.status = 'NORMAL' AND loc.delete_state = 0
@@ -487,6 +488,7 @@ export async function findLookInfo(imageId: number, categoryOnly = false): Promi
     contentHash: r.content_hash,
     displayName: r.display_name,
     exif: r.exif,
+    visualFeatures: r.visual_features ?? null,
     isR18: r.is_r18,
     cloudAllowed: r.cloud_allowed === true,
     relPath: r.rel_path,

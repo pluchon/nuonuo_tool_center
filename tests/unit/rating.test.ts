@@ -166,21 +166,51 @@ describe('分级写库', () => {
     expect((await getImageDetail(4)).isR18).toBe(false)
   })
 
-  it('旧图只对并发检索推理一次；持久缓存按版本读取，重新分级后立即排除', async () => {
+  it('旧图只对并发检索推理一次；持久缓存按版本读取，重新分级后立即排除；为看图提取并缓存角色与视觉特征线索', async () => {
     const { pg } = getDatabase()
     await pg.exec(`
       INSERT INTO tag (name, category_id) VALUES ('测试特征检索', 4);
       INSERT INTO image_tag (image_id,tag_id,source,status) VALUES (2,1,'MANUAL','ACCEPTED');
       UPDATE image SET visual_features = '{"revision":"旧版","tags":["cat_ears"]}' WHERE id = 2;
+      INSERT INTO image (content_hash, format, byte_size, thumb_ready, rating, rating_source, is_r18) VALUES
+        ('h5', 'JPG', 1, 1, 'GENERAL', 'MODEL', false),
+        ('h6', 'JPG', 1, 1, 'GENERAL', 'MODEL', false),
+        ('h7', 'JPG', 1, 1, 'GENERAL', 'MODEL', false);
+      UPDATE image SET visual_features = '{"revision":"old","tags":["long_hair"]}' WHERE content_hash = 'h6';
     `)
+    const ids = (await pg.query<{ id: number; content_hash: string }>(
+      `SELECT id, content_hash FROM image WHERE content_hash IN ('h5', 'h6', 'h7')`
+    )).rows
+    const idOf = (h: string) => Number(ids.find((r) => r.content_hash === h)!.id)
+    const id5 = idOf('h5')
+    const id6 = idOf('h6')
+    const id7 = idOf('h7')
+
     const { utilityProcess } = await import('electron')
     const store = await import('../../src/main/services/rating/modelStore')
-    const { configureRating, getVisualTagsForSearch, stopRating } = await import('../../src/main/services/rating/ratingService')
+    const { configureRating, getVisualHintsForLook, getVisualTagsForSearch, stopRating } = await import('../../src/main/services/rating/ratingService')
     const ready = vi.spyOn(store, 'isModelReady').mockResolvedValue(true)
     const worker = Object.assign(new EventEmitter(), {
       kill: vi.fn(),
-      postMessage: vi.fn(({ id }: { id: number }) => queueMicrotask(() =>
-        worker.emit('message', { id, ok: true, scores: {}, tags: ['blue_hair'] })))
+      postMessage: vi.fn(({ id, file }: { id: number; file: string }) => queueMicrotask(() => {
+        if (file.includes('h7')) {
+          worker.emit('message', {
+            id, ok: true,
+            scores: { general: 0.1, sensitive: 0.1, questionable: 0.4, explicit: 0.4 },
+            tags: ['nsfw_tag'],
+            characters: [{ name: 'secret_char', score: 0.9 }]
+          })
+        } else if (file.includes('h5')) {
+          worker.emit('message', {
+            id, ok: true,
+            scores: { general: 0.9, sensitive: 0.05, questionable: 0.03, explicit: 0.02 },
+            tags: ['blue_hair', 'horns'],
+            characters: [{ name: 'ganyu', score: 0.912 }]
+          })
+        } else {
+          worker.emit('message', { id, ok: true, scores: {}, tags: ['blue_hair'] })
+        }
+      }))
     })
     vi.mocked(utilityProcess.fork).mockReturnValue(worker as unknown as ReturnType<typeof utilityProcess.fork>)
     configureRating({ modelsRoot: dir, thumbsDir: dir, workerPath: '', canRun: () => true, onR18: () => {}, threshold: 0.5, onDone: () => {} })
@@ -193,6 +223,30 @@ describe('分级写库', () => {
       expect(await getVisualTagsForSearch(3)).toBeNull()
       await updateR18([2], true)
       expect(await getVisualTagsForSearch(2)).toBeNull()
+
+      // 为看图提取并缓存角色与视觉特征线索
+      ready.mockResolvedValue(true)
+      expect(await getVisualHintsForLook(id5)).toEqual({
+        tags: ['blue_hair', 'horns'],
+        characters: [{ name: 'ganyu', score: 0.912 }]
+      })
+      expect(worker.postMessage).toHaveBeenCalledTimes(2)
+
+      // 命中已缓存的 characters，即使模型不可用也直接返回
+      ready.mockResolvedValue(false)
+      expect(await getVisualHintsForLook(id5)).toEqual({
+        tags: ['blue_hair', 'horns'],
+        characters: [{ name: 'ganyu', score: 0.912 }]
+      })
+      // 只有旧版 tags 无 characters 且模型不可用时降级返回已有 tags + 空 characters
+      expect(await getVisualHintsForLook(id6)).toEqual({ tags: ['long_hair'], characters: [] })
+      expect(worker.postMessage).toHaveBeenCalledTimes(2)
+
+      // 明显 R-18 不持久化也不返回线索
+      ready.mockResolvedValue(true)
+      expect(await getVisualHintsForLook(id7)).toBeNull()
+      const saved7 = (await pg.query<{ visual_features: unknown }>('SELECT visual_features FROM image WHERE id = $1', [id7])).rows[0]
+      expect(saved7.visual_features).toBeNull()
     } finally {
       await stopRating()
       ready.mockRestore()

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
-import { decideManySuggestions } from '@/api/look'
+import type { AiSuggestionVO } from '@shared/api'
+import { acceptAllSuggestions, decideManySuggestions, decideSuggestion } from '@/api/look'
 import { useGalleryStore } from './gallery'
 import { useToastStore } from './toast'
 
@@ -29,6 +30,14 @@ export const useSuggestStore = defineStore('suggest', {
         this.busy = false
         await useGalleryStore().afterEdit()
       }
+    },
+    // 单张图采用或不要一项建议（可带行内编辑后的内容）
+    decideItem(imageId: number, key: string, accept: boolean, value?: string): Promise<AiSuggestionVO[]> {
+      return decideSuggestion(imageId, key, accept, value)
+    },
+    // 单张图全部采用（可带各条行内编辑后的覆盖内容）
+    acceptAll(imageId: number, overrides?: Record<string, string>): Promise<AiSuggestionVO[]> {
+      return acceptAllSuggestions(imageId, overrides)
     }
   }
 })

@@ -37,13 +37,13 @@ export function fetchSuggestions(imageId: number): Promise<AiSuggestionVO[]> {
 }
 
 // 采用或不要一项，返回剩下的
-export function decideSuggestion(imageId: number, key: string, accept: boolean): Promise<AiSuggestionVO[]> {
-  return unwrap(window.api.suggestion.decide(imageId, key, accept))
+export function decideSuggestion(imageId: number, key: string, accept: boolean, value?: string): Promise<AiSuggestionVO[]> {
+  return unwrap(window.api.suggestion.decide(imageId, key, accept, value))
 }
 
 // 全部采用
-export function acceptAllSuggestions(imageId: number): Promise<AiSuggestionVO[]> {
-  return unwrap(window.api.suggestion.acceptAll(imageId))
+export function acceptAllSuggestions(imageId: number, overrides?: Record<string, string>): Promise<AiSuggestionVO[]> {
+  return unwrap(window.api.suggestion.acceptAll(imageId, overrides))
 }
 
 // 多张图的建议一起采用或不要
