@@ -101,6 +101,10 @@ export const IpcChannel = {
   organizeStart: 'organize:start',
   organizeApprove: 'organize:approve',
   organizeCancel: 'organize:cancel',
+  reorganizeEstimate: 'reorganize:estimate',
+  reorganizeDismissEstimate: 'reorganize:dismissEstimate',
+  reorganizeResetToSource: 'reorganize:resetToSource',
+  reorganizeRelook: 'reorganize:relook',
   windowSetTheme: 'window:setTheme',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',
@@ -730,6 +734,28 @@ export interface OrganizeEstimateVO {
   yuan: number
   // 本地分级还剩多少张没判；全部判完后才能开始整理。
   ratingLeft: number
+}
+
+// 重新整理：开始前的估算（已整理总数，以及若选择“重新 AI 整理”要重看多少张、大概多少 token 和钱）
+export interface ReorganizeEstimateVO {
+  organizedCount: number
+  toLook: number
+  tokens: number
+  yuan: number
+  ratingLeft: number
+}
+
+// 重新整理“归回源目录”的结果
+export interface ReorganizeResetResultVO {
+  resetImages: number
+  removedCopies: number
+  movedToSource: number
+  skippedOnlyInCategory: number
+}
+
+// 重新整理“重新 AI 整理”的入队结果
+export interface ReorganizeRelookResultVO {
+  enqueued: number
 }
 
 // 批好的方案最多几个目录、每个目录最多几个词

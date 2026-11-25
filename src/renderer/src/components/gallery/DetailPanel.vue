@@ -110,6 +110,11 @@
         </button>
       </div>
 
+      <div class="detail-panel__row-head detail-panel__ai-row">
+        <span class="detail-panel__label">AI</span>
+        <button class="detail-panel__ask" type="button" @click="askNono">问诺诺</button>
+      </div>
+
       <AssistBox :image-id="detail.imageId" />
 
       <div class="detail-panel__foot">

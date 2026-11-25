@@ -1,0 +1,57 @@
+// 重新整理按钮：与“一键整理”同高的玻璃胶囊，紧邻其左侧
+.reorganize {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin-left: 8px;
+  padding: 0 11px 0 9px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1px solid var(--a-line2);
+  background: var(--look-field-bg);
+  backdrop-filter: var(--look-blur);
+  box-shadow: 0 4px 12px -8px rgba(var(--sh), 0.55);
+  color: var(--a-ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+
+  svg {
+    flex: none;
+    color: var(--a);
+  }
+
+  &:hover:not(&--waiting) {
+    background: var(--look-field-hover-bg);
+    border-color: var(--a-line);
+  }
+
+  &--waiting {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  &__spinner {
+    animation: reorganize-spin 0.9s linear infinite;
+  }
+}
+
+@keyframes reorganize-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reorganize__spinner {
+    animation: none;
+  }
+}

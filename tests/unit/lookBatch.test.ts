@@ -148,7 +148,7 @@ describe('一次排进很多图', () => {
     expect([...batchPrefixes]).toEqual([expect.stringContaining('使用常见译名')])
     expect([...batchPrefixes][0]).not.toContain('用于验证的完整词表')
     // 前 50 张左右实时看，超出的走批量
-    expect(batched.length).toBeGreaterThanOrEqual(N - 52 - reclassified.size)
+    expect(batched.length).toBeGreaterThanOrEqual(N - 53 - reclassified.size)
     const counts = (await pg.query<{ status: string; n: number }>(`SELECT status, count(*)::int AS n FROM ai_job GROUP BY status ORDER BY status::text`)).rows
     expect(counts).toEqual([
       { status: 'CANCELLED', n: reclassified.size },

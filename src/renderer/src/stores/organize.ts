@@ -1,11 +1,31 @@
 import { defineStore } from 'pinia'
 import { LOOK_KEY_HINT } from '@shared/api'
-import type { OrganizeEstimateVO, OrganizeFolderVO, OrganizeLookedVO, OrganizePhase, OrganizeStateVO, RatingProgressVO } from '@shared/api'
-import { approveOrganize, cancelOrganize, fetchOrganizeEstimate, fetchOrganizeState, onOrganizeState, startOrganize } from '@/api/organize'
+import type {
+  OrganizeEstimateVO,
+  OrganizeFolderVO,
+  OrganizeLookedVO,
+  OrganizePhase,
+  OrganizeStateVO,
+  RatingProgressVO,
+  ReorganizeEstimateVO
+} from '@shared/api'
+import {
+  approveOrganize,
+  cancelOrganize,
+  dismissReorganizeEstimate,
+  fetchOrganizeEstimate,
+  fetchOrganizeState,
+  fetchReorganizeEstimate,
+  onOrganizeState,
+  resetOrganizedToSource,
+  startOrganize,
+  startReorganizeRelook
+} from '@/api/organize'
 import { fetchRatingProgress, onRatingProgress } from '@/api/rating'
 import { useGalleryStore } from './gallery'
-import { useToastStore } from './toast'
 import { useLookStore } from './look'
+import { useScanStore } from './scan'
+import { useToastStore } from './toast'
 
 // 错误信息
 function errText(err: unknown): string {
@@ -28,7 +48,12 @@ export const useOrganizeStore = defineStore('organize', {
     estimateRequest: 0,
     draft: [] as OrganizeFolderVO[],
     busy: false,
-    rating: { running: false, done: 0, total: 0 } as RatingProgressVO
+    rating: { running: false, done: 0, total: 0 } as RatingProgressVO,
+    // 重新整理弹窗、估算与执行中状态
+    reorganizeDialog: false,
+    reorganizeEstimate: null as ReorganizeEstimateVO | null,
+    reorganizeEstimateRequest: 0,
+    reorganizeBusy: false
   }),
   actions: {
     // 读一次状态并订阅之后的变化
@@ -179,6 +204,92 @@ export const useOrganizeStore = defineStore('organize', {
     removeTerm(i: number, kind: 'characters' | 'works' | 'tags', word: string): void {
       const f = this.draft[i]
       f[kind] = f[kind].filter((w) => w !== word)
+    },
+    async openReorganize(): Promise<void> {
+      if (this.busy || this.reorganizeBusy || this.dialog || this.reorganizeDialog) {
+        return
+      }
+      if (this.phase !== 'IDLE') {
+        useToastStore().show('一键整理进行中，请先完成或停止')
+        return
+      }
+      if (this.rating.running) {
+        useToastStore().show('本地分级判完才能重新整理')
+        return
+      }
+      if (useScanStore().running) {
+        useToastStore().show('正在扫描，等扫完再重新整理')
+        return
+      }
+      this.reorganizeEstimate = null
+      this.reorganizeDialog = true
+      const request = ++this.reorganizeEstimateRequest
+      try {
+        const est = await fetchReorganizeEstimate()
+        if (request !== this.reorganizeEstimateRequest) return
+        this.reorganizeEstimate = est
+      } catch (err) {
+        if (request !== this.reorganizeEstimateRequest) return
+        this.closeReorganize()
+        useToastStore().show(errText(err), 'error')
+      }
+    },
+    closeReorganize(): void {
+      if (this.reorganizeBusy) return
+      if (this.reorganizeDialog && !this.reorganizeEstimate) {
+        void dismissReorganizeEstimate().catch(() => undefined)
+      }
+      this.reorganizeEstimateRequest++
+      this.reorganizeEstimate = null
+      this.reorganizeDialog = false
+    },
+    async resetToSource(): Promise<void> {
+      if (this.reorganizeBusy || !this.reorganizeEstimate) return
+      this.reorganizeBusy = true
+      try {
+        const res = await resetOrganizedToSource()
+        this.reorganizeBusy = false
+        this.closeReorganize()
+        const parts: string[] = []
+        if (res.resetImages > 0) parts.push(`已归回 ${res.resetImages.toLocaleString('zh-CN')} 张图`)
+        if (res.movedToSource > 0) parts.push(`移回源目录 ${res.movedToSource.toLocaleString('zh-CN')} 张`)
+        if (res.removedCopies > 0) parts.push(`清理类目录副本 ${res.removedCopies.toLocaleString('zh-CN')} 份`)
+        if (res.skippedOnlyInCategory > 0) parts.push(`跳过 ${res.skippedOnlyInCategory.toLocaleString('zh-CN')} 张（缺少在线源目录）`)
+        const message = parts.length ? parts.join('，') : '没有需要归回源目录的图片'
+        useToastStore().show(message, res.skippedOnlyInCategory > 0 && res.resetImages === 0 ? 'error' : 'ok')
+        await Promise.all([useGalleryStore().afterEdit(), useLookStore().init()])
+      } catch (err) {
+        useToastStore().show(errText(err), 'error')
+      } finally {
+        this.reorganizeBusy = false
+      }
+    },
+    async relookOrganized(): Promise<void> {
+      if (this.reorganizeBusy || !this.reorganizeEstimate) return
+      if (useLookStore().needsApiKey) {
+        useToastStore().show(LOOK_KEY_HINT)
+        return
+      }
+      if (this.reorganizeEstimate.ratingLeft > 0) {
+        useToastStore().show(`本地分级还剩 ${this.reorganizeEstimate.ratingLeft.toLocaleString('zh-CN')} 张，判完才能重新整理`)
+        return
+      }
+      this.reorganizeBusy = true
+      try {
+        const res = await startReorganizeRelook()
+        this.reorganizeBusy = false
+        this.closeReorganize()
+        useToastStore().show(
+          res.enqueued > 0
+            ? `已排入 ${res.enqueued.toLocaleString('zh-CN')} 张图重新看图，结果将进入“AI 建议”`
+            : '没有可重新看图的已整理图片'
+        )
+        await Promise.all([useGalleryStore().afterEdit(), useLookStore().init()])
+      } catch (err) {
+        useToastStore().show(errText(err), 'error')
+      } finally {
+        this.reorganizeBusy = false
+      }
     }
   }
 })

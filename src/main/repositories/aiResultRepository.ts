@@ -356,7 +356,15 @@ export async function updateJob(id: number, patch: Partial<Pick<AiJobEntity, 'st
 export async function requeueLookJob(id: number, priority?: number): Promise<void> {
   const failed = eq(aiJob.status, 'FAILED')
   await getDatabase().db.update(aiJob)
-    .set({ status: 'QUEUED', remoteId: null, payload: null, error: null, startedAt: null, finishedAt: null, priority })
+    .set({
+      status: 'QUEUED',
+      remoteId: null,
+      payload: sql`CASE WHEN ${aiJob.payload}->>'reorganize' = 'true' THEN '{"reorganize":true}'::jsonb ELSE NULL END`,
+      error: null,
+      startedAt: null,
+      finishedAt: null,
+      priority
+    })
     .where(and(eq(aiJob.id, id), eq(aiJob.kind, 'LOOK'), eq(aiJob.deleteState, 0),
       priority === undefined ? failed : or(failed, and(eq(aiJob.status, 'QUEUED'), isNull(aiJob.remoteId)))))
 }
@@ -496,5 +504,66 @@ export async function findLookInfo(imageId: number, categoryOnly = false): Promi
     width: r.width,
     height: r.height,
     byteSize: Number(r.byte_size)
+  }
+}
+
+export interface ExistingLookContext {
+  displayName: string | null
+  source: string | null
+  characters: string[]
+  works: string[]
+  tags: string[]
+  categoryDir: string | null
+}
+
+function parentDirOf(relPath: string | null | undefined): string | null {
+  if (!relPath) return null
+  const parts = relPath.split(/[/\\]/).map((s) => s.trim()).filter(Boolean)
+  if (parts.length <= 1) return null
+  parts.pop()
+  return parts.join('/') || null
+}
+
+// 重新整理重看时读取已有整理信息（仅限未删除的非 R-18 图）
+export async function findExistingLookContext(imageId: number): Promise<ExistingLookContext | null> {
+  const { pg } = getDatabase()
+  const imgRes = await pg.query<{ display_name: string | null; source: string | null; category_rel_path: string | null }>(
+    `SELECT i.display_name, i.source, cf.rel_path AS category_rel_path
+       FROM image i
+       LEFT JOIN LATERAL (
+         SELECT p.rel_path
+           FROM image_file p
+           JOIN library_root loc ON loc.id = p.root_id
+          WHERE p.image_id = i.id AND p.delete_state = 0 AND p.status = 'NORMAL' AND loc.delete_state = 0 AND loc.kind = 'CATEGORY'
+          ORDER BY p.id LIMIT 1
+       ) cf ON true
+      WHERE i.id = $1 AND i.delete_state = 0 AND i.is_r18 = false`,
+    [imageId]
+  )
+  const row = imgRes.rows[0]
+  if (!row) return null
+  const tagRes = await pg.query<{ kind: string; name: string }>(
+    `SELECT CASE c.name WHEN '角色' THEN 'who' WHEN '作品' THEN 'work' ELSE 'tag' END AS kind, t.name
+       FROM image_tag it
+       JOIN tag t ON t.id = it.tag_id AND t.delete_state = 0
+       LEFT JOIN tag_category c ON c.id = t.category_id AND c.delete_state = 0
+      WHERE it.image_id = $1 AND it.delete_state = 0 AND it.status = 'ACCEPTED'
+      ORDER BY it.id`,
+    [imageId]
+  )
+  const characters: string[] = []
+  const works: string[] = []
+  const tags: string[] = []
+  for (const r of tagRes.rows) {
+    const list = r.kind === 'who' ? characters : r.kind === 'work' ? works : tags
+    if (r.name && !list.includes(r.name)) list.push(r.name)
+  }
+  return {
+    displayName: row.display_name ?? null,
+    source: row.source ?? null,
+    characters,
+    works,
+    tags,
+    categoryDir: parentDirOf(row.category_rel_path)
   }
 }

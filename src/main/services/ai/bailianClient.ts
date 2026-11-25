@@ -208,7 +208,16 @@ export async function recordBatchUsage(meta: CallMeta, usage: unknown): Promise<
 
 // Responses 调用（看图）：图片放在最后；search 为真时带联网搜索，来源只取搜索工具返回的链接
 export async function searchCall(
-  meta: CallMeta & { instructions: string; text: string; imageDataUrl?: string; timeoutMs?: number; search?: boolean; signal?: AbortSignal }
+  meta: CallMeta & {
+    instructions: string
+    text: string
+    imageDataUrl?: string
+    timeoutMs?: number
+    search?: boolean
+    enableThinking?: boolean
+    thinkingBudget?: number
+    signal?: AbortSignal
+  }
 ): Promise<SearchCallResult> {
   const t0 = Date.now()
   try {
@@ -222,7 +231,8 @@ export async function searchCall(
         instructions: meta.instructions,
         input: [{ role: 'user', content }],
         ...(meta.search === false ? {} : { tools: [{ type: 'web_search' }] }),
-        enable_thinking: false
+        enable_thinking: meta.enableThinking === true,
+        ...(meta.enableThinking && meta.thinkingBudget ? { thinking_budget: meta.thinkingBudget } : {})
       } as never,
       { timeout: meta.timeoutMs ?? BAILIAN_CONFIG.requestTimeoutMs, signal: meta.signal }
     )) as unknown as { output?: unknown[]; output_text?: string; usage?: unknown; tool_usage?: unknown }

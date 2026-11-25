@@ -11,13 +11,35 @@ import { prepareImage, toDataUrl } from '../../src/main/services/ai/imagePrep'
 import { normalizeFields, pendingStatus } from '../../src/main/services/ai/suggestion'
 
 // 模型调用换成脚本：看图时返回预设的回复，记下请求
-const calls: Array<{ text: string; search: boolean | undefined; image: boolean }> = []
+const calls: Array<{
+  text: string
+  instructions: string
+  search: boolean | undefined
+  enableThinking: boolean | undefined
+  thinkingBudget: number | undefined
+  image: boolean
+}> = []
 let reply: { text: string; sources: Array<{ url: string }> } = { text: '', sources: [] }
+function recordSearchCall(meta: {
+  text: string
+  instructions: string
+  search?: boolean
+  enableThinking?: boolean
+  thinkingBudget?: number
+  imageDataUrl?: string
+}) {
+  calls.push({
+    text: meta.text,
+    instructions: meta.instructions,
+    search: meta.search,
+    enableThinking: meta.enableThinking,
+    thinkingBudget: meta.thinkingBudget,
+    image: !!meta.imageDataUrl?.startsWith('data:image/jpeg;base64,')
+  })
+  return { ...reply, usage: {} }
+}
 vi.mock('../../src/main/services/ai/bailianClient', () => ({
-  searchCall: vi.fn(async (meta: { text: string; search?: boolean; imageDataUrl?: string }) => {
-    calls.push({ text: meta.text, search: meta.search, image: !!meta.imageDataUrl?.startsWith('data:image/jpeg;base64,') })
-    return { ...reply, usage: {} }
-  }),
+  searchCall: vi.fn(async (meta: Parameters<typeof recordSearchCall>[0]) => recordSearchCall(meta)),
   getBailianClient: vi.fn(),
   recordBatchUsage: vi.fn(),
   chatCall: vi.fn()
@@ -386,10 +408,7 @@ describe('看图队列和 AI 建议', () => {
   it('相机拍摄的照片看图时不开启联网搜索', async () => {
     const { searchCall } = await import('../../src/main/services/ai/bailianClient')
     vi.mocked(searchCall).mockReset()
-    vi.mocked(searchCall).mockImplementation(async (meta: { text: string; search?: boolean; imageDataUrl?: string }) => {
-      calls.push({ text: meta.text, search: meta.search, image: !!meta.imageDataUrl?.startsWith('data:image/jpeg;base64,') })
-      return { ...reply, usage: {} } as never
-    })
+    vi.mocked(searchCall).mockImplementation(async (meta) => recordSearchCall(meta) as never)
     const photoFile = join(source, 'IMG_9999.jpg')
     await sharp({ create: { width: 1600, height: 900, channels: 3, background: { r: 100, g: 140, b: 200 } } }).jpeg().toFile(photoFile)
     const photoHash = await hashFile(photoFile)
@@ -414,6 +433,188 @@ describe('看图队列和 AI 建议', () => {
     await idle()
     const last = calls.at(-1)
     expect(last?.search).toBe(false)
+    expect(last?.enableThinking).toBe(false)
     expect(last?.text).toContain('Sony ILCE-7M4')
+  })
+
+  it('清晰图不触发思考；needs_thinking 或有本地角色线索但未识别出角色时触发一次深度思考，失败时回退初次结果', async () => {
+    const { searchCall } = await import('../../src/main/services/ai/bailianClient')
+    const { pg } = getDatabase()
+    const emptyFields = { name: '未知人物', character: '', work: '', tags: [], source: '', description: '' }
+    const clearFields = { ...emptyFields, character: '甘雨' }
+    const photoClues = localClues('IMG_0001.jpg', { make: 'Canon', model: 'EOS R6' })
+    const animeClues = localClues('anime.jpg', null)
+    const hints = { characters: [{ name: 'ganyu', score: 0.85 }] }
+    expect(look.shouldEscalateThinking({ needs_thinking: true }, emptyFields, photoClues, hints)).toBe(false)
+    expect(look.shouldEscalateThinking({}, clearFields, animeClues, hints)).toBe(false)
+    expect(look.shouldEscalateThinking({ needs_thinking: true }, clearFields, animeClues, null)).toBe(true)
+    expect(look.shouldEscalateThinking({}, emptyFields, animeClues, hints)).toBe(true)
+
+    let colorOffset = 0
+    const createImage = async (fileName: string, hintsJson: string | null) => {
+      colorOffset += 15
+      const f = join(source, fileName)
+      await sharp({ create: { width: 800, height: 600, channels: 3, background: { r: 120 + colorOffset, g: 130, b: 140 } } }).jpeg().toFile(f)
+      const h = await hashFile(f)
+      const row = await pg.query<{ id: number }>(
+        `INSERT INTO image (content_hash, format, byte_size, width, height, thumb_ready, rating, rating_source, is_r18, visual_features)
+         VALUES ($1, 'JPG', 1, 800, 600, 1, 'GENERAL', 'MODEL', false, $2::jsonb) RETURNING id`,
+        [h, hintsJson]
+      )
+      const id = Number(row.rows[0].id)
+      await pg.query(`INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES ($1, 1, $2, now())`, [id, fileName])
+      return id
+    }
+
+    // 1. 清晰图只调用 1 次且 enableThinking: false
+    const clearId = await createImage('clear-char.jpg', null)
+    calls.length = 0
+    vi.mocked(searchCall).mockImplementationOnce(async (meta) => {
+      recordSearchCall(meta)
+      return {
+        text: '```json\n{"name":"蓝裙甘雨","character":"甘雨","work":"原神","tags":["微笑"],"source":"","description":"甘雨在微笑"}\n```',
+        sources: [],
+        usage: {}
+      } as never
+    })
+    await look.lookNow(clearId)
+    await idle()
+    expect(calls).toHaveLength(1)
+    expect(calls[0].enableThinking).toBe(false)
+    expect(calls[0].thinkingBudget).toBeUndefined()
+
+    // 2. needs_thinking: true 时仅升级 1 次，携带相同 instructions、thinkingBudget: 1024 并合并来源
+    const hardId = await createImage('hard-char.jpg', null)
+    calls.length = 0
+    vi.mocked(searchCall)
+      .mockImplementationOnce(async (meta) => {
+        recordSearchCall(meta)
+        return {
+          text: '```json\n{"name":"少女","character":"","work":"","tags":["白发"],"source":"https://example.com/p1","description":"待确认","needs_thinking":true}\n```',
+          sources: [{ url: 'https://example.com/p1' }],
+          usage: {}
+        } as never
+      })
+      .mockImplementationOnce(async (meta) => {
+        recordSearchCall(meta)
+        return {
+          text: '```json\n{"name":"白发千雪","character":"千雪","work":"某作品","tags":["白发"],"source":"https://example.com/p2","description":"已确认角色"}\n```',
+          sources: [{ url: 'https://example.com/p2' }],
+          usage: {}
+        } as never
+      })
+    await look.lookNow(hardId)
+    await idle()
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toMatchObject({ enableThinking: false, thinkingBudget: undefined })
+    expect(calls[1]).toMatchObject({ enableThinking: true, thinkingBudget: 1024, search: true })
+    expect(calls[1].instructions).toBe(calls[0].instructions)
+    expect(calls[1].text).toContain('[二次深度核查]')
+    const hardSugg = await sugg.listSuggestions(hardId)
+    expect(hardSugg.find((s) => s.kind === 'who')?.value).toBe('千雪')
+    expect(hardSugg.find((s) => s.kind === 'src')?.value).toBe('https://example.com/p2')
+
+    // 3. 本地有 WD 候选角色但初次 character 为空时触发深度思考；二次调用报错时优雅回退到初次有效结果
+    const hintId = await createImage('hint-fallback.jpg', JSON.stringify({ revision: 'v1', tags: ['blue_hair'], characters: [{ name: 'ganyu', score: 0.72 }] }))
+    calls.length = 0
+    vi.mocked(searchCall)
+      .mockImplementationOnce(async (meta) => {
+        recordSearchCall(meta)
+        return {
+          text: '```json\n{"name":"蓝发少女","character":"","work":"","tags":["蓝发"],"source":"https://example.com/ok","description":"初次描述"}\n```',
+          sources: [{ url: 'https://example.com/ok' }],
+          usage: {}
+        } as never
+      })
+      .mockImplementationOnce(async (meta) => {
+        recordSearchCall(meta)
+        throw Object.assign(new Error('Request timed out.'), { name: 'APIConnectionTimeoutError' })
+      })
+    await look.lookNow(hintId)
+    await idle()
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toMatchObject({ enableThinking: true, thinkingBudget: 1024 })
+    const hintSugg = await sugg.listSuggestions(hintId)
+    expect(hintSugg.find((s) => s.kind === 'name')?.value).toBe('蓝发少女')
+    expect(hintSugg.find((s) => s.kind === 'src')?.value).toBe('https://example.com/ok')
+  })
+
+  it('重新整理重看任务在第④层注入已有整理信息且保持 instructions 前缀不变', async () => {
+    const { searchCall } = await import('../../src/main/services/ai/bailianClient')
+    const { findExistingLookContext } = await import('../../src/main/repositories/aiResultRepository')
+    const { pg } = getDatabase()
+    const catDir = join(dir, 'category')
+    mkdirSync(join(catDir, '原神', '甘雨'), { recursive: true })
+    const catRootRes = await pg.query<{ id: number }>(
+      `INSERT INTO library_root (kind, name, path) VALUES ('CATEGORY', 'category', $1) RETURNING id`,
+      [catDir]
+    )
+    const catRootId = Number(catRootRes.rows[0].id)
+
+    const reorgFile = join(source, 'reorg-test.jpg')
+    await sharp({ create: { width: 800, height: 600, channels: 3, background: { r: 60, g: 90, b: 120 } } }).jpeg().toFile(reorgFile)
+    const reorgHash = await hashFile(reorgFile)
+    const imgRes = await pg.query<{ id: number }>(
+      `INSERT INTO image (content_hash, format, byte_size, width, height, thumb_ready, rating, rating_source, is_r18, display_name, source)
+       VALUES ($1, 'JPG', 1, 800, 600, 1, 'GENERAL', 'MODEL', false, '旧名字', 'https://old.example/1') RETURNING id`,
+      [reorgHash]
+    )
+    const reorgId = Number(imgRes.rows[0].id)
+    await pg.query(`INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES ($1, 1, 'reorg-test.jpg', now())`, [reorgId])
+    await pg.query(`INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES ($1, $2, '原神\\甘雨\\reorg-test.jpg', now())`, [reorgId, catRootId])
+    await pg.query(
+      `INSERT INTO image_tag (image_id, tag_id, source, status)
+       SELECT $1, id, 'MANUAL', 'ACCEPTED' FROM tag WHERE name IN ('甘雨', '原神', '猫')`,
+      [reorgId]
+    )
+
+    // R-18 图片绝不返回上下文
+    expect(await findExistingLookContext(3)).toBeNull()
+    expect(await findExistingLookContext(reorgId)).toEqual({
+      displayName: '旧名字',
+      source: 'https://old.example/1',
+      characters: ['甘雨'],
+      works: ['原神'],
+      tags: ['猫'],
+      categoryDir: '原神/甘雨'
+    })
+
+    // 先跑一次普通看图记录其 instructions 作为前缀基准
+    calls.length = 0
+    vi.mocked(searchCall).mockImplementation(async (meta) => {
+      recordSearchCall(meta)
+      return {
+        text: '```json\n{"name":"修正后的名字","character":"刻晴","work":"原神","tags":["猫","紫发"],"source":"https://new.example/2","description":"修正描述"}\n```',
+        sources: [{ url: 'https://new.example/2' }],
+        usage: {}
+      } as never
+    })
+    await look.lookNow(1)
+    await idle()
+    const baselineInstructions = calls[0].instructions
+
+    calls.length = 0
+    await pg.query(`INSERT INTO ai_job (kind, image_id, status, priority, payload) VALUES ('LOOK', $1, 'QUEUED', 10, '{"reorganize":true}'::jsonb)`, [reorgId])
+    look.scheduleLook()
+    await idle()
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].instructions).toBe(baselineInstructions)
+    expect(calls[0].instructions).not.toContain('旧名字')
+    expect(calls[0].text).toContain('[已有整理信息（仅供参考，其中可能有误，请结合画面重新独立核实并纠正）]')
+    expect(calls[0].text).toContain('- 名字：旧名字')
+    expect(calls[0].text).toContain('- 角色：甘雨')
+    expect(calls[0].text).toContain('- 作品：原神')
+    expect(calls[0].text).toContain('- 标签：猫')
+    expect(calls[0].text).toContain('- 出处：https://old.example/1')
+    expect(calls[0].text).toContain('- 当前类目录：原神/甘雨')
+
+    const reorgSugg = await sugg.listSuggestions(reorgId)
+    expect(reorgSugg.map((s) => `${s.kind}:${s.value}`)).toEqual([
+      'name:修正后的名字',
+      'tag:紫发',
+      'who:刻晴',
+      'src:https://new.example/2'
+    ])
   })
 })

@@ -2,6 +2,7 @@ import { computed, defineComponent, ref, watch } from 'vue'
 import { NAME_MAX, type ExifInfoVO, type ImageDetailVO, type ImageLocationVO } from '@shared/api'
 import { openFileWithDefault, showFileInFolder, thumbUrl } from '@/api/gallery'
 import { useGalleryStore } from '@/stores/gallery'
+import { useAssistantStore } from '@/stores/assistant'
 import { useToastStore } from '@/stores/toast'
 import { useTransferStore } from '@/stores/transfer'
 import { useViewerStore } from '@/stores/viewer'
@@ -71,6 +72,7 @@ export default defineComponent({
   components: { BatchPanel, TagEditor, AiSuggestCard, AssistBox },
   setup() {
     const gallery = useGalleryStore()
+    const assistant = useAssistantStore()
     const viewer = useViewerStore()
     const toast = useToastStore()
     const viewStore = useViewStore()
@@ -89,7 +91,7 @@ export default defineComponent({
       const fileId = gallery.primaryItem?.fileId
       return d.locations.find((l) => l.fileId === fileId) ?? d.locations[0]
     })
-    const fileName = computed(() => location.value?.path.split('\\').pop() ?? '')
+    const fileName = computed(() => location.value?.path.split(/[/\\]/).pop() ?? '')
     // 原图打不开（目录找不到、文件不见了）时不能复制、移动
     const canTransfer = computed(() => !!location.value && !location.value.offline && !location.value.missing)
     const dims = computed(() => (detail.value?.width && detail.value.height ? `${detail.value.width}×${detail.value.height}` : ''))
@@ -186,6 +188,20 @@ export default defineComponent({
     // 在“AI 建议”视图里才显示建议卡
     const aiView = computed(() => viewStore.page === 'gallery' && viewStore.view === 'ai')
 
+    const askNono = (): void => {
+      const d = detail.value
+      if (!d) {
+        return
+      }
+      assistant.addReferences([{
+        imageId: d.imageId,
+        name: d.displayName ?? fileName.value,
+        groupId: 'gallery:' + crypto.randomUUID(),
+        position: 1
+      }])
+      viewStore.showAssistant()
+    }
+
     return {
       aiView,
       gallery,
@@ -210,7 +226,8 @@ export default defineComponent({
       onNameEnter,
       onNameCancel,
       onShowInFolder,
-      onOpenDefault
+      onOpenDefault,
+      askNono
     }
   }
 })

@@ -274,7 +274,9 @@
     gap: 8px;
   }
 
-  &__act { @include transfer-action; }
+  &__ask, &__act { @include transfer-action; }
+  &__ask { flex: none; height: 30px; padding: 0 14px; }
+  &__ai-row { flex: none; }
 
   &__imported {
     display: flex;

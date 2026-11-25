@@ -26,6 +26,7 @@ import { scheduleEmbedding } from '../services/ai/embeddingService'
 import { cancelAllLooks, getLookState, lookNow, retryLook } from '../services/ai/lookService'
 import { predictNext } from '../services/ai/nextPrediction'
 import { approveOrganize, cancelOrganize, estimateOrganize, getOrganizeState, startOrganize } from '../services/ai/organizeService'
+import { estimateReorganize, resetOrganizedToSource, startReorganizeRelook } from '../services/ai/reorganizeService'
 import { acceptAllSuggestions, assistPrompt, decideMany, decideSuggestion, importAssist, listSuggestions } from '../services/ai/suggestionService'
 import { getRatingProgress } from '../services/rating/ratingService'
 import { handle } from './handle'
@@ -232,6 +233,33 @@ export function registerAiIpc(paths: DataPaths): void {
   handle(IpcChannel.organizeCancel, async () => {
     requireDatabase()
     return cancelOrganize()
+  })
+  const reorgEstimates = new Map<number, AbortController>()
+  handle(IpcChannel.reorganizeEstimate, async ({ sender }) => {
+    requireDatabase()
+    const id = sender.id
+    reorgEstimates.get(id)?.abort()
+    const controller = new AbortController()
+    reorgEstimates.set(id, controller)
+    const stop = () => controller.abort(new BizError('CONFLICT', '已关闭重新整理估算'))
+    sender.once('destroyed', stop)
+    try {
+      return await estimateReorganize(controller.signal)
+    } finally {
+      sender.removeListener('destroyed', stop)
+      if (reorgEstimates.get(id) === controller) reorgEstimates.delete(id)
+    }
+  })
+  handle(IpcChannel.reorganizeDismissEstimate, async ({ sender }) => {
+    reorgEstimates.get(sender.id)?.abort(new BizError('CONFLICT', '已关闭重新整理估算'))
+  })
+  handle(IpcChannel.reorganizeResetToSource, async () => {
+    requireDatabase()
+    return resetOrganizedToSource().then(refreshImageIndex)
+  })
+  handle(IpcChannel.reorganizeRelook, async () => {
+    requireDatabase()
+    return startReorganizeRelook()
   })
   handle(IpcChannel.assistPrompt, async (_event, imageId: number) => {
     requireDatabase()

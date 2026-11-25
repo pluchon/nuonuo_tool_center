@@ -80,6 +80,12 @@ export const useAssistantStore = defineStore('assistant', {
         return
       }
       await this.loadConversations()
+      if (this.currentId !== null && !this.conversations.some((c) => c.id === this.currentId)) {
+        this.currentId = null
+        this.messages = []
+        await this.refreshIdeas()
+        return
+      }
       if (this.currentId === null) {
         await this.refreshIdeas()
       }

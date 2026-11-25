@@ -18,6 +18,7 @@ import {
   completeLookJob,
   enqueueNewLookJobs,
   failLookBatch,
+  findExistingLookContext,
   findLookBriefs,
   findLookInfo,
   findOpenLookJobs,
@@ -50,9 +51,10 @@ import { normalizeFields, pendingStatus, type SuggestionFields } from './suggest
 
 const log = getLogger('look')
 
-// 实时看图的并发数、单张超时
-const CONCURRENCY = 2
+// 实时看图的并发数、单张超时与自适应深度思考预算
+const CONCURRENCY = 3
 const TIMEOUT_MS = 120_000
+const THINKING_BUDGET = 1024
 // 队列里超过这么多张时，超出的部分走批量推理
 const BATCH_OVER = ORGANIZE_COST.realtimeMax
 const LOOK_PREFIX_IDLE_MS = 5 * 60_000
@@ -239,16 +241,31 @@ async function loadCanonicalTags(): Promise<Map<string, string>> {
 }
 
 // 存下看图结果：整理成建议、描述直接补上（不覆盖已有的）
-async function saveLookResult(jobId: number, imageId: number, content: unknown, clues: LocalClues, sources: string[] | null, model: string, usage: unknown, knownTags?: Map<string, string>): Promise<boolean> {
+async function saveLookResult(
+  jobId: number,
+  imageId: number,
+  content: unknown,
+  clues: LocalClues,
+  sources: string[] | null,
+  model: string,
+  usage: unknown,
+  knownTags?: Map<string, string>,
+  precomputed?: { existing?: string[]; fields?: SuggestionFields }
+): Promise<boolean> {
   if (stopping) return false
-  const raw = typeof content === 'string' ? parseJsonBlock(content) : null
-  if (!raw) {
-    await failLookBatch([jobId], '看图结果格式异常')
-    return false
+  let fields: SuggestionFields
+  if (precomputed?.fields) {
+    fields = { ...precomputed.fields }
+  } else {
+    const raw = typeof content === 'string' ? parseJsonBlock(content) : null
+    if (!raw) {
+      await failLookBatch([jobId], '看图结果格式异常')
+      return false
+    }
+    const canonical = knownTags ?? await loadCanonicalTags()
+    const existing = precomputed?.existing ?? (await findTagNamesOf([imageId])).get(imageId) ?? []
+    fields = normalizeFields(raw, { canonical, existing })
   }
-  const canonical = knownTags ?? await loadCanonicalTags()
-  const existing = (await findTagNamesOf([imageId])).get(imageId) ?? []
-  const fields: SuggestionFields = normalizeFields(raw, { canonical, existing })
   if (stopping) return false
   // 出处：文件名能确定的直接用；否则只要搜索工具返回过的链接（批量里没有搜索，只用文件名的）
   if (clues.source) {
@@ -263,6 +280,16 @@ async function saveLookResult(jobId: number, imageId: number, content: unknown, 
 }
 
 type VisualHints = NonNullable<Parameters<typeof localClues>[2]>['visualHints']
+
+export function shouldEscalateThinking(
+  raw: Record<string, unknown>,
+  fields: SuggestionFields,
+  clues: LocalClues,
+  visualHints: VisualHints
+): boolean {
+  if (clues.photo) return false
+  return raw.needs_thinking === true || (!fields.character && (visualHints?.characters?.length ?? 0) > 0)
+}
 
 // 一张图的线索
 function cluesOf(
@@ -290,6 +317,8 @@ async function lookOne(job: AiJobEntity): Promise<void> {
     ? info.visualFeatures
     : await getVisualHintsForLook(info.id)
   const clues = cluesOf(info, visualHints)
+  const isReorganize = (job.payload as { reorganize?: boolean } | null)?.reorganize === true
+  const existingContext = isReorganize ? await findExistingLookContext(info.id) : null
   const instructions = await realtimeLookInstructions()
   if (!(await allowedLookImages([info.id])).has(info.id)) {
     await updateJob(job.id, { status: 'CANCELLED', finishedAt: new Date() })
@@ -297,19 +326,66 @@ async function lookOne(job: AiJobEntity): Promise<void> {
   }
   if (stopping) return
   try {
-    const res = await searchCall({
+    const res1 = await searchCall({
       kind: 'look',
       model: BAILIAN_CONFIG.chatModel,
       imageId: info.id,
       instructions,
-      text: lookTail(clues),
+      text: lookTail(clues, { existingContext }),
       imageDataUrl: url,
       search: !clues.photo,
+      enableThinking: false,
       timeoutMs: TIMEOUT_MS,
       signal: realtimeAbort.signal
     })
     if (stopping) return
-    if (await saveLookResult(job.id, info.id, res.text, clues, res.sources.map((s) => s.url), BAILIAN_CONFIG.chatModel, res.usage)) {
+    let finalText = res1.text
+    let finalSources = res1.sources.map((s) => s.url)
+    let finalUsage = res1.usage
+    let canonical: Map<string, string> | undefined
+    let existing: string[] | undefined
+    let finalFields: SuggestionFields | undefined
+
+    const raw1 = parseJsonBlock(res1.text)
+    if (raw1) {
+      const [loadedCanonical, existingMap] = await Promise.all([loadCanonicalTags(), findTagNamesOf([info.id])])
+      canonical = loadedCanonical
+      existing = existingMap.get(info.id) ?? []
+      const preliminaryFields = normalizeFields(raw1, { canonical, existing })
+      finalFields = preliminaryFields
+      if (shouldEscalateThinking(raw1, preliminaryFields, clues, visualHints) && !stopping) {
+        try {
+          const res2 = await searchCall({
+            kind: 'look',
+            model: BAILIAN_CONFIG.chatModel,
+            imageId: info.id,
+            instructions,
+            text: lookTail(clues, { existingContext, thinkingRetry: true }),
+            imageDataUrl: url,
+            search: true,
+            enableThinking: true,
+            thinkingBudget: THINKING_BUDGET,
+            timeoutMs: TIMEOUT_MS,
+            signal: realtimeAbort.signal
+          })
+          if (stopping) return
+          const raw2 = parseJsonBlock(res2.text)
+          if (raw2) {
+            finalText = res2.text
+            finalSources = [...new Set([...finalSources, ...res2.sources.map((s) => s.url)])]
+            finalUsage = res2.usage
+            finalFields = normalizeFields(raw2, { canonical, existing })
+          } else {
+            log.warn(`看图二次深度核查结果格式异常，回退初次结果（图片 ${info.id}）`)
+          }
+        } catch (err) {
+          if (stopping) return
+          log.warn(`看图二次深度核查失败，回退初次结果（图片 ${info.id}）`, err)
+        }
+      }
+    }
+
+    if (await saveLookResult(job.id, info.id, finalText, clues, finalSources, BAILIAN_CONFIG.chatModel, finalUsage, canonical, canonical ? { existing, fields: finalFields } : undefined)) {
       config?.onSuggested()
     }
   } catch (err) {
@@ -484,12 +560,14 @@ async function batchLine(job: AiJobEntity, instructions: string): Promise<string
     await updateJob(job.id, { status: 'FAILED', error: '读不到原图', finishedAt: new Date() })
     return null
   }
+  const isReorganize = (job.payload as { reorganize?: boolean } | null)?.reorganize === true
+  const existingContext = isReorganize ? await findExistingLookContext(info.id) : null
   const body = {
     model: BAILIAN_CONFIG.chatModel,
     enable_thinking: false,
     messages: [
       { role: 'system', content: instructions },
-      { role: 'user', content: [{ type: 'text', text: lookTail(cluesOf(info, info.visualFeatures ?? null)) }, { type: 'image_url', image_url: { url } }] }
+      { role: 'user', content: [{ type: 'text', text: lookTail(cluesOf(info, info.visualFeatures ?? null), { existingContext }) }, { type: 'image_url', image_url: { url } }] }
     ]
   }
   return JSON.stringify({ custom_id: String(job.id), method: 'POST', url: '/v1/chat/completions', body })

@@ -5,6 +5,9 @@ import {
   type OrganizeEstimateVO,
   type OrganizeFolderVO,
   type OrganizeStateVO,
+  type ReorganizeEstimateVO,
+  type ReorganizeRelookResultVO,
+  type ReorganizeResetResultVO,
   type RatingProgressVO,
   type SuggestionBatchVO,
   type AddTagDTO,
@@ -190,6 +193,12 @@ const api = {
       ipcRenderer.on(IpcEvent.organizeState, handler)
       return () => ipcRenderer.removeListener(IpcEvent.organizeState, handler)
     }
+  },
+  reorganize: {
+    estimate: (): Promise<ApiResponse<ReorganizeEstimateVO>> => ipcRenderer.invoke(IpcChannel.reorganizeEstimate),
+    dismissEstimate: (): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.reorganizeDismissEstimate),
+    resetToSource: (): Promise<ApiResponse<ReorganizeResetResultVO>> => ipcRenderer.invoke(IpcChannel.reorganizeResetToSource),
+    relook: (): Promise<ApiResponse<ReorganizeRelookResultVO>> => ipcRenderer.invoke(IpcChannel.reorganizeRelook)
   },
   rating: {
     progress: (): Promise<ApiResponse<RatingProgressVO>> => ipcRenderer.invoke(IpcChannel.ratingProgress),

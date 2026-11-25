@@ -1,6 +1,7 @@
 <template>
   <footer class="status-footer">
     <LookCapsule />
+    <ReorganizeButton />
     <OrganizeButton />
     <RatingProgress />
     <span class="status-footer__grow" aria-hidden="true" />
