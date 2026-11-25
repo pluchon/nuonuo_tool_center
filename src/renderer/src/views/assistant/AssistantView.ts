@@ -146,6 +146,14 @@ export default defineComponent({
       return out
     })
     const scopeLabel = computed(() => store.scope?.name ?? '全部类目录')
+    watch(
+      () => library.overview?.categories,
+      (categories) => {
+        if (!categories || store.scope?.kind !== 'category') return
+        const top = store.scope.name.split(/[\\/]/).find(Boolean)
+        if (!top || !categories.some((c) => c.name === top)) store.scope = null
+      }
+    )
 
     type FileKind = AiAttachment['kind']
     const pendingReads = ref(new Map<FileKind, symbol>())

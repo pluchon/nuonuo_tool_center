@@ -98,9 +98,9 @@ function resolveStateLabel(refCount: number, count: number, picCount: number, al
 
 export async function predictNext(dto: AiPredictionDTO): Promise<string | null> {
   if (!dto || !Number.isSafeInteger(dto.conversationId) || !Number.isSafeInteger(dto.replyId) ||
-      dto.includeR18 !== false || (dto.scope !== null && dto.scope?.kind !== 'category') ||
+      typeof dto.includeR18 !== 'boolean' || (dto.scope !== null && dto.scope?.kind !== 'category') ||
       (dto.references !== undefined && (!Array.isArray(dto.references) || dto.references.length > SAMPLE))) return null
-  const row = await findPredictionContext(dto.conversationId, dto.replyId, dto.scope?.name ?? null)
+  const row = await findPredictionContext(dto.conversationId, dto.replyId, dto.scope?.name ?? null, dto.includeR18)
   if (!row) return null
   const refsInput = dto.references ?? []
   if (!refsInput.length && row.saved) {
@@ -121,11 +121,11 @@ export async function predictNext(dto: AiPredictionDTO): Promise<string | null> 
     const records = await currentReferenceRecords(ids.filter(id => visible.has(id)))
     pictures = ids.flatMap(id => {
       const r = records.get(id)
-      return r && !r.is_r18 ? [{ 名称: r.name.slice(0, 48), 标签: r.tags.slice(0, 6).map(t => t.slice(0, 24)) }] : []
+      return r && (dto.includeR18 || !r.is_r18) ? [{ 名称: r.name.slice(0, 48), 标签: r.tags.slice(0, 6).map(t => t.slice(0, 24)) }] : []
     })
     if (!pictures.length || (refsInput.length && pictures.length !== ids.length)) return null
   }
-  const turns = await findRecentTurns(dto.conversationId, dto.replyId, 4)
+  const turns = await findRecentTurns(dto.conversationId, dto.replyId, 4, dto.includeR18)
   const recentUserTexts = [...new Set([
     ...turns.filter(t => t.role === 'user' && t.text.trim()).map(t => t.text.trim()),
     ...(row.question.trim() ? [row.question.trim()] : [])
@@ -155,7 +155,7 @@ export async function predictNext(dto: AiPredictionDTO): Promise<string | null> 
     用户偏好: preferences.map(m => m.content.slice(0, 80))
   }
   // 会话和图片权限已核对。相同范围及模型输入可以复用，即使重新开了一次对话。
-  const key = searchCacheKey('prediction-v4', [BAILIAN_CONFIG.chatModel, rules, dto.scope, input])
+  const key = searchCacheKey('prediction-v4', [BAILIAN_CONFIG.chatModel, rules, dto.scope, dto.includeR18, input])
   const hint = await cachedSearchValue(key, isHint, async () => {
     if (!readCloudCredentials().dashscopeApiKey) return undefined
     const result = await chatCall({ kind: 'predict', model: BAILIAN_CONFIG.chatModel, maxTokens: 40, timeoutMs: 5000,

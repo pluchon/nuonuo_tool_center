@@ -1,5 +1,6 @@
 import { addImageExclusion } from '../../../../repositories/aiMemoryRepository'
-import { findImageBrief, findTagNamesOf, visibleResultIds } from '../../../../repositories/aiSearchRepository'
+import { findImageBrief, findTagNamesOf, findVocabulary, visibleResultIds } from '../../../../repositories/aiSearchRepository'
+import { findCategories } from '../../../../repositories/tagRepository'
 import { scopeDirs } from '../../assistantReferences'
 import { defineTool } from '../toolRegistry'
 import type { HarnessState, ToolEnv } from '../types'
@@ -83,7 +84,7 @@ export const getImageTool = defineTool({
         return { content: JSON.stringify({ error: '这张图已不在原检索范围内' }), outcome: { type: 'metadata' } }
       }
     }
-    const brief = Number.isInteger(id) ? await findImageBrief(id, { dirs: env.dirs }) : undefined
+    const brief = Number.isInteger(id) ? await findImageBrief(id, { dirs: env.dirs, includeR18: env.includeR18 }) : undefined
     if (!brief) {
       return { content: JSON.stringify({ error: '没有这张图' }), outcome: { type: 'metadata' } }
     }
@@ -95,7 +96,7 @@ export const getImageTool = defineTool({
         file: brief.relPath?.split('\\').pop() ?? '',
         size: brief.width && brief.height ? `${brief.width}×${brief.height}` : '',
         tags: tagNames.get(id) ?? [],
-        description: brief.description ?? ''
+        ...(brief.isR18 ? { isR18: true, description: '' } : { description: brief.description ?? '' })
       }),
       outcome: { type: 'metadata' }
     }
@@ -111,11 +112,24 @@ export const listTagsTool = defineTool({
       category: { type: 'string', description: '分类名，如角色、作品、主题、地点' }
     }
   },
-  execute(args, env) {
+  async execute(args, env) {
     const category = typeof args.category === 'string' ? args.category.trim() : ''
-    const list = env.tags.filter((t) => t.general && (!category || t.category === category)).slice(0, 200)
+    let list: Array<{ name: string; category: string; aliases: string[] }>
+    if (env.dirs?.length) {
+      const [vocab, categories] = await Promise.all([findVocabulary(true, env.dirs, env.includeR18), findCategories()])
+      const catName = new Map(categories.map((c) => [c.id, c.name]))
+      list = vocab
+        .map((t) => ({ name: t.name, category: catName.get(t.categoryId) ?? '标签', aliases: t.aliases }))
+        .filter((t) => !category || t.category === category)
+        .slice(0, 200)
+    } else {
+      list = env.tags
+        .filter((t) => (env.includeR18 || t.general) && (!category || t.category === category))
+        .slice(0, 200)
+        .map((t) => ({ name: t.name, category: t.category, aliases: t.aliases }))
+    }
     return {
-      content: JSON.stringify(list.map((t) => ({ name: t.name, category: t.category, aliases: t.aliases }))),
+      content: JSON.stringify(list),
       outcome: { type: 'metadata' }
     }
   }

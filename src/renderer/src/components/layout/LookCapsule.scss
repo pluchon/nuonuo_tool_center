@@ -55,7 +55,7 @@
     font-variant-numeric: tabular-nums;
   }
 
-  // 卡片：斜纹外框 + 里面一层白底
+  // 卡片：斜纹磨砂外框 + 跟随透明度的磨砂玻璃内层
   &__card {
     position: absolute;
     z-index: 30;
@@ -65,7 +65,9 @@
     box-sizing: border-box;
     padding: 5px;
     border-radius: 22px;
-    background: repeating-linear-gradient(135deg, var(--c-b-F6CDD8) 0 8px, var(--a-soft) 8px 16px);
+    background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--c-b-F6CDD8) 52%, transparent) 0 8px, color-mix(in srgb, var(--a-soft) 52%, transparent) 8px 16px);
+    backdrop-filter: var(--look-pop-blur);
+    -webkit-backdrop-filter: var(--look-pop-blur);
     box-shadow: 0 24px 48px -24px rgba(var(--sh), 0.65);
     color: var(--c-i-3B3047);
   }
@@ -76,7 +78,7 @@
     bottom: -10px;
     width: 20px;
     height: 11px;
-    background: var(--c-b-F6CDD8);
+    background: color-mix(in srgb, var(--c-b-F6CDD8) 58%, transparent);
     clip-path: polygon(0 0, 100% 0, 50% 100%);
   }
 
@@ -86,7 +88,9 @@
     gap: 10px;
     padding: 12px;
     border-radius: 17px;
-    background: var(--c-surface);
+    background: var(--look-pop-bg);
+    backdrop-filter: var(--look-pop-blur);
+    -webkit-backdrop-filter: var(--look-pop-blur);
     border: 1px solid var(--a-line2);
   }
 

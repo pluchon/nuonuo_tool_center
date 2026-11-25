@@ -598,6 +598,42 @@ describe('诺诺助手', () => {
       await pg.exec("UPDATE image_file SET rel_path='其他/a.png' WHERE image_id=1 AND root_id=1")
       expect((await listMessages(q.conversation.id)).at(-1)?.images.map((item) => item.imageId)).toEqual([2])
       await expect(ask({ conversationId: null, text: '找图', scope: { kind: 'source', id: source.id } as unknown as AiAskDTO['scope'], includeR18: false })).rejects.toThrow('只能检索类目录')
+
+      // 指定嵌套类目录路径、按类目录过滤 list_tags、直接列出类目录内图片（含 includeR18 元数据可读与开关隔离）
+      await pg.exec("UPDATE image_file SET rel_path='二次元/精选/a.png' WHERE image_id=1 AND root_id=1")
+      const nestedQ = await ask({ conversationId: null, text: '列出这个目录的图', scope: { kind: 'category', name: '二次元\\精选\\' }, includeR18: false })
+      expect(nestedQ.message.scope).toEqual({ kind: 'category', name: '二次元/精选' })
+      script.push(
+        { tool_calls: [
+          { id: 't1', type: 'function', function: { name: 'list_tags', arguments: '{}' } },
+          { id: 's1', type: 'function', function: { name: 'search_images', arguments: '{"browseScope":true,"contrast":[]}' } }
+        ] },
+        { content: '这里面有甘雨-好椰。' }
+      )
+      const nestedReply = await answer(nestedQ.conversation.id)
+      expect(nestedReply.images.map((item) => item.imageId)).toEqual([1])
+      const nestedTools = (calls.at(-1)?.messages as Array<{ role: string; content: string }>).filter((m) => m.role === 'tool').map((m) => m.content)
+      expect(nestedTools[0]).toContain('甘雨')
+      expect(nestedTools[0]).not.toContain('只在R18')
+      expect(nestedTools[1]).toContain('甘雨-好椰')
+
+      // 开启 includeR18 后可读取 R-18 图片的名称与已确认标签元数据，且绝不附带像素
+      const r18MetaQ = await ask({ conversationId: null, text: '查看只在R18标签和细节', scope: { kind: 'category', name: '二次元' }, includeR18: true })
+      script.push(
+        { tool_calls: [
+          { id: 'lt', type: 'function', function: { name: 'list_tags', arguments: '{}' } },
+          { id: 'sr', type: 'function', function: { name: 'search_images', arguments: '{"tags":["只在R18"],"contrast":[]}' } },
+          { id: 'gi', type: 'function', function: { name: 'get_image', arguments: '{"id":3}' } }
+        ] },
+        { content: '这张是「甘雨私房」，包含标签：甘雨、只在R18。' }
+      )
+      const r18MetaReply = await answer(r18MetaQ.conversation.id)
+      expect(r18MetaReply.images.map((item) => item.imageId)).toEqual([3])
+      const r18Tools = (calls.at(-1)?.messages as Array<{ role: string; content: string }>).filter((m) => m.role === 'tool').map((m) => m.content)
+      expect(JSON.parse(r18Tools[0])).toContainEqual(expect.objectContaining({ name: '只在R18' }))
+      expect(JSON.parse(r18Tools[1])).toMatchObject({ total: 1, images: [expect.objectContaining({ id: 3, name: '甘雨私房', isR18: true })] })
+      expect(JSON.parse(r18Tools[2])).toMatchObject({ id: 3, name: '甘雨私房', tags: ['甘雨', '只在R18'], isR18: true, description: '' })
+      expect(JSON.stringify(calls.at(-1)?.messages)).not.toMatch(/data:image|image_url/)
     } finally {
       await pg.exec("UPDATE image_file SET rel_path='二次元/a.png' WHERE image_id=1 AND root_id=1")
       await pg.query("UPDATE library_root SET delete_state=1 WHERE id=$1", [source.id])

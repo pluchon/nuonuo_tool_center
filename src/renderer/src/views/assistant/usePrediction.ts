@@ -52,12 +52,12 @@ export function usePrediction(blocked: () => boolean, revision: () => number) {
     const scope = store.scope ? { ...store.scope } : null
     const sameScope = (scope?.name ?? null) === (question.scope?.kind === 'category' ? question.scope.name : null) &&
       store.includeR18 === (question.includeR18 === true)
-    if (!sameScope || store.includeR18) return null
+    if (!sameScope) return null
     const references = store.references.slice(0, 3).map(r => ({ ...r, name: '' }))
     const canSuggest = references.length > 0 || reply.images.length > 0 || Boolean(reply.canPredict) ||
       (!reply.hasStoredResults && (reply.text.trim().length >= 16 || Boolean(reply.how)))
     if (!canSuggest) return null
-    const dto = { conversationId: store.currentId, replyId: reply.id, scope, includeR18: false, references, selectionCount: store.references.length }
+    const dto = { conversationId: store.currentId, replyId: reply.id, scope, includeR18: store.includeR18, references, selectionCount: store.references.length }
     const key = JSON.stringify([dto, question.id, reply.createdAt, revision()])
     return { key, dto }
   })

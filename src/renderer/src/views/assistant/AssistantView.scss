@@ -6,9 +6,9 @@
   --assistant-muted: color-mix(in srgb, var(--c-i-7F7494) 68%, var(--a-ink));
   --assistant-field: color-mix(in srgb, var(--look-field-bg) 85%, var(--a-soft));
   --assistant-field-hover: color-mix(in srgb, var(--look-field-hover-bg) 82%, var(--a-soft));
-  --ai-menu-bg: color-mix(in srgb, var(--look-field-bg) 42%, color-mix(in srgb, var(--c-surface) 94%, var(--a-soft)));
-  --ai-ctx-bg: color-mix(in srgb, var(--look-field-bg) 48%, color-mix(in srgb, var(--c-surface) 95%, var(--a-soft)));
-  --ai-menu-blur: blur(18px) saturate(1.45);
+  --ai-menu-bg: var(--look-pop-bg);
+  --ai-ctx-bg: var(--look-pop-bg);
+  --ai-menu-blur: var(--look-pop-blur);
   --ai-menu-line: var(--a-line2);
 
   flex: 1;
@@ -122,7 +122,7 @@
     width: 12px;
     height: 12px;
     box-sizing: border-box;
-    background: color-mix(in srgb, var(--ai-menu-bg) 72%, var(--c-surface));
+    background: var(--look-pop-caret-bg);
     backdrop-filter: var(--ai-menu-blur);
     -webkit-backdrop-filter: var(--ai-menu-blur);
     transform: rotate(45deg);
@@ -762,6 +762,7 @@
   &__composer {
     &--drop { outline: 2px dashed var(--a); outline-offset: 2px; }
     position: relative;
+    isolation: isolate;
     max-width: 724px;
     margin: 0 auto;
     display: flex;
@@ -769,13 +770,23 @@
     gap: 6px;
     padding: 12px 12px 10px 18px;
     border-radius: 28px;
-    background: color-mix(in srgb, var(--assistant-field) 78%, transparent);
-    backdrop-filter: var(--look-blur);
-    border: 1px solid var(--a-line2);
-    box-shadow: 0 14px 34px -20px rgba(var(--sh), 0.6);
-    transition: background 0.25s;
 
-    &:hover {
+    &::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      border-radius: inherit;
+      pointer-events: none;
+      background: color-mix(in srgb, var(--assistant-field) 78%, transparent);
+      backdrop-filter: var(--look-blur);
+      -webkit-backdrop-filter: var(--look-blur);
+      border: 1px solid var(--a-line2);
+      box-shadow: 0 14px 34px -20px rgba(var(--sh), 0.6);
+      transition: background 0.25s;
+    }
+
+    &:hover::before {
       background: color-mix(in srgb, var(--assistant-field-hover) 86%, transparent);
     }
   }

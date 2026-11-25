@@ -39,6 +39,7 @@ export const searchImagesTool = defineTool({
       },
       orientation: { type: 'string', enum: ['portrait', 'landscape', 'square'], description: '竖图、横图、方图' },
       recent: { type: 'boolean', description: '只要最近 30 天导入的' },
+      browseScope: { type: 'boolean', description: '用户已选定某个类目录并想直接列出或浏览其中图片时设为 true。' },
       excludeShown: {
         type: 'boolean',
         description: '当用户说“还有其他的吗”“换几张”“看过了”“再找别的”等想看没展示过的图时设为 true，自动排除本段对话已经展示过的图片。'
@@ -89,7 +90,8 @@ export const searchImagesTool = defineTool({
       !!spec.orientation ||
       !!spec.recent ||
       !!spec.untagged
-    if (!literal && !semantic) {
+    const canBrowseScope = Boolean(env.selectedCategory) || (args.browseScope === true && Boolean(env.dirs?.length))
+    if (!literal && !semantic && !canBrowseScope) {
       return {
         content: JSON.stringify({ error: '没有可用的检索条件，请给出标签、关键词或画面描述' }),
         outcome: { type: 'none' }
@@ -100,7 +102,7 @@ export const searchImagesTool = defineTool({
       const allowed = new Set(env.modelReferences.map((ref) => ref.imageId))
       candidates = candidates ? candidates.filter((id) => allowed.has(id)) : [...allowed]
     }
-    const outcome = await runSearch(spec, env.dirs, env.includeR18 && !env.modelReferences, env.tags, semantic, candidates)
+    const outcome = await runSearch(spec, env.dirs, env.includeR18, env.tags, semantic, candidates)
     if (semanticText && !semantic && (await hasSearchableImage(env.dirs, false))) {
       outcome.incomplete ??= '画面相似度检索暂不可用'
     }
@@ -136,13 +138,18 @@ export const searchImagesTool = defineTool({
     const cacheablePlan = !hasSessionDedup && (!semanticText || semantic) ? plan : undefined
     const finalConds = semantic ? [...conds, ['画面', semanticText] as [string, string]] : conds
     const caption = ordinaryCardCaption(onMatch, outcome)
-    const brief = outcome.ordinaryIds.slice(0, BRIEF_MAX)
+    const brief = (env.includeR18 ? outcome.imageIds : outcome.ordinaryIds).slice(0, BRIEF_MAX)
     const tagNames = await findTagNamesOf(brief)
-    const items = await itemsOfImages(brief, false, env.dirs)
+    const items = await itemsOfImages(brief, env.includeR18, env.dirs)
     return {
       content: JSON.stringify({
-        total: outcome.ordinaryIds.length,
-        images: items.map((i) => ({ id: i.imageId, name: i.name, tags: tagNames.get(i.imageId) ?? [] })),
+        total: env.includeR18 ? outcome.imageIds.length : outcome.ordinaryIds.length,
+        images: items.map((i) => ({
+          id: i.imageId,
+          name: i.name,
+          tags: tagNames.get(i.imageId) ?? [],
+          ...(i.isR18 ? { isR18: true } : {})
+        })),
         ...(env.includeR18 ? { r18Total: outcome.imageIds.length - outcome.ordinaryIds.length } : {}),
         alreadyShownCount,
         allAlreadyShown

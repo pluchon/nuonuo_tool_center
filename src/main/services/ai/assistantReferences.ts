@@ -181,15 +181,16 @@ export async function referenceDetails(chosen: AiImageReference[],
 }
 
 export async function ordinaryReferenceDetails(refs: AiImageReference[],
-  visible: (ids: number[], source?: number) => Promise<Set<number>>, checkScope: boolean) {
+  visible: (ids: number[], source?: number) => Promise<Set<number>>, checkScope: boolean, includeR18 = false) {
   const allowed = checkScope && refs.length ? await visible(refs.map(r => r.imageId)) : null
   const records = await referenceDetails(allowed ? refs.filter(r => allowed.has(r.imageId)) : refs, visible)
-  return records.filter(r => !r.entry.is_r18).map(r => ({
-    imageId: r.imageId, position: r.position, name: r.entry.name, tags: r.entry.tags
+  return records.filter(r => includeR18 || !r.entry.is_r18).map(r => ({
+    imageId: r.imageId, position: r.position, name: r.entry.name, tags: r.entry.tags,
+    ...(r.entry.is_r18 ? { isR18: true } : {})
   }))
 }
 
-export async function resolveReferenceQuery(text: string, input: AiImageReference[], history: AiMessageEntity[], allowResult: (ids: number[], source: number) => Promise<Set<number>>) {
+export async function resolveReferenceQuery(text: string, input: AiImageReference[], history: AiMessageEntity[], allowResult: (ids: number[], source: number) => Promise<Set<number>>, includeR18 = false) {
   const index = referenceOrdinal(text)
   // 只在请求完整对应本地字段时直接读取。创作、改名和解释等开放式请求保留原文交给模型。
   const field = text.trim().replace(/[？?。！!]+$/u, '')
@@ -219,10 +220,17 @@ export async function resolveReferenceQuery(text: string, input: AiImageReferenc
   }
   if (direct || !text.trim()) return { focusReferences: chosen, reply: items.map(({ position, entry }) =>
     '第 ' + position + ' 张「' + entry.name + '」' + (entry.tags.length ? '的已确认标签：' + entry.tags.join('、') : '暂无已确认标签') + '。').join('\n') }
-  const ordinary = items.filter((r) => !r.entry.is_r18)
-  if (!ordinary.length) return { reply: '这些引用图片仅支持查询本地标签和名称。' }
-  const modelReferences = ordinary.map(({ imageId, position }) => ({ imageId, position }))
+  const allowedItems = includeR18 ? items : items.filter((r) => !r.entry.is_r18)
+  if (!allowedItems.length) return { reply: '这些引用图片仅支持查询本地标签和名称。' }
+  const modelReferences = allowedItems.map(({ imageId, position }) => ({ imageId, position }))
   const groups = new Map([...new Set(refs.map((r) => r.groupId))].map((id, i) => [id, i + 1]))
-  const note = ordinary.map(({ imageId, position, groupId, entry }) => ({ id: imageId, group: groups.get(groupId), position, name: entry.name, tags: entry.tags }))
+  const note = allowedItems.map(({ imageId, position, groupId, entry }) => ({
+    id: imageId,
+    group: groups.get(groupId),
+    position,
+    name: entry.name,
+    tags: entry.tags,
+    ...(entry.is_r18 ? { isR18: true } : {})
+  }))
   return { focusReferences: chosen, modelReferences, modelNote: '本轮图库引用的本地记录（仅元数据）：' + JSON.stringify(note) }
 }

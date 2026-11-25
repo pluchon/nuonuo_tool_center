@@ -7,6 +7,7 @@ import {
   countEmbeddings,
   findDirNames,
   findVocabulary,
+  hasAnyImageInScope,
   hasSearchableImage,
   missingSearchVector,
   searchImages,
@@ -55,9 +56,13 @@ export function localReply(found: number): string {
 }
 
 export async function emptyScopeText(dirs: AiSearchFilter['dirs'], includeR18: boolean): Promise<string> {
-  return !includeR18 && (await hasSearchableImage(dirs, true))
-    ? '当前筛选条件下没有可检索的图片。'
-    : '当前范围内没有可检索的图片。请先将已确认标签、完成复核的图片归入类目录。'
+  if (!includeR18 && (await hasSearchableImage(dirs, true))) {
+    return '当前筛选条件下没有可检索的普通图片（该范围内仅有 R-18 图片，可打开 R-18 开关按已确认标签检索）。'
+  }
+  if (dirs?.length && (await hasAnyImageInScope(dirs, includeR18))) {
+    return '当前类目录中的图片尚未确认标签或仍在待复核状态，暂时无法参与检索。'
+  }
+  return '当前范围内没有可检索的图片。请先将已确认标签、完成复核的图片归入类目录。'
 }
 
 export function ordinaryCardCaption(value: unknown, outcome: SearchOutcome): string | undefined {

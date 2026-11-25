@@ -50,10 +50,12 @@ export function categoryPosition(dirs?: AiSearchFilter['dirs']): SQL {
   if (dirs?.length === 0) return sql`false`
   const category = sql`${col(libraryRoot.kind)} = 'CATEGORY' and strpos(${relativePath}, '/') > 0`
   if (!dirs) return category
-  const positions = dirs.map(({ rootId, prefix }) =>
-    prefix
-      ? sql`(${col(imageFile.rootId)} = ${rootId} and starts_with(lower(${relativePath}), ${prefix.toLowerCase() + '/'}))`
-      : sql`${col(imageFile.rootId)} = ${rootId}`)
+  const positions = dirs.map(({ rootId, prefix }) => {
+    const norm = prefix.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+    return norm
+      ? sql`(${col(imageFile.rootId)} = ${rootId} and starts_with(lower(${relativePath}), ${norm.toLowerCase() + '/'}))`
+      : sql`${col(imageFile.rootId)} = ${rootId}`
+  })
   return sql`${category} and (${sql.join(positions, sql` or `)})`
 }
 
@@ -66,6 +68,14 @@ function aliveIn(dirs: AiSearchFilter['dirs'], categoryOnly = true): SQL {
 export async function hasSearchableImage(dirs: AiSearchFilter['dirs'], includeR18: boolean): Promise<boolean> {
   const rows = await getDatabase().db.select({ id: image.id }).from(image).where(and(
     eq(image.deleteState, 0), includeR18 ? undefined : eq(image.isR18, false), confirmedForSearch, aliveIn(dirs)
+  )).limit(1)
+  return rows.length > 0
+}
+
+// 检查指定目录范围内是否存在未删除图片（不要求已确认标签），用于区分“空目录”和“图片尚待确认标签/复核”。
+export async function hasAnyImageInScope(dirs: AiSearchFilter['dirs'], includeR18: boolean): Promise<boolean> {
+  const rows = await getDatabase().db.select({ id: image.id }).from(image).where(and(
+    eq(image.deleteState, 0), includeR18 ? undefined : eq(image.isR18, false), aliveIn(dirs)
   )).limit(1)
   return rows.length > 0
 }
@@ -312,14 +322,18 @@ export async function findTagNamesOf(imageIds: number[]): Promise<Map<number, st
   return out
 }
 
-// 标签词表：每个标签的名字、别名、分类，以及是否用在至少一张非 R-18 图上
-export async function findVocabulary(searchOnly = false): Promise<Array<{ id: number; name: string; categoryId: number; aliases: string[]; general: boolean }>> {
+// 标签词表：每个标签的名字、别名、分类，以及是否用在至少一张非 R-18 图上；传 dirs 时按所选类目录作用域过滤。
+export async function findVocabulary(
+  searchOnly = false,
+  dirs?: AiSearchFilter['dirs'],
+  includeR18 = false
+): Promise<Array<{ id: number; name: string; categoryId: number; aliases: string[]; general: boolean }>> {
   const { db } = getDatabase()
   const used = (onlyGeneral: boolean) => sql<boolean>`exists (select 1 from ${imageTag} join ${image} on ${col(image.id)} = ${col(imageTag.imageId)}
     where ${col(imageTag.tagId)} = ${col(tag.id)} and ${acceptedTag} and ${col(image.deleteState)} = 0
-    and not ${hasPendingSuggestion} and ${aliveIn(undefined, searchOnly)} ${onlyGeneral ? sql`and ${col(image.isR18)} = false` : sql``})`
+    and not ${hasPendingSuggestion} and ${aliveIn(dirs, searchOnly)} ${onlyGeneral ? sql`and ${col(image.isR18)} = false` : sql``})`
   const tags = await db.select({ id: tag.id, name: tag.name, categoryId: tag.categoryId, general: used(true) }).from(tag)
-    .where(and(eq(tag.deleteState, 0), searchOnly ? used(false) : undefined)).orderBy(tag.id)
+    .where(and(eq(tag.deleteState, 0), searchOnly ? used(dirs !== undefined && !includeR18) : undefined)).orderBy(tag.id)
   const aliases = await db
     .select({ tagId: tagAlias.tagId, name: tagAlias.name })
     .from(tagAlias)
@@ -345,7 +359,7 @@ export async function findDirNames(): Promise<Array<{ rootId: number; kind: 'SOU
 // 一张图给模型看的信息：名字、文件名、尺寸、是否 R-18
 export async function findImageBrief(
   imageId: number,
-  search?: { dirs: AiSearchFilter['dirs'] }
+  search?: { dirs: AiSearchFilter['dirs']; includeR18?: boolean }
 ): Promise<{ id: number; displayName: string | null; relPath: string | null; width: number | null; height: number | null; isR18: boolean; description: string | null } | undefined> {
   const { db } = getDatabase()
   const [row] = await db
@@ -363,7 +377,7 @@ export async function findImageBrief(
         and ${search ? categoryPosition(search.dirs) : sql`true`} order by ${col(imageFile.id)} limit 1)`
     })
     .from(image)
-    .where(and(eq(image.id, imageId), eq(image.deleteState, 0), search ? and(confirmedForSearch, aliveIn(search.dirs), eq(image.isR18, false)) : undefined))
+    .where(and(eq(image.id, imageId), eq(image.deleteState, 0), search ? and(confirmedForSearch, aliveIn(search.dirs), search.includeR18 ? undefined : eq(image.isR18, false)) : undefined))
     .limit(1)
   return row
 }

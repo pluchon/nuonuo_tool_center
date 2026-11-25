@@ -19,7 +19,8 @@ export interface RecentTurnRow {
 export async function findPredictionContext(
   conversationId: number,
   replyId: number,
-  scopeName: string | null
+  scopeName: string | null,
+  includeR18 = false
 ): Promise<PredictionContextRow | null> {
   const { rows: [row] } = await getDatabase().pg.query<PredictionContextRow>(
     `select a.content->>'nextPrediction' as saved,
@@ -39,18 +40,19 @@ export async function findPredictionContext(
     join lateral (select content from ai_message where conversation_id=c.id and role='USER' and delete_state=0 and id<a.id order by id desc limit 1) q on true
     where c.id=$1 and a.id=$2 and a.delete_state=0 and a.role='ASSISTANT'
       and q.content->'scope'->>'name' is not distinct from $3::text
-      and not coalesce((q.content->>'includeR18')::boolean, false)
+      and coalesce((q.content->>'includeR18')::boolean, false) = $4::boolean
       and not exists (select 1 from ai_message where conversation_id=c.id and delete_state=0 and id>a.id)`,
-    [conversationId, replyId, scopeName]
+    [conversationId, replyId, scopeName, includeR18]
   )
   return row ?? null
 }
 
-// 获取截至指定回复的最近若干条普通对话轮次，严格排除任何开启 R-18 的提问及其配对回复。
+// 获取截至指定回复的最近若干条对话轮次；未开启 includeR18 时严格排除开启 R-18 的提问及其配对回复。
 export async function findRecentTurns(
   conversationId: number,
   upToReplyId: number,
-  limit = 4
+  limit = 4,
+  includeR18 = false
 ): Promise<RecentTurnRow[]> {
   const { rows } = await getDatabase().pg.query<{
     role: 'USER' | 'ASSISTANT'
@@ -74,11 +76,13 @@ export async function findRecentTurns(
       and m.delete_state = 0
       and m.id <= $2
       and m.role in ('USER', 'ASSISTANT')
-      and not coalesce((m.content->>'includeR18')::boolean, false)
-      and (m.role = 'USER' or (q.content is not null and not coalesce((q.content->>'includeR18')::boolean, false)))
+      and ($4::boolean or (
+        not coalesce((m.content->>'includeR18')::boolean, false)
+        and (m.role = 'USER' or (q.content is not null and not coalesce((q.content->>'includeR18')::boolean, false)))
+      ))
     order by m.id desc
     limit $3`,
-    [conversationId, upToReplyId, limit]
+    [conversationId, upToReplyId, limit, includeR18]
   )
   return rows.reverse().map((r) =>
     r.role === 'USER'

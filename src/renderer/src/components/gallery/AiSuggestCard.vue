@@ -46,7 +46,6 @@
         class="sugg__val sugg__val--editable"
         :class="{ 'sugg__val--edited': Boolean(drafts[g.key]) }"
         :disabled="busy || refreshing"
-        :title="drafts[g.key] ?? g.value"
         @click="startEdit(g)"
       >{{ drafts[g.key] ?? g.value }}</button>
       <span v-else class="sugg__val">{{ g.value }}</span>

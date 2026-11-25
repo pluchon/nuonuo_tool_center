@@ -69,18 +69,18 @@ body {
   --r18-row-line: rgba(194, 51, 90, 0.35);
 }
 
-// 诺诺助手的弹出菜单：深色下比输入框亮一层、描边更清楚、阴影更深；叠在菜单上的右键菜单再亮一层
+// 诺诺助手的弹出菜单：跟随主题透明度与磨砂变量
 :root {
-  --ai-menu-bg: var(--c-surface);
-  --ai-ctx-bg: var(--c-surface);
+  --ai-menu-bg: var(--look-pop-bg);
+  --ai-ctx-bg: var(--look-pop-bg);
   --ai-menu-line: var(--a-line2);
   --ai-menu-shadow: 0 22px 44px -22px rgba(var(--sh), 0.6);
   --ai-del-ink: var(--c-i-C25B85);
 }
 
 :root.dark {
-  --ai-menu-bg: #342d42;
-  --ai-ctx-bg: #3e3650;
+  --ai-menu-bg: var(--look-pop-bg);
+  --ai-ctx-bg: var(--look-pop-bg);
   --ai-menu-line: rgba(255, 255, 255, 0.12);
   --ai-menu-shadow: 0 22px 44px -18px rgba(0, 0, 0, 0.75);
   --ai-del-ink: #f29bba;

@@ -192,8 +192,16 @@ function checkScope(scope: unknown): DirKeyDTO | null {
   if (scope === null || scope === undefined) return null
   const s = scope as DirKeyDTO
   if (s.kind === 'source') throw new BizError('BAD_REQUEST', '诺诺助手只能检索类目录')
-  if (s.kind === 'category' && typeof s.name === 'string' && s.name && !/[\\/]/.test(s.name)) {
-    return { kind: 'category', name: s.name }
+  if (s.kind === 'category' && typeof s.name === 'string') {
+    const normalized = s.name.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+    const parts = normalized.split('/').filter(Boolean)
+    if (
+      normalized &&
+      parts.length > 0 &&
+      parts.every((p) => p !== '.' && p !== '..' && !/[:*?"<>|\u0000-\u001f]/.test(p))
+    ) {
+      return { kind: 'category', name: parts.join('/') }
+    }
   }
   throw new BizError('BAD_REQUEST', '范围不对')
 }
@@ -412,7 +420,7 @@ export async function answer(
       const image = attachments.find((a) => a.kind === 'image')
       const { turns, previousResults } = await historyTurns(history)
       const focus = !fast.hasInputContext && !fast.refinement ? conversationFocus(history.slice(-8)) : []
-      const ordinaryFocus = await ordinaryReferenceDetails(focus.slice(0, BRIEF_MAX), visibleForTurn, !!u.scope)
+      const ordinaryFocus = await ordinaryReferenceDetails(focus.slice(0, BRIEF_MAX), visibleForTurn, !!u.scope, u.includeR18)
       const focusSignature = ordinaryFocus.length ? searchCacheKey('focus', ordinaryFocus) : undefined
       const recentRemarks = focusSignature
         ? history
@@ -469,7 +477,7 @@ export async function answer(
           if (attachments.length && !u.references?.length) return []
           const refs = u.references?.length ? u.references : conversationFocus(history)
           const chosen = refs.length ? refs : referencedHistory(history)
-          return ordinaryReferenceDetails(chosen, visibleForTurn, !u.references?.length && !!u.scope)
+          return ordinaryReferenceDetails(chosen, visibleForTurn, !u.references?.length && !!u.scope, u.includeR18)
         },
         referenceNotes: fast.reference?.modelNote ?? focusNote,
         modelReferences: fast.reference?.modelReferences
@@ -575,7 +583,7 @@ export async function answer(
           ...(state.readLibraryMetadata || focusSignature ? { readLibraryMetadata: true } : {}),
           ...(focusSignature && !state.readLibraryMetadata && !outcome && !state.directoryProposal ? { focusSignature } : {}),
           ...(state.contextUsage ? { contextUsage: state.contextUsage } : {}),
-          ...(state.discussionReply?.suggestion && !state.readLibraryMetadata && !focusSignature && !fast.hasInputContext && !u.includeR18
+          ...(state.discussionReply?.suggestion && !state.readLibraryMetadata && !focusSignature && !fast.hasInputContext
             ? { nextPrediction: state.discussionReply.suggestion }
             : {}),
           memoryIds: state.memoryIds ?? []

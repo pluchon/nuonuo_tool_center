@@ -188,7 +188,10 @@ function lookVars(accent: string, isDark: boolean, look: GlassLook, backdrop: Ba
   const clr = look.panelClarity / 100
   const paneA = Math.max(0.06, 1 - clr * 1.15)
   const fieldA = Math.max(0.3, 1 - clr * 0.85)
+  const popA = Math.max(0.18, 1 - clr * 0.92)
+  const popCaretA = Math.max(0.26, Math.min(1, 1 - clr * 0.85))
   const blur = look.glass ? `blur(${look.glassBlur}px) saturate(1.5)` : 'none'
+  const popBlur = `blur(${look.glass ? Math.max(12, look.glassBlur) : 12}px) saturate(1.5)`
   return {
     '--look-pane-bg': glassOf(paneA),
     '--look-card-bg': glassOf(paneA),
@@ -197,7 +200,10 @@ function lookVars(accent: string, isDark: boolean, look: GlassLook, backdrop: Ba
     // 悬停、输入时稍微变实一点
     '--look-field-hover-bg': `rgba(var(--w), ${Math.min(1, fieldA + 0.08).toFixed(2)})`,
     '--look-foot-bg': glassOf(paneA * 0.7),
+    '--look-pop-bg': glassOf(popA),
+    '--look-pop-caret-bg': glassOf(popCaretA),
     '--look-blur': blur,
+    '--look-pop-blur': popBlur,
     '--look-edge': hasBg ? 'rgba(var(--w), 0.8)' : tint(accent, 0.16),
     '--look-rule': hasBg ? 'rgba(var(--w), 0.75)' : tint(accent, 0.16),
     // 设置弹窗本身的底：不跟“组件透明度”走，调透明度时设置页始终看得清

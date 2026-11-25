@@ -66,7 +66,7 @@ export async function tryFastPath(input: FastPathInput): Promise<FastPathResult>
   }
 
   const refinement = attachments.length ? undefined : followupQuery(u.text)
-  const reference = refinement ? undefined : await resolveReferenceQuery(u.text, u.references ?? [], history, visibleForTurn)
+  const reference = refinement ? undefined : await resolveReferenceQuery(u.text, u.references ?? [], history, visibleForTurn, u.includeR18)
   if (reference?.reply && (!attachments.length || u.references?.length)) {
     return {
       content: {

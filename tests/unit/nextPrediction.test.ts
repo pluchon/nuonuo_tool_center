@@ -152,3 +152,31 @@ it('多轮普通对话与纯文本长回复可生成预测，并严格剔除 R-1
     expect(sentPayload).not.toContain('SECRET_R18_REPLY_NAME')
   } finally { vi.unstubAllEnvs() }
 })
+
+it('开启包含 R-18 时可基于标签和名称元数据生成预测，且不越权泄露至普通会话', async () => {
+  const { pg } = getDatabase()
+  const { rows: [r18Img] } = await pg.query<{ id: number }>(
+    `insert into image(content_hash,format,byte_size,display_name,is_r18) values('r18-pred','JPG',1,'夜樱私房',true) returning id`
+  )
+  const { rows: [r18Tag] } = await pg.query<{ id: number }>(
+    `insert into tag(category_id,name) values(4,'夜樱标签') returning id`
+  )
+  await pg.query(`insert into image_file(image_id,root_id,rel_path,mtime) values($1,1,'角色/夜樱私房.jpg',now())`, [r18Img.id])
+  await pg.query(`insert into image_tag(image_id,tag_id,status,source) values($1,$2,'ACCEPTED','MANUAL')`, [r18Img.id, r18Tag.id])
+
+  const c = await insertConversation('R-18 预测测试', null)
+  await insertMessage(c.id, 'USER', { text: '找夜樱私房的标签参考', scope: null, includeR18: true })
+  const r18Reply = await insertMessage(c.id, 'ASSISTANT', { text: '', how: '找到 1 张', imageIds: [r18Img.id] })
+  const callsBefore = model.mock.calls.length
+  vi.stubEnv('DASHSCOPE_API_KEY', 'fixture')
+  try {
+    model.mockResolvedValueOnce({
+      message: { role: 'assistant', content: '按夜樱标签筛选同系列图片', refusal: null },
+      finishReason: 'stop',
+      usage: { inputTokens: 100, outputTokens: 10, cachedTokens: 0, cacheWriteTokens: 0, imageTokens: 0, searchCount: 0 }
+    })
+    expect(await predictNext({ conversationId: c.id, replyId: r18Reply.id, scope: null, includeR18: true })).toBe('按夜樱标签筛选同系列图片')
+    expect(JSON.stringify(model.mock.calls[callsBefore][0].messages)).toContain('夜樱标签')
+    expect(await predictNext({ conversationId: c.id, replyId: r18Reply.id, scope: null, includeR18: false })).toBeNull()
+  } finally { vi.unstubAllEnvs() }
+})
