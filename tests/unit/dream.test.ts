@@ -102,7 +102,7 @@ describe('做梦', () => {
     await recordEvent('file.move', 1, { to: '别处' })
     await dream.dreamOnce(false)
     const { pg } = getDatabase()
-    const cursor = (await pg.query<{ payload: { lastEventId: number } }>(`SELECT payload FROM ai_job WHERE kind = 'DREAM'`)).rows[0].payload.lastEventId
+    const cursor = (await pg.query<{ state: { lastEventId: number } }>(`SELECT state FROM ai_workflow WHERE kind = 'DREAM' AND key = 'default' AND delete_state = 0`)).rows[0].state.lastEventId
     const last = (await pg.query<{ id: number }>(`SELECT max(id) AS id FROM ai_event`)).rows[0].id
     expect(cursor).toBeLessThan(Number(last))
   })

@@ -126,6 +126,7 @@ export interface CacheCleanVO {
 // 主进程主动推给渲染进程的事件
 export const IpcEvent = {
   aiCompaction: 'ai:compaction',
+  aiStream: 'ai:stream',
   // 扫描状态变化：开始、进度、结束都推同一个结构
   scanState: 'scan:state',
   // 一批文件操作真正执行完（删除进回收站之后），带上失败的数量和原因
@@ -529,6 +530,13 @@ export interface AiContextUsage {
 export interface AiCompactResult {
   changed: boolean
   checkpoint: { messageId: number; usage: AiContextUsage } | null
+}
+
+export interface AiStreamEvent {
+  conversationId: number
+  kind: 'status' | 'delta' | 'reset' | 'done' | 'error'
+  text?: string
+  tool?: string
 }
 
 export interface AiPolicyVO {

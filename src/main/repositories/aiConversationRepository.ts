@@ -1,11 +1,27 @@
-import { and, asc, desc, eq, gte, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm'
 import { BizError } from '../common/bizError'
 import { getDatabase } from '../db/client'
 import { col } from '../db/sqlUtil'
-import { aiConversation, aiImageOriginal, aiMemory, aiMessage } from '../db/schema'
+import { aiCompaction, aiConversation, aiImageExclusion, aiImageOriginal, aiMemory, aiMessage } from '../db/schema'
 
 export type AiConversationEntity = typeof aiConversation.$inferSelect
 export type AiMessageEntity = typeof aiMessage.$inferSelect
+export type AiCompactionEntity = typeof aiCompaction.$inferSelect
+
+export interface ConversationDraft {
+  messageId: number
+  content: unknown
+}
+
+function parseDraft(raw: unknown): ConversationDraft | null {
+  if (!raw || typeof raw !== 'object') return null
+  const candidate = raw as { messageId?: unknown; content?: unknown }
+  if (typeof candidate.messageId !== 'number' || !Number.isSafeInteger(candidate.messageId) || candidate.messageId <= 0) {
+    return null
+  }
+  if (!('content' in candidate)) return null
+  return { messageId: candidate.messageId, content: candidate.content }
+}
 
 // 对话最后一次说话的时间（没有消息时用创建时间）；改名、置顶不算
 const lastAt = sql<Date>`coalesce((select max(${col(aiMessage.createTime)}) from ${aiMessage} where ${col(aiMessage.conversationId)} = ${col(aiConversation.id)} and ${col(aiMessage.deleteState)} = 0), ${col(aiConversation.createTime)})`
@@ -53,7 +69,7 @@ export async function insertMessage(conversationId: number, role: AiMessageEntit
   if (role === 'USER') {
     return db.transaction(async (tx) => {
       if (original) await tx.insert(aiImageOriginal).values(original).onConflictDoNothing()
-      await tx.update(aiMessage).set({ deleteState: 1 }).where(and(eq(aiMessage.conversationId, conversationId), eq(aiMessage.deleteState, RECALLED)))
+      await tx.update(aiConversation).set({ draft: null }).where(eq(aiConversation.id, conversationId))
       const [row] = await tx.insert(aiMessage).values({ conversationId, role, content }).returning()
       return row
     })
@@ -66,22 +82,53 @@ export async function insertMessage(conversationId: number, role: AiMessageEntit
 export async function attachmentOriginal(messageId: number): Promise<string | null> {
   if (!Number.isSafeInteger(messageId) || messageId <= 0) throw new BizError('BAD_REQUEST', '无效的消息编号')
   const { rows } = await getDatabase().pg.query<{ bytes: Uint8Array; mime: string }>(
-    `select o.bytes, a->>'mimeType' as mime from ai_message m
+    `select o.bytes, a->>'mimeType' as mime
+     from (
+       select m.content->'attachments' as attachments
+       from ai_message m
        join ai_conversation c on c.id = m.conversation_id and c.delete_state = 0
-       cross join lateral jsonb_array_elements(m.content->'attachments') a
-       join ai_image_original o on o.hash = a->>'originalHash'
-       where m.id = $1 and m.role = 'USER' and m.delete_state in (0, 2) and a->>'kind' = 'image' limit 1`, [messageId])
+       where m.id = $1 and m.role = 'USER' and m.delete_state = 0
+         and jsonb_typeof(m.content->'attachments') = 'array'
+       union all
+       select c.draft->'content'->'attachments' as attachments
+       from ai_conversation c
+       where c.delete_state = 0
+         and (c.draft->>'messageId')::bigint = $1
+         and jsonb_typeof(c.draft->'content'->'attachments') = 'array'
+     ) src
+     cross join lateral jsonb_array_elements(src.attachments) a
+     join ai_image_original o on o.hash = a->>'originalHash'
+     where a->>'kind' = 'image'
+     limit 1`,
+    [messageId]
+  )
   return rows[0] ? `data:${rows[0].mime};base64,${Buffer.from(rows[0].bytes).toString('base64')}` : null
 }
 
-// 这条用户消息已经移出对话，原文作为输入框草稿保留，直到下一次发送。
-const RECALLED = 2
-
+// 撤回到输入框的草稿存在 ai_conversation.draft 中，直到下一次发送或覆盖编辑。
 export async function findRecalledMessage(conversationId: number): Promise<AiMessageEntity | undefined> {
-  const [row] = await getDatabase().db.select().from(aiMessage).where(and(
-    eq(aiMessage.conversationId, conversationId), eq(aiMessage.deleteState, RECALLED), eq(aiMessage.role, 'USER')
-  )).limit(1)
-  return row
+  const [row] = await getDatabase().db
+    .select({
+      draft: aiConversation.draft,
+      createTime: aiConversation.createTime,
+      updateTime: aiConversation.updateTime
+    })
+    .from(aiConversation)
+    .where(and(eq(aiConversation.id, conversationId), eq(aiConversation.deleteState, 0)))
+    .limit(1)
+  if (!row) return undefined
+  const draft = parseDraft(row.draft)
+  if (!draft) return undefined
+  return {
+    id: draft.messageId,
+    conversationId,
+    role: 'USER',
+    content: draft.content,
+    vote: null,
+    createTime: row.createTime,
+    updateTime: row.updateTime,
+    deleteState: 1
+  } as AiMessageEntity
 }
 
 export async function reviseLastUserMessage(
@@ -93,22 +140,80 @@ export async function reviseLastUserMessage(
     )).orderBy(desc(aiMessage.id)).limit(1)
     if (last?.id !== messageId) throw new BizError('CONFLICT', '只能修改最后一条用户消息')
     const replacement = replace?.(last)
-    if (!replace) {
-      await tx.update(aiMessage).set({ deleteState: 1 }).where(and(
-        eq(aiMessage.conversationId, conversationId), eq(aiMessage.deleteState, RECALLED)
-      ))
-    }
     await tx.update(aiMessage).set({ deleteState: 1 }).where(and(
       eq(aiMessage.conversationId, conversationId), gte(aiMessage.id, messageId), eq(aiMessage.deleteState, 0)
     ))
     await tx.update(aiMemory).set({ validTo: new Date() }).where(and(eq(aiMemory.sourceMessageId, messageId), isNull(aiMemory.validTo)))
+    await tx.delete(aiImageExclusion).where(eq(aiImageExclusion.sourceMessageId, messageId))
+    await tx.update(aiCompaction).set({ deleteState: 1 }).where(and(
+      eq(aiCompaction.conversationId, conversationId), gte(aiCompaction.upToMessageId, messageId), eq(aiCompaction.deleteState, 0)
+    ))
     if (replace) {
+      await tx.update(aiConversation).set({ draft: null }).where(eq(aiConversation.id, conversationId))
       const [row] = await tx.insert(aiMessage).values({ conversationId, role: 'USER', content: replacement }).returning()
       return row
     }
-    await tx.update(aiMessage).set({ deleteState: RECALLED }).where(eq(aiMessage.id, messageId))
+    await tx.update(aiConversation).set({ draft: { messageId: last.id, content: last.content } }).where(eq(aiConversation.id, conversationId))
     return last
   })
+}
+
+export async function saveCompactionForMessage(upToMessageId: number, summary: string, tokenBound = 0): Promise<boolean> {
+  return getDatabase().db.transaction(async (tx) => {
+    const [msg] = await tx
+      .select({ conversationId: aiMessage.conversationId })
+      .from(aiMessage)
+      .where(and(eq(aiMessage.id, upToMessageId), eq(aiMessage.role, 'ASSISTANT'), eq(aiMessage.deleteState, 0)))
+      .limit(1)
+    if (!msg) return false
+    await tx
+      .update(aiCompaction)
+      .set({ deleteState: 1 })
+      .where(and(
+        eq(aiCompaction.conversationId, msg.conversationId),
+        eq(aiCompaction.upToMessageId, upToMessageId),
+        eq(aiCompaction.deleteState, 0)
+      ))
+    await tx.insert(aiCompaction).values({
+      conversationId: msg.conversationId,
+      upToMessageId,
+      summary,
+      tokenBound: Math.max(0, Math.round(tokenBound))
+    })
+    return true
+  })
+}
+
+export async function findCompactionsByConversation(conversationId: number): Promise<AiCompactionEntity[]> {
+  return getDatabase().db
+    .select()
+    .from(aiCompaction)
+    .where(and(eq(aiCompaction.conversationId, conversationId), eq(aiCompaction.deleteState, 0)))
+    .orderBy(asc(aiCompaction.upToMessageId), asc(aiCompaction.id))
+}
+
+export async function findLatestCompaction(conversationId: number): Promise<AiCompactionEntity | undefined> {
+  const [row] = await getDatabase().db
+    .select()
+    .from(aiCompaction)
+    .where(and(eq(aiCompaction.conversationId, conversationId), eq(aiCompaction.deleteState, 0)))
+    .orderBy(desc(aiCompaction.upToMessageId), desc(aiCompaction.id))
+    .limit(1)
+  return row
+}
+
+export async function findCompactionMap(messageIds: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>()
+  if (messageIds.length === 0) return out
+  const rows = await getDatabase().db
+    .select({ upToMessageId: aiCompaction.upToMessageId, summary: aiCompaction.summary })
+    .from(aiCompaction)
+    .where(and(inArray(aiCompaction.upToMessageId, messageIds), eq(aiCompaction.deleteState, 0)))
+    .orderBy(asc(aiCompaction.id))
+  for (const row of rows) {
+    out.set(row.upToMessageId, row.summary)
+  }
+  return out
 }
 
 // 一段对话的全部消息，按先后

@@ -311,7 +311,51 @@ export const aiConversation = pgTable('ai_conversation', {
   title: text('title').notNull(),
   pinned: boolean('pinned').notNull().default(false),
   // 对话开始时锁定的核心档案版本，保证这段对话的缓存前缀不变；没有档案时为空
-  profileVersion: integer('profile_version')
+  profileVersion: integer('profile_version'),
+  // 撤回到输入框的未发送草稿：{ messageId, content }
+  draft: jsonb('draft')
+})
+
+// 长流程统一状态机（事务 + version 乐观锁）：一键整理、做梦游标与摘要状态等
+export const aiWorkflow = pgTable(
+  'ai_workflow',
+  {
+    ...baseColumns(),
+    kind: text('kind').notNull(),
+    key: text('key').notNull().default('default'),
+    status: text('status').notNull().default('IDLE'),
+    phase: text('phase').notNull().default('IDLE'),
+    state: jsonb('state').notNull().default(sql`'{}'::jsonb`),
+    version: integer('version').notNull().default(1),
+    error: text('error')
+  },
+  (t) => [uniqueIndex('uk_ai_workflow_kind_key').on(t.kind, t.key).where(sql`${t.deleteState} = 0`)]
+)
+
+// 对话上下文精简检查点（独立成表，替代写入 ai_message.content）
+export const aiCompaction = pgTable(
+  'ai_compaction',
+  {
+    ...baseColumns(),
+    conversationId: bigint('conversation_id', { mode: 'number' })
+      .notNull()
+      .references(() => aiConversation.id),
+    upToMessageId: bigint('up_to_message_id', { mode: 'number' })
+      .notNull()
+      .references(() => aiMessage.id),
+    summary: text('summary').notNull(),
+    tokenBound: integer('token_bound').notNull().default(0)
+  },
+  (t) => [index('idx_ai_compaction_conv_msg').on(t.conversationId, t.upToMessageId)]
+)
+
+// 检索长期排除的图片列表（替代 ai_memory 字符串协议）
+export const aiImageExclusion = pgTable('ai_image_exclusion', {
+  imageId: bigint('image_id', { mode: 'number' })
+    .primaryKey()
+    .references(() => image.id),
+  sourceMessageId: bigint('source_message_id', { mode: 'number' }).references(() => aiMessage.id),
+  createTime: timestamp('create_time', { withTimezone: true }).notNull().defaultNow()
 })
 
 // 上传原图按内容去重。会话历史和模型请求只使用消息中的预览，放大时单独读取原图。

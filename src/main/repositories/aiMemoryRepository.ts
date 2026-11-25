@@ -1,16 +1,67 @@
-import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 import { getDatabase, type AppDatabase } from '../db/client'
-import { aiEvent, aiJob, aiMemory } from '../db/schema'
+import { aiEvent, aiImageExclusion, aiJob, aiMemory } from '../db/schema'
 
 export type AiMemoryEntity = typeof aiMemory.$inferSelect
 export type AiEventEntity = typeof aiEvent.$inferSelect
 
-export async function excludedImageIds(prefix: string): Promise<Set<number>> {
-  const rows = await getDatabase().db.select({ content: aiMemory.content }).from(aiMemory).where(and(
-    eq(aiMemory.kind, 'preference'), eq(aiMemory.deleteState, 0), isNull(aiMemory.validTo),
-    sql`starts_with(${aiMemory.content}, ${prefix}::text)`
-  ))
-  return new Set(rows.map((row) => Number(row.content.slice(prefix.length))).filter(Number.isSafeInteger))
+export async function addImageExclusion(imageId: number, sourceMessageId?: number | null): Promise<void> {
+  await getDatabase().db
+    .insert(aiImageExclusion)
+    .values({ imageId, sourceMessageId: sourceMessageId ?? null })
+    .onConflictDoNothing()
+}
+
+export async function removeImageExclusion(imageId: number): Promise<void> {
+  await getDatabase().db.delete(aiImageExclusion).where(eq(aiImageExclusion.imageId, imageId))
+}
+
+export async function removeImageExclusionsByMessage(sourceMessageId: number): Promise<void> {
+  await getDatabase().db.delete(aiImageExclusion).where(eq(aiImageExclusion.sourceMessageId, sourceMessageId))
+}
+
+export async function excludedImageIds(_prefix?: string): Promise<Set<number>> {
+  const rows = await getDatabase().db.select({ imageId: aiImageExclusion.imageId }).from(aiImageExclusion)
+  return new Set(rows.map((row) => row.imageId))
+}
+
+export async function saveMemoryEmbedding(id: number, embedding: number[]): Promise<void> {
+  await getDatabase().db
+    .update(aiMemory)
+    .set({ embedding, updateTime: new Date() })
+    .where(eq(aiMemory.id, id))
+}
+
+export async function findMemoriesNeedingEmbedding(limit = 20): Promise<AiMemoryEntity[]> {
+  return getDatabase().db
+    .select()
+    .from(aiMemory)
+    .where(and(
+      eq(aiMemory.deleteState, 0),
+      isNull(aiMemory.validTo),
+      isNull(aiMemory.embedding),
+      sql`(${aiMemory.sourceEventId} is null or not exists (select 1 from ${aiEvent} where ${aiEvent.id} = ${aiMemory.sourceEventId} and ${aiEvent.isR18} = true))`
+    ))
+    .orderBy(desc(aiMemory.confidence), desc(aiMemory.id))
+    .limit(limit)
+}
+
+export async function findMemorySimilarities(queryEmbedding: number[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>()
+  if (!queryEmbedding.length) return out
+  const vecLiteral = `[${queryEmbedding.join(',')}]`
+  const rows = await getDatabase().db
+    .select({
+      id: aiMemory.id,
+      similarity: sql<number>`1 - (${aiMemory.embedding} <=> ${vecLiteral}::vector)`
+    })
+    .from(aiMemory)
+    .where(and(eq(aiMemory.deleteState, 0), isNull(aiMemory.validTo), isNotNull(aiMemory.embedding)))
+  for (const row of rows) {
+    const sim = Number(row.similarity)
+    if (Number.isFinite(sim)) out.set(row.id, sim)
+  }
+  return out
 }
 
 // 还有效的记忆（可信度高的在前）

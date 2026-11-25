@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
-import type { AiAttachment, AiConversationVO, AiImageReference, AiMessageVO, AiRecalledDraft, AiSearchScope } from '@shared/api'
+import type { AiAttachment, AiConversationVO, AiImageReference, AiMessageVO, AiRecalledDraft, AiSearchScope, AiStreamEvent } from '@shared/api'
 import {
   askNono,
+  compactConversation,
   editMessage,
   recallMessage,
   fetchRecalledDraft,
@@ -50,6 +51,8 @@ export const useAssistantStore = defineStore('assistant', {
     // 正在等回复
     waiting: false,
     compacting: false,
+    streamingText: '',
+    streamingStatus: null as string | null,
     // 最后一句没回复成功：横幅显示的原因（如“网络异常”），点“重试”再取一次回复
     failure: null as string | null,
     loadingMessages: false
@@ -107,6 +110,8 @@ export const useAssistantStore = defineStore('assistant', {
       this.currentId = null
       this.messages = []
       this.failure = null
+      this.streamingText = ''
+      this.streamingStatus = null
       this.draft = ''
       this.attachments = []
       this.recalledMessageId = null
@@ -158,6 +163,8 @@ export const useAssistantStore = defineStore('assistant', {
       }
       this.currentId = id
       this.failure = null
+      this.streamingText = ''
+      this.streamingStatus = null
       this.loadingMessages = true
       try {
         const [msgs, recalled] = await Promise.all([fetchMessages(id), switched ? fetchRecalledDraft(id) : null])
@@ -189,15 +196,14 @@ export const useAssistantStore = defineStore('assistant', {
       this.changingTurn = true
       this.compacting = true
       try {
-        const reply = await window.api.ai.compact(this.currentId)
-        if (!reply.ok) throw new Error(reply.message)
-        const checkpoint = reply.data.checkpoint
+        const reply = await compactConversation(this.currentId)
+        const checkpoint = reply.checkpoint
         if (checkpoint) {
           const message = this.messages.find(m => m.id === checkpoint.messageId)
           if (message) message.contextUsage = checkpoint.usage
         }
         if (this.draft.trim() === '/compact') this.draft = ''
-        useToastStore().show(reply.data.changed ? '已精简对话上下文' : '没有新的对话需要精简')
+        useToastStore().show(reply.changed ? '已精简对话上下文' : '没有新的对话需要精简')
       } catch (error) {
         useToastStore().show(errText(error), 'error')
       } finally {
@@ -274,6 +280,8 @@ export const useAssistantStore = defineStore('assistant', {
       const id = this.currentId
       if (id === null || this.waiting || this.changingTurn || this.loadingMessages) return false
       this.changingTurn = true
+      this.streamingText = ''
+      this.streamingStatus = null
       try {
         if (replacement === undefined) {
           const draft = await recallMessage(id, messageId)
@@ -294,6 +302,22 @@ export const useAssistantStore = defineStore('assistant', {
       if (replacement !== undefined) await this.fetchReply()
       return true
     },
+    handleStreamEvent(ev: AiStreamEvent): void {
+      if (ev.conversationId !== this.currentId || !this.waiting) return
+      if (ev.kind === 'delta') {
+        if (ev.text) {
+          this.streamingText += ev.text
+          this.streamingStatus = null
+        }
+      } else if (ev.kind === 'status') {
+        this.streamingStatus = ev.text ?? null
+      } else if (ev.kind === 'reset') {
+        this.streamingText = ''
+        this.streamingStatus = null
+      } else if (ev.kind === 'done' || ev.kind === 'error') {
+        this.streamingStatus = null
+      }
+    },
     // 取回复；失败时显示横幅，点“重试”再取一次
     async fetchReply(): Promise<void> {
       const id = this.currentId
@@ -302,6 +326,8 @@ export const useAssistantStore = defineStore('assistant', {
       }
       this.waiting = true
       this.failure = null
+      this.streamingText = ''
+      this.streamingStatus = null
       try {
         const reply = await fetchAnswer(id)
         if (this.currentId === id) {
@@ -315,6 +341,8 @@ export const useAssistantStore = defineStore('assistant', {
       } finally {
         this.waiting = false
         this.compacting = false
+        this.streamingText = ''
+        this.streamingStatus = null
       }
     },
     // 对话有了新消息：更新时间并排到置顶的后面第一个

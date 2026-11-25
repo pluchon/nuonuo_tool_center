@@ -1,5 +1,6 @@
-// 按这句话找最相关的几条记忆（第④层）：向量还没上线时按相邻两字的重合度打分，再乘可信度
-import { findValidMemories, type AiMemoryEntity } from '../../repositories/aiMemoryRepository'
+// 按这句话找最相关的几条记忆（第④层）：有向量时用 pgvector 余弦相似度与字面重合度加权，否则按相邻两字重合度降级
+import { findMemorySimilarities, findValidMemories, type AiMemoryEntity } from '../../repositories/aiMemoryRepository'
+import { queryVector } from './embeddingService'
 
 // 一次最多带几条
 const TOP = 5
@@ -17,6 +18,14 @@ function bigrams(s: string): Set<string> {
 // 和这句话最相关的记忆；明说的偏好（preference）即使不相关也优先带上几条
 export async function relevantMemories(question: string): Promise<AiMemoryEntity[]> {
   const all = await findValidMemories()
+  const hasEmbeddings = all.some((m) => Array.isArray(m.embedding) && m.embedding.length > 0)
+  let sims = new Map<number, number>()
+  if (hasEmbeddings) {
+    const qVec = await queryVector(question).catch(() => null)
+    if (qVec) {
+      sims = await findMemorySimilarities(qVec).catch(() => new Map<number, number>())
+    }
+  }
   const q = bigrams(question)
   const scored = all.map((m) => {
     const mb = bigrams(m.content)
@@ -27,7 +36,10 @@ export async function relevantMemories(question: string): Promise<AiMemoryEntity
       }
     }
     const overlap = mb.size > 0 ? hit / mb.size : 0
-    return { m, score: (overlap + (m.kind === 'preference' ? 0.2 : 0)) * m.confidence }
+    const vecSim = sims.get(m.id)
+    const hasVecSim = vecSim !== undefined && Number.isFinite(vecSim)
+    const base = hasVecSim ? 0.65 * Math.max(0, vecSim) + 0.35 * overlap : overlap
+    return { m, score: (base + (m.kind === 'preference' ? 0.2 : 0)) * m.confidence }
   })
   // 旧记录可能重复。相同内容只附带一次，取可信度和关联度最高的那条。
   const selected = new Map<string, AiMemoryEntity>()

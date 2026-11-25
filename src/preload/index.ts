@@ -45,6 +45,7 @@ import {
   type AiConversationVO,
   type AiMessageVO,
   type AiStatusVO,
+  type AiStreamEvent,
   type AiSuggestionVO,
   type LookStateVO
 } from '@shared/api'
@@ -227,6 +228,11 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent, id: number, active: boolean) => callback(id, active)
       ipcRenderer.on(IpcEvent.aiCompaction, listener)
       return () => ipcRenderer.removeListener(IpcEvent.aiCompaction, listener)
+    },
+    onStream: (listener: (event: AiStreamEvent) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, data: AiStreamEvent): void => listener(data)
+      ipcRenderer.on(IpcEvent.aiStream, handler)
+      return () => ipcRenderer.removeListener(IpcEvent.aiStream, handler)
     },
     answer: (conversationId: number): Promise<ApiResponse<AiMessageVO>> => ipcRenderer.invoke(IpcChannel.aiAnswer, conversationId),
     rename: (id: number, title: string): Promise<ApiResponse<AiConversationVO>> => ipcRenderer.invoke(IpcChannel.aiRename, id, title),

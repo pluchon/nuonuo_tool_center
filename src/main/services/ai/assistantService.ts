@@ -10,12 +10,14 @@ import {
   type AiRecalledDraft,
   type AiReplyCacheUsage,
   type AiStatusVO,
+  type AiStreamEvent,
   type DirKeyDTO,
   type GalleryItemVO
 } from '@shared/api'
 import { BAILIAN_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
 import { BizError } from '../../common/bizError'
 import {
+  findCompactionsByConversation,
   findConversation,
   findConversations,
   findMessages,
@@ -164,10 +166,11 @@ export async function listMessages(conversationId: number): Promise<AiMessageVO[
     }
     return toMessageVO(row, images)
   })
+  const compactions = new Map((await findCompactionsByConversation(conversationId)).map((c) => [c.upToMessageId, c.summary]))
   const latest = rows.findLastIndex(
-    (row) => row.role === 'ASSISTANT' && Boolean((row.content as AssistantContent).compactSummary || (row.content as AssistantContent).contextUsage)
+    (row) => row.role === 'ASSISTANT' && Boolean(compactions.get(row.id) || (row.content as AssistantContent).compactSummary || (row.content as AssistantContent).contextUsage)
   )
-  const summary = (rows[latest]?.content as AssistantContent | undefined)?.compactSummary
+  const summary = latest >= 0 ? compactions.get(rows[latest].id) ?? (rows[latest].content as AssistantContent).compactSummary : undefined
   if (summary) {
     const { turns: tail } = await historyTurns(rows.slice(latest + 1))
     const lastReply = result.findLast((m) => m.role === 'assistant')!
@@ -340,7 +343,11 @@ export async function compactConversation(id: number): Promise<AiCompactResult> 
 }
 
 // 回答这段对话里最后一句还没回复的话：确定性快路径直出，其余进入 Harness 单主循环
-export async function answer(conversationId: number, compactionProgress?: CompactionProgress): Promise<AiMessageVO> {
+export async function answer(
+  conversationId: number,
+  compactionProgress?: CompactionProgress,
+  onStream?: (ev: Omit<AiStreamEvent, 'conversationId'>) => void
+): Promise<AiMessageVO> {
   checkId(conversationId)
   if (answering.has(conversationId)) {
     throw new BizError('CONFLICT', '诺诺还在回上一句')
@@ -445,7 +452,7 @@ export async function answer(conversationId: number, compactionProgress?: Compac
           const vision = await runVisionTurn(turns, user, env, stateRef, async (req) => {
             if (!isCloudReady()) throw new BizError('DEPENDENCY_FAILED', '诺诺还没连上云端')
             return callModel(req)
-          }, image)
+          }, image, onStream)
           text = vision.text
           answered = true
           return undefined
@@ -470,7 +477,7 @@ export async function answer(conversationId: number, compactionProgress?: Compac
           }
           throw new BizError('DEPENDENCY_FAILED', '诺诺还没连上云端')
         }
-        const loop = await runAgentLoop(conversation, turns, history, user, env, stateRef, scopeName, callModel)
+        const loop = await runAgentLoop(conversation, turns, history, user, env, stateRef, scopeName, callModel, onStream)
         text = loop.text
         answered = true
         return !stateRef.current.needsDetails && !stateRef.current.otherToolUsed ? stateRef.current.cacheablePlan : undefined

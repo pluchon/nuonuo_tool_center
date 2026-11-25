@@ -4,12 +4,12 @@ import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
 import { getAiPolicy, changePreference, reserveEmbedding, setEmbeddingLimit } from '../../src/main/services/ai/aiPolicy'
-import { dreamOnce } from '../../src/main/services/ai/dreamService'
+import { dreamOnce, type DreamWorkflowState } from '../../src/main/services/ai/dreamService'
 import { configureEmbedding, isEmbedBusy, scheduleEmbedding, stopEmbedding, uploadVector } from '../../src/main/services/ai/embeddingService'
 import * as imageRecords from '../../src/main/repositories/aiResultRepository'
 import * as search from '../../src/main/repositories/aiSearchRepository'
 import * as prep from '../../src/main/services/ai/imagePrep'
-import { readSetting, upsertSettings } from '../../src/main/repositories/appSettingRepository'
+import { getWorkflow, transitionWorkflow } from '../../src/main/repositories/aiWorkflowRepository'
 import { chatCall } from '../../src/main/services/ai/bailianClient'
 import { embed } from '../../src/main/services/ai/embeddingClient'
 import { rateFileNow } from '../../src/main/services/rating/ratingService'
@@ -84,12 +84,16 @@ it('摘要忽略无效内容和时间戳，故障退避跨重启，鉴权失败�
   mock.mockClear()
   mock.mockRejectedValueOnce(Object.assign(new Error('busy'),{status:429}))
   await dreamOnce(true)
-  const retry = await readSetting<{retryAt:number}>('ai.dream.summary')
+  const retry = (await getWorkflow<DreamWorkflowState>('DREAM'))?.state
   expect(retry!.retryAt).toBeGreaterThan(Date.now())
   await closeDatabase(); await open()
   await dreamOnce(true)
   expect(mock).toHaveBeenCalledTimes(1)
-  await upsertSettings([{key:'ai.dream.summary',value:{retryAt:0,failed:1}}])
+  await transitionWorkflow<DreamWorkflowState>('DREAM', 'default', (cur) => ({
+    status: 'IDLE',
+    phase: 'IDLE',
+    state: { ...(cur?.state?.lastEventId !== undefined ? { lastEventId: cur.state.lastEventId } : {}), retryAt: 0, failed: 1 }
+  }))
   mock.mockRejectedValueOnce(Object.assign(new Error('bad key'),{status:401}))
   await dreamOnce(true); await dreamOnce(true)
   expect(mock).toHaveBeenCalledTimes(2)
@@ -98,8 +102,11 @@ it('摘要忽略无效内容和时间戳，故障退避跨重启，鉴权失败�
   expect(mock).toHaveBeenCalledTimes(3)
   expect(mock.mock.calls[2][0].maxTokens).toBe(640)
   expect(JSON.stringify(mock.mock.calls[2][0].messages)).not.toContain('弱推断')
-  const state = await readSetting<Record<string,unknown>>('ai.dream.summary')
-  await upsertSettings([{key:'ai.dream.summary',value:{...state,lastSuccess:0}}])
+  await transitionWorkflow<DreamWorkflowState>('DREAM', 'default', (cur) => ({
+    status: cur?.status ?? 'IDLE',
+    phase: cur?.phase ?? 'IDLE',
+    state: { ...(cur?.state ?? {}), lastSuccess: 0 }
+  }))
   await getDatabase().pg.exec('update ai_memory set update_time=now()')
   await dreamOnce(true)
   expect(mock).toHaveBeenCalledTimes(3)
@@ -147,7 +154,11 @@ it('空闲整理按模型返回的等义关系合并，保留原文、主体不�
   const [keep, duplicate,,manual] = ids
   const mock = vi.mocked(chatCall)
   mock.mockResolvedValueOnce({message:{content:JSON.stringify({summary:'喜欢猫耳角色',duplicates:[[keep,duplicate],[keep,manual],[keep,12345678]]})}} as Awaited<ReturnType<typeof chatCall>>)
-  await upsertSettings([{key:'ai.dream.summary',value:{}}])
+  await transitionWorkflow<DreamWorkflowState>('DREAM', 'default', (cur) => ({
+    status: 'IDLE',
+    phase: 'IDLE',
+    state: cur?.state?.lastEventId !== undefined ? { lastEventId: cur.state.lastEventId } : {}
+  }))
   await dreamOnce(true)
   const rows = await pg.query<{id:number; active:boolean}>('select id,valid_to is null as active from ai_memory where id=any($1::bigint[]) order by id',[ids])
   expect(rows.rows.map(r=>r.active)).toEqual([true,false,true,true])

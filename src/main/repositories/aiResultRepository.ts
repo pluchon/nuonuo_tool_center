@@ -4,7 +4,7 @@ import { col } from '../db/sqlUtil'
 import { aiJob, image, imageAiResult, imageTag } from '../db/schema'
 import { setImmediate as yieldToIpc } from 'node:timers/promises'
 import { ratingCandidate } from './imageRepository'
-import { writeSettings } from './appSettingRepository'
+import { upsertWorkflow, type WorkflowNext } from './aiWorkflowRepository'
 
 export type AiResultEntity = typeof imageAiResult.$inferSelect
 export type AiJobEntity = typeof aiJob.$inferSelect
@@ -180,7 +180,10 @@ export async function countOrganizeEstimate(signal?: AbortSignal): Promise<{ toL
 }
 
 // 整理状态、起始时间和看图任务同时落盘。退出后可以恢复同一轮整理。
-export async function enqueueOrganizeLooks(settings: Array<{ key: string; value: unknown }>): Promise<number> {
+export async function enqueueOrganizeLooks<T>(
+  workflow: WorkflowNext<T>,
+  expectedVersion?: number
+): Promise<{ enqueued: number; version: number }> {
   const { db } = getDatabase()
   return db.transaction(async (tx) => {
     // 旧失败任务保留原完成时间，避免计入新一轮进度。
@@ -188,8 +191,8 @@ export async function enqueueOrganizeLooks(settings: Array<{ key: string; value:
       .where(and(eq(aiJob.kind, 'LOOK'), eq(aiJob.status, 'FAILED'), sql`${aiJob.error} IS DISTINCT FROM ${LOOK_CONTENT_REJECTED}`))
     const images = await tx.select({ id: image.id }).from(image).where(lookCandidateWhere(new Date(0), true)).orderBy(asc(image.id))
     await insertLookRows(tx, images.map(({ id }) => id), 0)
-    await writeSettings(tx, settings)
-    return images.length
+    const saved = await upsertWorkflow('ORGANIZE', 'default', workflow, expectedVersion, tx)
+    return { enqueued: images.length, version: saved.version }
   })
 }
 

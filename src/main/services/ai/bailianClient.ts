@@ -50,6 +50,7 @@ export interface ChatCallInput extends CallMeta {
   requiredTool?: string
   timeoutMs?: number
   maxTokens?: number
+  onDelta?: (delta: string) => void
 }
 
 // 对话调用的结果
@@ -135,8 +136,53 @@ export async function chatCall(input: ChatCallInput): Promise<ChatCallResult> {
       // 百炼扩展参数放在顶层；思考会让输出 token 翻好几倍，诺诺的任务用不到
       enable_thinking: false
     }
+    const timeout = input.timeoutMs ?? BAILIAN_CONFIG.chatTimeoutMs
+    if (input.onDelta) {
+      const stream = (await getBailianClient().chat.completions.create(
+        { ...body, stream: true, stream_options: { include_usage: true } } as never,
+        { timeout, signal: input.signal }
+      )) as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
+      let text = ''
+      let finishReason: string | null = null
+      let rawUsage: unknown
+      const toolCallMap = new Map<number, OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall>()
+      for await (const chunk of stream) {
+        const choice = chunk.choices?.[0]
+        const delta = choice?.delta
+        if (typeof delta?.content === 'string' && delta.content.length > 0) {
+          text += delta.content
+          input.onDelta(delta.content)
+        }
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0
+            const entry = toolCallMap.get(idx) ?? {
+              id: '',
+              type: 'function' as const,
+              function: { name: '', arguments: '' }
+            }
+            if (tc.id) entry.id = tc.id
+            if (tc.function?.name) entry.function.name += tc.function.name
+            if (tc.function?.arguments) entry.function.arguments += tc.function.arguments
+            toolCallMap.set(idx, entry)
+          }
+        }
+        if (choice?.finish_reason) finishReason = choice.finish_reason
+        if (chunk.usage) rawUsage = chunk.usage
+      }
+      const toolCalls = [...toolCallMap.entries()].sort((a, b) => a[0] - b[0]).map(([, tc]) => tc)
+      const message: OpenAI.Chat.Completions.ChatCompletionMessage = {
+        role: 'assistant',
+        content: text || null,
+        refusal: null,
+        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {})
+      }
+      const usage = normalizeChatUsage(rawUsage)
+      await record(input, usage, Date.now() - t0)
+      return { message, finishReason, usage, cacheUsage: reportedChatCache(rawUsage) }
+    }
     const res = await getBailianClient().chat.completions.create(body as never, {
-      timeout: input.timeoutMs ?? BAILIAN_CONFIG.chatTimeoutMs,
+      timeout,
       signal: input.signal
     })
     const usage = normalizeChatUsage(res.usage)

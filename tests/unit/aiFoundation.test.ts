@@ -45,7 +45,7 @@ describe('四层前缀', () => {
     expect(JSON.stringify(a.slice(0, 3))).toBe(JSON.stringify(b.slice(0, 3)))
   })
 
-  it('标记超过上限直接报错；多步工具循环可推进缓存断点到最后一条 tool 结果', () => {
+  it('标记超过上限直接报错；多步工具循环只推进 user 断点，tool 保持纯文本', () => {
     const mark = { type: 'ephemeral' as const }
     const msgs = [1, 2, 3, 4, 5].map(() => ({ role: 'user' as const, content: [{ type: 'text' as const, text: 'x', cache_control: mark }] }))
     expect(() => assertCacheMarks(msgs)).toThrow()
@@ -71,7 +71,9 @@ describe('四层前缀', () => {
       { role: 'tool', tool_call_id: 't2', content: '{"total":2}' }
     ])
     expect(countCacheMarks(step2)).toBe(4)
-    expect(step2[5].content).toEqual([{ type: 'text', text: '{"total":1}', cache_control: mark }])
+    expect(step2[1].content).toEqual([{ type: 'text', text: '找甘雨', cache_control: mark }])
+    expect(step2[5].content).toBe('{"total":1}')
+    expect(step2[7].content).toBe('{"total":2}')
     // 达到 4 个上限不再追加
     const fourMarked = [1, 2, 3, 4].map(() => ({ role: 'user' as const, content: [{ type: 'text' as const, text: 'ok', cache_control: mark }] }))
     expect(countCacheMarks(markStepCache([...fourMarked, { role: 'user', content: 'tail' }]))).toBe(4)

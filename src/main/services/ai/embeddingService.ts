@@ -7,6 +7,7 @@ import { EMBEDDING_CONFIG, readCloudCredentials } from '../../config/cloudConfig
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { findLookInfo } from '../../repositories/aiResultRepository'
+import { findMemoriesNeedingEmbedding, saveMemoryEmbedding } from '../../repositories/aiMemoryRepository'
 import { findEmbedCandidates, findIndexedUpload, saveEmbedding, type AiSearchFilter } from '../../repositories/aiSearchRepository'
 import { findImageByHash } from '../../repositories/imageRepository'
 import { cachedSearchValue, recordLocalReuse, searchCacheKey } from '../../repositories/aiSearchCacheRepository'
@@ -83,6 +84,9 @@ export function scheduleEmbedding(): void {
       }
       const ids = (await findEmbedCandidates(EMBEDDING_CONFIG.model, BATCH + failed.size)).filter((id) => !failed.has(id)).slice(0, BATCH)
       if (ids.length === 0) {
+        if (!stopping && cfg.canRun()) {
+          await backfillMemoryEmbeddings()
+        }
         break
       }
       for (const id of ids) {
@@ -125,7 +129,7 @@ export function scheduleEmbedding(): void {
 }
 
 // 一句话的向量（按原文缓存）；没有凭证或调用失败返回 null，由调用方降级成只用关键词
-async function queryVector(text: string): Promise<number[] | null> {
+export async function queryVector(text: string): Promise<number[] | null> {
   const key = text.trim()
   if (!key) return null
   try {
@@ -140,6 +144,35 @@ async function queryVector(text: string): Promise<number[] | null> {
     return null
   }
 }
+
+// 后台或按需为尚无向量的有效记忆补充语义向量；跳过 R-18 来源并静默容错。
+export async function backfillMemoryEmbeddings(limit = 10): Promise<number> {
+  if (stopping || !cloudReady()) return 0
+  let updated = 0
+  try {
+    const pending = await findMemoriesNeedingEmbedding(limit)
+    for (const mem of pending) {
+      if (stopping || !cloudReady()) break
+      const text = mem.content.trim()
+      if (!text) continue
+      try {
+        const vec = await queryVector(text)
+        if (vec) {
+          await saveMemoryEmbedding(mem.id, vec)
+          updated++
+        }
+      } catch (err) {
+        log.warn(`记忆 ${mem.id} 补向量失败`, err)
+      }
+    }
+  } catch (err) {
+    log.warn('批量补充记忆向量失败', err)
+  }
+  return updated
+}
+
+export const indexMemoryEmbeddings = backfillMemoryEmbeddings
+export const ensureMemoryEmbeddings = backfillMemoryEmbeddings
 
 // 去重时忽略宽窄字符、空白和标点，给模型计算向量时保留原句。
 export function contrastDescriptions(text: string, raw: unknown): string[] {

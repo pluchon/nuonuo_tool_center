@@ -15,8 +15,14 @@ vi.mock('../../src/main/services/ai/embeddingClient', () => ({
   })
 }))
 vi.mock('../../src/main/services/ai/bailianClient', () => ({
-  chatCall: vi.fn(async () => {
+  chatCall: vi.fn(async (input?: { onDelta?: (delta: string) => void }) => {
     const next = script.shift() ?? { content: '好的' }
+    if (input?.onDelta && next.content) {
+      const mid = Math.ceil(next.content.length / 2)
+      for (const part of [next.content.slice(0, mid), next.content.slice(mid)]) {
+        if (part) input.onDelta(part)
+      }
+    }
     return {
       message: { role: 'assistant', content: next.content ?? '', tool_calls: next.tool_calls },
       finishReason: 'stop',
@@ -208,6 +214,51 @@ describe('AgentHarness 集成动态工具与通用视觉过滤', () => {
     const fresh = await ask({ conversationId: null, text: '再找一次戴眼镜的', scope: null, includeR18: false })
     const afterExclude = await answer(fresh.conversation.id)
     expect(afterExclude.images.map((i) => i.imageId)).toEqual([initial.images[0].imageId])
-    await getDatabase().pg.query('DELETE FROM ai_memory WHERE content = $1', [`以后检索时排除图片 #${secondId}`])
+    await getDatabase().pg.query('DELETE FROM ai_image_exclusion WHERE image_id = $1', [secondId])
+  })
+
+  it('工具循环期间按顺序推送 delta、reset 与工具状态，并在最终回复时流式输出', async () => {
+    const events: Array<{ kind: string; text?: string; tool?: string }> = []
+    script.push(
+      {
+        content: '先查一下',
+        tool_calls: [{ id: 't1', type: 'function', function: { name: 'list_tags', arguments: '{}' } }]
+      },
+      { content: '标签都在这里了。' }
+    )
+    const q = await ask({ conversationId: null, text: '图库里有哪些标签？', scope: null, includeR18: false })
+    const reply = await answer(q.conversation.id, undefined, (ev) => events.push(ev))
+    expect(reply.text).toBe('标签都在这里了。')
+    expect(events).toEqual([
+      { kind: 'delta', text: '先查' },
+      { kind: 'delta', text: '一下' },
+      { kind: 'reset' },
+      { kind: 'status', tool: 'list_tags', text: '正在查看标签词表…' },
+      { kind: 'delta', text: '标签都在' },
+      { kind: 'delta', text: '这里了。' }
+    ])
+  })
+
+  it('无画面向量时，keywordGroups + visualInclude + semantic 仍通过本地视觉特征命中', async () => {
+    script.push({
+      tool_calls: [
+        {
+          id: 'k1',
+          type: 'function',
+          function: {
+            name: 'search_images',
+            arguments: JSON.stringify({
+              keywordGroups: [['猫耳']],
+              visualInclude: ['fox_ears'],
+              semantic: '狐耳角色',
+              contrast: ['兔耳角色']
+            })
+          }
+        }
+      ]
+    })
+    const q = await ask({ conversationId: null, text: '找没有猫耳字面名但有狐耳的图', scope: null, includeR18: false })
+    const res = await answer(q.conversation.id)
+    expect(res.images.map((i) => i.name)).toEqual(['眼镜狐娘'])
   })
 })

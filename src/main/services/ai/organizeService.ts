@@ -14,7 +14,9 @@ import { BAILIAN_CONFIG, ORGANIZE_COST, readCloudCredentials } from '../../confi
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isValidDirName } from '../../common/pathUtil'
-import { findActiveSettings, readSetting, upsertSettings } from '../../repositories/appSettingRepository'
+import { getDatabase } from '../../db/client'
+import { getWorkflow, upsertWorkflow } from '../../repositories/aiWorkflowRepository'
+import { findActiveSettings, readSetting, writeSettings } from '../../repositories/appSettingRepository'
 import {
   countOrganizeEstimate,
   countLookProgress,
@@ -38,16 +40,20 @@ import { habitLines } from './suggestionService'
 
 const log = getLogger('organize')
 
-// 状态在设置表里的键（settingsService 跳过 ai. 开头的键）
-const STATE_KEY = 'ai.organize'
+// 旧版设置键（用于首次启动时从 app_setting 平滑迁移到 ai_workflow）
+const LEGACY_STATE_KEY = 'ai.organize'
 const RULES_KEY = 'ai.organize.rules'
-// 这次整理从什么时候开始排看图（算看图进度用）
-const LOOK_FROM_KEY = 'ai.organizeLookFrom'
+const LEGACY_LOOK_FROM_KEY = 'ai.organizeLookFrom'
 // 新建目录最多几个；交给模型的词每类最多几个
 const NEW_FOLDERS_MAX = 12
 const STAT_LIMITS = { characters: 40, works: 30, tags: 60 } as const
 // 出方案的超时
 const PLAN_TIMEOUT_MS = 120_000
+
+interface OrganizeWorkflowState {
+  plan: OrganizeFolderVO[] | null
+  lookFrom: string | null
+}
 
 // 一键整理需要的外部信息
 export interface OrganizeConfig {
@@ -59,9 +65,17 @@ export interface OrganizeConfig {
 
 let config: OrganizeConfig | null = null
 let state: OrganizeStateVO = { phase: 'IDLE', plan: null, error: null }
+let workflowVersion: number | undefined
 let starting = false
 let planning: OrganizeStateVO | null = null
 let lookFrom: Date | null = null
+
+function workflowStatus(next: OrganizeStateVO): string {
+  if (next.phase === 'IDLE') return 'IDLE'
+  if (next.error) return 'FAILED'
+  if (next.phase === 'PLAN_READY') return 'WAITING'
+  return 'RUNNING'
+}
 
 // 配置（启动时调一次）
 export function configureOrganize(next: OrganizeConfig): void {
@@ -80,8 +94,28 @@ export function isOrganizing(): boolean {
 
 // 改状态：存库并推给界面
 async function setState(next: OrganizeStateVO, rules?: OrganizeFolderVO[]): Promise<void> {
+  const prev = state
   state = next
-  await upsertSettings([{ key: STATE_KEY, value: next }, ...(rules ? [{key:RULES_KEY,value:rules}] : [])])
+  const payload = {
+    status: workflowStatus(next),
+    phase: next.phase,
+    state: { plan: next.plan, lookFrom: lookFrom ? lookFrom.toISOString() : null } satisfies OrganizeWorkflowState,
+    error: next.error ?? null
+  }
+  try {
+    const saved = rules
+      ? await getDatabase().db.transaction(async (tx) => {
+          await writeSettings(tx, [{ key: RULES_KEY, value: rules }])
+          return upsertWorkflow<OrganizeWorkflowState>('ORGANIZE', 'default', payload, workflowVersion, tx)
+        })
+      : await upsertWorkflow<OrganizeWorkflowState>('ORGANIZE', 'default', payload, workflowVersion)
+    workflowVersion = saved.version
+  } catch (err) {
+    if (state === next) {
+      state = prev
+    }
+    throw err
+  }
   if (state === next) {
     config?.onState(next)
   }
@@ -89,14 +123,39 @@ async function setState(next: OrganizeStateVO, rules?: OrganizeFolderVO[]): Prom
 
 // 在窗口和自动扫描启动前恢复状态，让界面从上次进度开始显示。
 export async function restoreOrganize(): Promise<void> {
-  const rows = await findActiveSettings()
-  const row = rows.find((s) => s.key === STATE_KEY)
-  const saved = row?.value as OrganizeStateVO | undefined
-  const from = rows.find((s) => s.key === LOOK_FROM_KEY)?.value
-  lookFrom = typeof from === 'string' && !Number.isNaN(new Date(from).getTime()) ? new Date(from) : null
-  if (saved && typeof saved === 'object' && typeof saved.phase === 'string') {
-    state = { phase: saved.phase, plan: saved.plan ?? null, error: saved.error ?? null }
+  let wf = await getWorkflow<OrganizeWorkflowState>('ORGANIZE', 'default')
+  if (!wf) {
+    const rows = await findActiveSettings()
+    const saved = rows.find((s) => s.key === LEGACY_STATE_KEY)?.value as OrganizeStateVO | undefined
+    const from = rows.find((s) => s.key === LEGACY_LOOK_FROM_KEY)?.value
+    const hasLegacyState = saved && typeof saved === 'object' && typeof saved.phase === 'string'
+    const legacyLookFrom = typeof from === 'string' && !Number.isNaN(new Date(from).getTime()) ? new Date(from).toISOString() : null
+    if (hasLegacyState || legacyLookFrom) {
+      const restored: OrganizeStateVO = hasLegacyState
+        ? { phase: saved.phase, plan: saved.plan ?? null, error: saved.error ?? null }
+        : { phase: 'IDLE', plan: null, error: null }
+      wf = await upsertWorkflow<OrganizeWorkflowState>('ORGANIZE', 'default', {
+        status: workflowStatus(restored),
+        phase: restored.phase,
+        state: { plan: restored.plan, lookFrom: legacyLookFrom },
+        error: restored.error ?? null
+      })
+    }
+  }
+  if (wf) {
+    workflowVersion = wf.version
+    const from = wf.state?.lookFrom
+    lookFrom = typeof from === 'string' && !Number.isNaN(new Date(from).getTime()) ? new Date(from) : null
+    state = {
+      phase: (wf.phase as OrganizeStateVO['phase']) ?? 'IDLE',
+      plan: wf.state?.plan ?? null,
+      error: wf.error ?? null
+    }
     config?.onState(state)
+  } else {
+    workflowVersion = undefined
+    lookFrom = null
+    state = { phase: 'IDLE', plan: null, error: null }
   }
   if (state.phase === 'LOOKING') {
     await refreshLooked()
@@ -149,7 +208,16 @@ export async function startOrganize(): Promise<OrganizeStateVO> {
     }
     const from = new Date()
     const next: OrganizeStateVO = { phase: 'LOOKING', plan: null, error: null }
-    const enqueued = await enqueueOrganizeLooks([{ key: LOOK_FROM_KEY, value: from.toISOString() }, { key: STATE_KEY, value: next }])
+    const { enqueued, version } = await enqueueOrganizeLooks<OrganizeWorkflowState>(
+      {
+        status: workflowStatus(next),
+        phase: next.phase,
+        state: { plan: null, lookFrom: from.toISOString() },
+        error: null
+      },
+      workflowVersion
+    )
+    workflowVersion = version
     lookFrom = from
     state = next
     if (enqueued > 0) {
@@ -191,7 +259,18 @@ async function refreshLooked(): Promise<void> {
       return
     }
     lookFrom = first.createTime
-    await upsertSettings([{ key: LOOK_FROM_KEY, value: lookFrom.toISOString() }])
+    const saved = await upsertWorkflow<OrganizeWorkflowState>(
+      'ORGANIZE',
+      'default',
+      {
+        status: workflowStatus(state),
+        phase: state.phase,
+        state: { plan: state.plan, lookFrom: lookFrom.toISOString() },
+        error: state.error ?? null
+      },
+      workflowVersion
+    )
+    workflowVersion = saved.version
   }
   const looked = await countLookProgress(lookFrom)
   if (state.phase !== 'LOOKING' || (state.looked?.done === looked.done && state.looked?.total === looked.total)) {

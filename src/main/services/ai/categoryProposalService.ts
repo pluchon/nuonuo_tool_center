@@ -1,18 +1,30 @@
 import { mkdir, rename } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { DIR_NAME_MAX, type CategoryProposalVO } from '@shared/api'
 import { BizError } from '../../common/bizError'
 import { isWithin, pathKey } from '../../common/pathUtil'
-import { getDatabase } from '../../db/client'
-import { categoryProposal } from '../../db/schema'
-import { findPendingOps, insertBatch, renameRowsUnder, observeOrganizeTarget, updateBatchStatus, updateOpStatus } from '../../repositories/fileOpRepository'
+import {
+  beginMoveTreeBatch,
+  completeMoveTreeBatch,
+  failMoveTreeBatch,
+  findPendingAnalysisProposal,
+  findProposalById,
+  findProposalForMessage,
+  findProposalSummaries,
+  finishProposalDecision,
+  hasFilesUnderPath,
+  insertCategoryProposal,
+  markProposalStarted,
+  syncMovedCategoryRows,
+  type CategoryProposalRow
+} from '../../repositories/categoryProposalRepository'
+import { observeOrganizeTarget } from '../../repositories/fileOpRepository'
+import { referencePreviews } from '../../repositories/aiReferenceRepository'
 import { ensureCategoryRoot } from '../categoryHome'
 import { categoryDirectory, categoryRel, invalidateCategoryTree, readCategoryTree } from '../fileOps/categoryPaths'
 import { resolveFolder } from '../fileOps/folderOpsService'
 import { enqueue } from '../fileOps/fileOpsService'
 import { getScanState } from '../scan/scanService'
-import { referencePreviews } from '../../repositories/aiReferenceRepository'
 import { applyFiling, prepareFiling, type FilingGroup } from './categoryFiling'
 import { analyzeNewTags } from './categoryAnalysis'
 import { parseCategoryRequest } from './categoryRequest'
@@ -20,7 +32,6 @@ import { parseCategoryRequest } from './categoryRequest'
 type Payload = Pick<CategoryProposalVO, 'entries' | 'scope' | 'analysisCount'> & { started?: boolean; originalId?: string; parentId?: string; filing?: FilingGroup[] }
 export type CategoryReply = { text: string; categoryProposalId?: number; proposalNote?: true }
 type Action = { kind: 'file'; ids: number[]; path?: string } | { kind: 'analyze'; scope?: string } | { kind: 'create'; path: string } | { kind: 'move'; path: string; targetParent: string }
-type Row = typeof categoryProposal.$inferSelect
 const currentHome = async () => (await resolveFolder({ kind: 'category', path: '' })).abs
 const parentRel = (path: string) => dirname(path) === '.' ? '' : dirname(path)
 
@@ -28,7 +39,7 @@ export async function listCategoryPaths(selectedCategory?: string): Promise<stri
   return readCategoryTree(await currentHome(), selectedCategory ? categoryRel(selectedCategory) : null)
 }
 
-async function publicPlan(row: Row): Promise<CategoryProposalVO> {
+async function publicPlan(row: CategoryProposalRow): Promise<CategoryProposalVO> {
   const { entries, scope, analysisCount, started = false, filing } = row.payload as Payload
   const plan: CategoryProposalVO = { id: row.id, status: row.status, entries, scope, analysisCount, started }
   if (row.status === 'pending' && filing?.length) {
@@ -41,12 +52,9 @@ async function publicPlan(row: Row): Promise<CategoryProposalVO> {
   return plan
 }
 
-async function readPlan(id: number, messageId: number): Promise<Row> {
+async function readPlan(id: number, messageId: number): Promise<CategoryProposalRow> {
   if (!Number.isSafeInteger(id) || !Number.isSafeInteger(messageId)) throw new BizError('BAD_REQUEST', '目录提案编号无效')
-  const [row] = await getDatabase().db.select().from(categoryProposal).where(and(eq(categoryProposal.id, id),
-    sql`exists (select 1 from ai_message m join ai_conversation c on c.id = m.conversation_id
-      where m.id = ${messageId} and m.delete_state = 0 and c.delete_state = 0 and m.role = 'ASSISTANT'
-      and m.content->>'categoryProposalId' = ${String(id)})`))
+  const row = await findProposalForMessage(id, messageId)
   if (!row) throw new BizError('NOT_FOUND', '这条目录提案已经撤回')
   return row
 }
@@ -68,8 +76,7 @@ export function describeProposal(plan: CategoryProposalVO): string {
 export async function proposalStatesInHistory(ids: number[]) {
   const states = new Map<number, string>()
   if (ids.length) {
-    const rows = await getDatabase().db.select({ id: categoryProposal.id, status: categoryProposal.status, payload: categoryProposal.payload })
-      .from(categoryProposal).where(inArray(categoryProposal.id, [...new Set(ids)]))
+    const rows = await findProposalSummaries(ids)
     for (const row of rows) {
       const { entries, filing, started } = row.payload as Payload
       const status = row.status === 'cancelled' ? '已取消' : row.status === 'pending' ? (started ? '部分执行，待继续' : '待确认')
@@ -88,24 +95,14 @@ function proposalReply(id: number, payload: Payload): CategoryReply {
 }
 
 export async function restorePreparedProposal(id: number): Promise<CategoryReply> {
-  const [row] = await getDatabase().db.select().from(categoryProposal).where(eq(categoryProposal.id, id))
+  const row = await findProposalById(id)
   if (!row) throw new BizError('NOT_FOUND', '目录提案已不存在')
   return proposalReply(id, row.payload as Payload)
 }
 
 async function save(home: string, payload: Payload, sourceMessageId?: number, ids: number[] = []): Promise<CategoryReply> {
-  return getDatabase().db.transaction(async (tx) => {
-    const [row] = await tx.insert(categoryProposal).values({ home, payload }).returning({ id: categoryProposal.id })
-    if (ids.length) {
-      await tx.execute(sql`insert into category_analyzed_image(image_id, proposal_id)
-        select id, ${row.id} from unnest(${sql.param(ids)}::bigint[]) id`)
-    }
-    // 即使进程在助手回复入库之前退出，重试原消息也能找回这次提案。
-    if (sourceMessageId) await tx.execute(sql`update ai_message
-      set content = jsonb_set(content, '{preparedProposalId}', to_jsonb(${row.id}::integer))
-      where id = ${sourceMessageId} and role = 'USER' and delete_state = 0`)
-    return proposalReply(row.id, payload)
-  })
+  const id = await insertCategoryProposal(home, payload, sourceMessageId, ids)
+  return proposalReply(id, payload)
 }
 
 // 同一进程中不同会话可能同时发起分析；串行准备避免两次请求分析相同的新增图片。
@@ -130,10 +127,7 @@ async function prepare(action: Action, selectedCategory?: string, sourceMessageI
     if (scope && !await categoryDirectory(home, scope)) throw new BizError('NOT_FOUND', '选中的类目录已不存在')
     const { ids, entries } = await analyzeNewTags(home, scope)
     if (!ids.length) {
-      const [previous] = await getDatabase().db.select().from(categoryProposal).where(and(
-        eq(categoryProposal.status, 'pending'), eq(categoryProposal.home, home),
-        sql`(payload->>'analysisCount')::int > 0 and (payload->>'scope') is not distinct from ${scope}::text`
-      )).orderBy(desc(categoryProposal.id)).limit(1)
+      const previous = await findPendingAnalysisProposal(home, scope)
       return { text: '没有新增的已标注图片。', ...(previous ? { categoryProposalId: previous.id, proposalNote: true as const } : {}) }
     }
     return save(home, { ...payload, entries, analysisCount: ids.length }, sourceMessageId, ids)
@@ -190,38 +184,23 @@ async function moveTree(home: string, payload: Payload, from: string, to: string
   if (!root || parent?.identity !== payload.parentId) throw new BizError('CONFLICT', '目标父目录已更换，请重新生成提案')
   const original = await categoryDirectory(home, from)
   const destination = await categoryDirectory(home, to)
-  const { db } = getDatabase()
   if (!original && destination?.identity === payload.originalId) {
     // 上次可能已完成磁盘操作，启动恢复也可能已经同步了索引；重复更新不会改变其他目录。
-    await renameRowsUnder(db, root.id, from, to)
+    await syncMovedCategoryRows(root.id, from, to)
     return
   }
   if (!original || original.identity !== payload.originalId || destination) throw new BizError('CONFLICT', '目录位置已发生变化，请重新生成提案')
-  const occupied = await db.execute(sql`select 1 from image_file where root_id = ${root.id} and delete_state = 0
-    and starts_with(lower(replace(rel_path, chr(92), '/')), ${to.replaceAll('\\', '/').toLowerCase() + '/'}) limit 1`)
-  if (occupied.rows.length) throw new BizError('CONFLICT', '目标位置已有文件记录')
+  if (await hasFilesUnderPath(root.id, to)) throw new BizError('CONFLICT', '目标位置已有文件记录')
   const destAbs = join(home, to)
   await begin()
-  const batchId = await db.transaction(async (tx) => {
-    const id = await insertBatch(tx, '迁移类目录', [{ opType: 'RENAME', imageFileId: null, fromPath: original.abs, toPath: destAbs, contentHash: original.identity }])
-    await updateBatchStatus(tx, id, 'APPLYING')
-    return id
-  })
-  const [op] = await findPendingOps(batchId)
+  const { batchId, opId } = await beginMoveTreeBatch(original.abs, destAbs, original.identity)
   try {
     await rename(original.abs, destAbs)
   } catch (err) {
-    await db.transaction(async (tx) => {
-      await updateOpStatus(tx, op.id, 'FAILED', (err as Error).message)
-      await updateBatchStatus(tx, batchId, 'FAILED')
-    })
+    await failMoveTreeBatch(batchId, opId, (err as Error).message)
     throw err
   }
-  await db.transaction(async (tx) => {
-    await renameRowsUnder(tx, root.id, from, to)
-    await updateOpStatus(tx, op.id, 'DONE')
-    await updateBatchStatus(tx, batchId, 'APPLIED')
-  })
+  await completeMoveTreeBatch(batchId, opId, root.id, from, to)
 }
 
 export async function decideCategoryProposal(id: number, messageId: number, apply: boolean): Promise<CategoryProposalVO> {
@@ -234,7 +213,7 @@ export async function decideCategoryProposal(id: number, messageId: number, appl
     const begin = async () => {
       if (payload.started) return
       payload.started = true
-      await getDatabase().db.update(categoryProposal).set({ payload }).where(eq(categoryProposal.id, id))
+      await markProposalStarted(id)
     }
     if (apply) {
       if (getScanState().progress) throw new BizError('CONFLICT', '请等目录扫描完成后再确认')
@@ -255,7 +234,7 @@ export async function decideCategoryProposal(id: number, messageId: number, appl
       }
       invalidateCategoryTree()
     }
-    const [updated] = await getDatabase().db.update(categoryProposal).set({ status: apply ? 'applied' : 'cancelled' }).where(eq(categoryProposal.id, id)).returning()
+    const updated = await finishProposalDecision(id, apply ? 'applied' : 'cancelled')
     return publicPlan(updated)
   })
 }

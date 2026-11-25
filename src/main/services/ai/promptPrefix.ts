@@ -53,8 +53,11 @@ function sortKeys(value: unknown): unknown {
   return value
 }
 
-// 给一条消息的最后一段内容打上缓存标记；字符串内容转成单段文字
+// 给一条消息的最后一段内容打上缓存标记；字符串内容转成单段文字（tool 消息保持纯文本）
 function withMark(message: PromptMessage): PromptMessage {
+  if (message.role === 'tool') {
+    return message
+  }
   const parts: ContentPart[] = typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : [...message.content]
   if (parts.length === 0) {
     return message
@@ -100,26 +103,17 @@ export function assertCacheMarks(messages: PromptMessage[]): void {
   }
 }
 
-// 多步工具循环时，在还有可用断点额度的前提下推进缓存断点（优先标定本轮用户问题，后续步再标定已稳定的早期 tool 结果），保持最新 tool 文本不变
+// 多步工具循环时，在还有可用断点额度的前提下推进缓存断点（仅标定未标记的 user 消息，tool 消息保持纯文本以对齐百炼显式缓存规范）
 export function markStepCache(messages: PromptMessage[]): PromptMessage[] {
   if (countCacheMarks(messages) >= MAX_MARKS) {
     return messages
   }
   const hasMark = (m: PromptMessage): boolean => Array.isArray(m.content) && m.content.some((p) => p.cache_control)
-  const lastAssistantIdx = messages.findLastIndex((m) => m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0)
-  const userIdx = messages.findLastIndex((m) => m.role === 'user')
-  if (userIdx >= 0 && !hasMark(messages[userIdx])) {
+  const userIdx = messages.findLastIndex((m) => m.role === 'user' && !hasMark(m))
+  if (userIdx >= 0) {
     const next = [...messages]
     next[userIdx] = withMark(messages[userIdx])
     return next
-  }
-  if (lastAssistantIdx > 0) {
-    const earlierToolIdx = messages.slice(0, lastAssistantIdx).findLastIndex((m) => m.role === 'tool' && !hasMark(m))
-    if (earlierToolIdx >= 0) {
-      const next = [...messages]
-      next[earlierToolIdx] = withMark(messages[earlierToolIdx])
-      return next
-    }
   }
   return messages
 }

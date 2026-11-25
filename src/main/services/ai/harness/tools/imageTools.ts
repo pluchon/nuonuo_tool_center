@@ -1,7 +1,6 @@
-import { insertMemory } from '../../../../repositories/aiConversationRepository'
+import { addImageExclusion } from '../../../../repositories/aiMemoryRepository'
 import { findImageBrief, findTagNamesOf, visibleResultIds } from '../../../../repositories/aiSearchRepository'
 import { scopeDirs } from '../../assistantReferences'
-import { exclusionPrefix } from '../../searchFeedback'
 import { defineTool } from '../toolRegistry'
 import type { HarnessState, ToolEnv } from '../types'
 
@@ -168,7 +167,7 @@ export const excludeImageTool = defineTool({
     }
     const permanent = args.permanent === true
     if (permanent) {
-      await insertMemory(exclusionPrefix + resolved.id, 'preference', 0.9, env.userMessageId)
+      await addImageExclusion(resolved.id, env.userMessageId)
     }
     const current = state.lastSearch?.outcome
     const checkIncludeR18 = current ? env.includeR18 : Boolean(env.previousResults?.includeR18 && env.includeR18)

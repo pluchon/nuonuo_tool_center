@@ -28,7 +28,7 @@ const { configureFolderOps } = await import('../../src/main/services/fileOps/fol
 const { configureTransfer } = await import('../../src/main/services/fileOps/transferService')
 const { configureFileOps } = await import('../../src/main/services/fileOps/fileOpsService')
 const { insertOrganizeResults } = await import('../../src/main/repositories/aiResultRepository')
-const { upsertSettings } = await import('../../src/main/repositories/appSettingRepository')
+const { upsertWorkflow } = await import('../../src/main/repositories/aiWorkflowRepository')
 
 describe('方案整理和本地分图（纯函数）', () => {
   it('名字不合法、词不在给的范围里、重复的词和没词的目录都去掉；沿用现有目录不分大小写', () => {
@@ -292,7 +292,7 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     const onState = vi.fn()
     org.configureOrganize({ onState, onSuggested: () => undefined })
     const saved = { phase: 'PLAN_READY', plan: [{ name: '风景', tags: ['风景'], characters: [], works: [], isNew: false }], error: null }
-    await upsertSettings([{ key: 'ai.organize', value: saved }])
+    await upsertWorkflow('ORGANIZE', 'default', { status: 'WAITING', phase: saved.phase, state: { plan: saved.plan, lookFrom: null }, error: null })
     await org.restoreOrganize()
     expect(onState).toHaveBeenCalledWith(saved)
     await org.cancelOrganize()
@@ -340,7 +340,7 @@ describe('一键整理：出方案 → 批方案 → 建议 → 采用', () => {
     const {pg} = getDatabase()
     await pg.exec("update image set is_r18=true, rating='EXPLICIT', rating_source='MANUAL'; update ai_job set status='DONE' where kind='LOOK'")
     const plan = [{name:'选定归档',tags:['回归标签'],characters:[],works:[],isNew:true}]
-    await upsertSettings([{key:'ai.organize',value:{phase:'PLAN_READY',plan,error:null}}])
+    await upsertWorkflow('ORGANIZE','default',{status:'WAITING',phase:'PLAN_READY',state:{plan,lookFrom:null},error:null})
     await org.restoreOrganize()
     await org.approveOrganize(plan)
     await closeDatabase()

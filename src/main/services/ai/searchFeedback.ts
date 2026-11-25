@@ -1,6 +1,6 @@
 import type { AiImageReference } from '@shared/api'
 import type { AiMessageEntity } from '../../repositories/aiConversationRepository'
-import { insertMemory } from '../../repositories/aiConversationRepository'
+import { addImageExclusion } from '../../repositories/aiMemoryRepository'
 import { referencedHistory, referenceOrdinal, selectReferenceGroup } from './assistantReferences'
 
 type Method = 'tag' | 'metadata' | 'vector' | 'feature' | 'filter'
@@ -22,7 +22,6 @@ const methodText: Record<Method, string> = {
   feature: '当时的本地图片识别记录符合所选画面特征',
   filter: '它符合当时选定的图库范围和筛选条件'
 }
-export const exclusionPrefix = '以后检索时排除图片 #'
 
 function exclusion(text: string): 'once' | 'always' | undefined {
   // 仅采用含有排除指令的分句。「这次排除，以后照常」不能建立长期偏好。
@@ -59,7 +58,7 @@ export async function resultFollowup(
   if (!available.has(id)) return reply('这张图片已不在当前检索范围内。')
   if (omit) {
     const permanent = omit === 'always'
-    if (permanent) await insertMemory(exclusionPrefix + id, 'preference', 0.9, userId)
+    if (permanent) await addImageExclusion(id, userId)
     const ids = (stored?.imageIds ?? group.map((ref) => ref.imageId)).filter((item) => item !== id && available.has(item))
     return { ...reply(permanent ? '记住了，以后检索时会排除这张图。' : '这次先把这张图收起来。'),
       imageIds: ids, how: `本轮筛选，保留 ${ids.length} 张`, evidence: stored?.evidence, incomplete: stored?.incomplete }

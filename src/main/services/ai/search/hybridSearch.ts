@@ -19,7 +19,7 @@ import { chatCall } from '../bailianClient'
 import { contrastDescriptions, IMAGE_MIN_SIMILARITY, semanticVector, uploadVector } from '../embeddingService'
 import type { StoredAttachment } from '../assistantAttachment'
 import type { CondLabel, DictTag, RoutedQuery, SearchSpec } from '../localRouter'
-import { exclusionPrefix, type MatchEvidence } from '../searchFeedback'
+import type { MatchEvidence } from '../searchFeedback'
 import { matchVisualFeatures, normalizeVisualTags } from './visualMatcher'
 
 const log = getLogger('ai')
@@ -261,7 +261,11 @@ export async function runSearch(
     // 如果同时给了关键词同义词（如「猫娘」与 cat_ears），已由文字直接确认的普通图无需再耗费推理，
     // 除非显式传了 visualExclude 需要复核排除条件。
     if (hasKeywordFilter) {
-      const poolIds = semantic ? visual.ids : (await searchImages({ ...scopeFilter, r18: 'exclude' })).ids
+      const missingVec = Boolean(semantic && (await missingSearchVector(EMBEDDING_CONFIG.model, scopeFilter)))
+      const poolIds =
+        !semantic || missingVec
+          ? [...new Set([...visual.ids, ...(await searchImages({ ...scopeFilter, r18: 'exclude' })).ids])]
+          : visual.ids
       const toCheck = poolIds.filter((id) => !literalSet.has(id))
       const checked = await matchVisualFeatures(toCheck, { include: visualInclude, exclude: visualExclude })
       featureMatches = checked.matches
@@ -304,7 +308,7 @@ export async function runSearch(
     ])
   ]
   const protectedIds = new Set(protectedHits.ids)
-  const suppressed = await excludedImageIds(exclusionPrefix)
+  const suppressed = await excludedImageIds()
   const imageIds = ranked.filter((id) => !suppressed.has(id))
   const literalIds = new Set([...literalOrdinaryIds, ...protectedHits.ids])
   const exact = new Set([...(hasKeywordFilter || !hasVisualFilter ? normal.tagMatchedIds ?? [] : []), ...(protectedHits.tagMatchedIds ?? [])])
@@ -341,6 +345,6 @@ export async function searchByImage(
     r18: 'exclude',
     vector: { values: vec, model: EMBEDDING_CONFIG.model, minSimilarity: IMAGE_MIN_SIMILARITY }
   })
-  const suppressed = await excludedImageIds(exclusionPrefix)
+  const suppressed = await excludedImageIds()
   return hit.ids.filter((id) => !suppressed.has(id))
 }

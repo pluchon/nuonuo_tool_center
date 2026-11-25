@@ -194,8 +194,14 @@
               </article>
             </template>
 
+            <!-- 流式输出中的回复 -->
+            <article v-if="store.waiting && !store.compacting && store.streamingText" class="assistant__reply assistant__reply--streaming" aria-live="polite">
+              <MarkdownBody class="assistant__text" :text="store.streamingText" />
+              <span class="assistant__stream-dot" aria-hidden="true" />
+            </article>
+
             <!-- 等待回复：转动的星星和带流光的一行字 -->
-            <div v-if="store.waiting && !store.compacting" class="assistant__busy" role="status">
+            <div v-if="store.waiting && !store.compacting && (!store.streamingText || store.streamingStatus)" class="assistant__busy" role="status">
               <svg class="nn-gem" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
                 <defs>
                   <linearGradient id="nnStarBusy" x1="3" y1="3" x2="21" y2="21" gradientUnits="userSpaceOnUse">
@@ -206,7 +212,7 @@
                 </defs>
                 <path :d="starPath" fill="url(#nnStarBusy)" />
               </svg>
-              <span class="nn-shine assistant__busy-text">诺诺在想…</span>
+              <span class="nn-shine assistant__busy-text">{{ store.streamingStatus || '诺诺在想…' }}</span>
             </div>
 
             <!-- 没回复成功：系统横幅，不当成诺诺说的话 -->

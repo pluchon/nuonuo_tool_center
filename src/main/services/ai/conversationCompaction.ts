@@ -1,7 +1,7 @@
 import { AI_CONTEXT_WINDOW } from '@shared/api'
 import { BAILIAN_CONFIG } from '../../config/cloudConfig'
 import { BizError } from '../../common/bizError'
-import { getDatabase } from '../../db/client'
+import { saveCompactionForMessage } from '../../repositories/aiConversationRepository'
 import { chatCall } from './bailianClient'
 import { messageBound } from './contextWindow'
 import type { PromptMessage } from './promptPrefix'
@@ -53,9 +53,8 @@ export async function workingHistory(turns: HistoryTurn[], fixedBytes: number, m
         summary = result
         pos = end
       }
-      const saved = await getDatabase().pg.query(`update ai_message set content = content || jsonb_build_object('compactSummary',$2::text)
-        where id=$1 and role='ASSISTANT' and delete_state=0 returning id`, [batch[batch.length-1].id, summary])
-      if (!saved.rows.length) throw new BizError('CONFLICT', '对话已经变更')
+      const saved = await saveCompactionForMessage(batch[batch.length - 1].id, summary, remaining)
+      if (!saved) throw new BizError('CONFLICT', '对话已经变更')
       batch[batch.length - 1].summary = summary
       changed = true
     }

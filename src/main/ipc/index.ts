@@ -8,6 +8,7 @@ import {
   type DbBootState,
   type AiAskDTO,
   type AiPredictionDTO,
+  type AiStreamEvent,
   type CreateTagDTO,
   type FolderRefDTO,
   type GalleryQueryDTO,
@@ -386,10 +387,24 @@ export function registerIpcHandlers(paths: DataPaths, location: DatabaseLocation
   })
   handle(IpcChannel.aiAnswer, async (event, conversationId: number) => {
     requireDatabase()
+    const emitStream = (ev: Omit<AiStreamEvent, 'conversationId'>): void => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send(IpcEvent.aiStream, { conversationId, ...ev } satisfies AiStreamEvent)
+      }
+    }
     try {
-      return await answer(conversationId, active => {
-        if (!event.sender.isDestroyed()) event.sender.send(IpcEvent.aiCompaction, conversationId, active)
-      })
+      const reply = await answer(
+        conversationId,
+        active => {
+          if (!event.sender.isDestroyed()) event.sender.send(IpcEvent.aiCompaction, conversationId, active)
+        },
+        emitStream
+      )
+      emitStream({ kind: 'done' })
+      return reply
+    } catch (err) {
+      emitStream({ kind: 'error', text: err instanceof Error ? err.message : String(err) })
+      throw err
     } finally { scheduleEmbedding() }
   })
   handle(IpcChannel.aiPolicy, async () => { requireDatabase(); return getAiPolicy() })

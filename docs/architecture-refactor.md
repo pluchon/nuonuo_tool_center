@@ -99,7 +99,10 @@ flowchart TB
 ### 4.1 AI Harness（借鉴 Claude Code 公开实践）
 - **单主循环（`harness/harness.ts`）**：`while (step < MAX_STEPS)`，拼装四层前缀 → 调用模型 → 有 `tool_calls` 执行并归约 → 直到结束。
 - **声明式工具注册表（`harness/toolRegistry.ts` + `tools/`）**：一份 Schema 同时生成 OpenAI `tools` 定义与运行时校验，彻底消灭双写；工具返回不可变 `ToolOutcome` 联合类型，消除 25 字段共享 `TurnContext`。
-- **零成本微压缩（`harness/context.ts`）+ 4 断点前缀缓存**：工具循环优先就地折叠更早步骤的冗长工具返回（Microcompaction），并在 Step > 0 时将第 3 个 `ephemeral` 断点推进到最近一次 `tool` 结果末尾。
+- **零成本微压缩（`harness/context.ts`）+ 4 断点前缀缓存**：工具循环优先就地折叠更早步骤的冗长工具返回（Microcompaction），结合百炼官方 Prompt Caching 规范进行精准控制：
+  - **显式 vs 隐式分工**：显式缓存（`cache_control: { type: 'ephemeral' }`）创建按输入 125% 计费、命中仅 10%（5 分钟 TTL 且每次命中自动续期，最低前缀 1,024 Token、最多 4 个断点、向后回溯 20 个块）；隐式缓存创建 100%、命中 20%。因此 5 分钟内高频复用的 `chat`/`look` 走显式缓存，低频一次性调用（`organize`/`dream`/`compact`/`predict`）走隐式缓存。
+  - **断点与 20 块窗口治理**：OpenAI 兼容接口仅在 `system` 与 `user` 的分段 `content` 数组末尾放置 `cache_control` 断点（保持 `role: 'tool'` 为纯字符串，且通过 Microcompaction 控制上下文不溢出 20 块回溯窗口）。
+  - **流式记账**：流式请求必须开启 `stream_options: { include_usage: true }`，从尾块采集 `prompt_tokens_details.{cached_tokens, cache_creation_input_tokens}` 写入 `api_usage` 并回显命中率。
 - **通用混合检索（`search/visualMatcher.ts` + `search/hybridSearch.ts`）**：AI 动态输出 `visualInclude` / `visualExclude` 标准 Danbooru 视觉标签，PG `jsonb` 通用过滤 `image.visual_features` 并结合 `pgvector` 排序，彻底淘汰 `earSearch.ts`、`visualFollowup.ts` 等硬编码特判。
 
 ### 4.2 PG 状态机、记忆向量化与缓存修缮

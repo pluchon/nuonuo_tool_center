@@ -3,7 +3,14 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { closeDatabase, openDatabase } from '../../src/main/db/client'
-import { findMessages, insertConversation, insertMessage } from '../../src/main/repositories/aiConversationRepository'
+import {
+  findCompactionMap,
+  findCompactionsByConversation,
+  findLatestCompaction,
+  findMessages,
+  insertConversation,
+  insertMessage
+} from '../../src/main/repositories/aiConversationRepository'
 import { workingHistory, type HistoryTurn } from '../../src/main/services/ai/conversationCompaction'
 import { chatCall } from '../../src/main/services/ai/bailianClient'
 
@@ -30,7 +37,12 @@ it('接近上限时自动分批精简，故障后复用已保存的摘要，保�
   await expect(workingHistory(turns,3000,false,progress)).rejects.toThrow('断网')
   expect(progress.mock.calls).toEqual([[true],[false]])
   const rows = await findMessages(c.id)
-  expect(rows.some(row => (row.content as {compactSummary?:string}).compactSummary)).toBe(true)
+  expect(rows.every(row => !(row.content as {compactSummary?:string}).compactSummary)).toBe(true)
+  const compactions = await findCompactionsByConversation(c.id)
+  expect(compactions.length).toBeGreaterThan(0)
+  expect(compactions[0].summary).toBe('合并后的摘要')
+  expect((await findLatestCompaction(c.id))?.summary).toBe('合并后的摘要')
+  expect((await findCompactionMap(compactions.map((item) => item.upToMessageId))).get(compactions[0].upToMessageId)).toBe('合并后的摘要')
   const result = await workingHistory(turns,3000,false)
   expect(JSON.stringify(result.messages.slice(0, 2))).toContain('合并后的摘要')
   expect(result.messages.at(-1)).toEqual(turns.at(-1)?.messages.at(-1))

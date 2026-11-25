@@ -1,4 +1,14 @@
-import type { AiAskDTO, AiAskResultVO, AiConversationVO, AiMessageVO, AiRecalledDraft, AiStatusVO } from '@shared/api'
+import type {
+  AiAskDTO,
+  AiAskResultVO,
+  AiCompactResult,
+  AiConversationVO,
+  AiMessageVO,
+  AiRecalledDraft,
+  AiReferencePreview,
+  AiStatusVO,
+  AiStreamEvent
+} from '@shared/api'
 import { unwrap } from './request'
 
 // 诺诺能不能用（有没有配置云端凭证）
@@ -66,4 +76,20 @@ export function undoRemoveConversation(id: number): Promise<void> {
 // 赞、踩或取消
 export function voteMessage(messageId: number, vote: 'UP' | 'DOWN' | null): Promise<void> {
   return unwrap(window.api.ai.vote(messageId, vote))
+}
+
+export function compactConversation(id: number): Promise<AiCompactResult> {
+  return unwrap(window.api.ai.compact(id))
+}
+
+export function fetchReferencePreviews(ids: number[]): Promise<AiReferencePreview[]> {
+  return unwrap(window.api.ai.referencePreviews(ids))
+}
+
+export function onAiCompaction(listener: (id: number, active: boolean) => void): () => void {
+  return window.api.ai.onCompaction(listener)
+}
+
+export function onAiStream(listener: (event: AiStreamEvent) => void): () => void {
+  return window.api.ai.onStream(listener)
 }

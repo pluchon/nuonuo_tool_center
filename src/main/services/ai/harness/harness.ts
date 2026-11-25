@@ -1,3 +1,4 @@
+import type { AiStreamEvent } from '@shared/api'
 import { BAILIAN_CONFIG, EMBEDDING_CONFIG, readCloudCredentials } from '../../../config/cloudConfig'
 import { missingSearchVector } from '../../../repositories/aiSearchRepository'
 import type { AiConversationEntity, AiMessageEntity } from '../../../repositories/aiConversationRepository'
@@ -21,6 +22,22 @@ import { reduceToolOutcome, userText, type HarnessState, type ToolEnv, type User
 // 一次回答最多调几次模型（含工具往返）
 const MAX_STEPS = 4
 
+const TOOL_STATUS: Record<string, string> = {
+  search_images: '正在检索图库…',
+  get_image: '正在查看图片信息…',
+  read_referenced_images: '正在查看图片信息…',
+  list_tags: '正在查看标签词表…',
+  list_categories: '正在核对类目录…',
+  list_category_paths: '正在核对类目录…',
+  propose_category_change: '正在核对类目录…',
+  remember_preference: '正在记住偏好…',
+  remember: '正在记住偏好…',
+  explain_match: '正在核对检索结果…',
+  exclude_image: '正在核对检索结果…'
+}
+
+export type StreamCallback = (ev: Omit<AiStreamEvent, 'conversationId'>) => void
+
 export function isCloudReady(): boolean {
   return !!readCloudCredentials().dashscopeApiKey
 }
@@ -32,7 +49,8 @@ export async function runVisionTurn(
   env: ToolEnv,
   stateRef: { current: HarnessState },
   callModel: typeof chatCall,
-  image: Extract<StoredAttachment, { kind: 'image' }>
+  image: Extract<StoredAttachment, { kind: 'image' }>,
+  onStream?: StreamCallback
 ): Promise<{ text: string; state: HarnessState }> {
   const u = user.content as UserContent
   const question = [userText(u), env.referenceNotes].filter(Boolean).join('\n\n')
@@ -62,13 +80,16 @@ export async function runVisionTurn(
     model: BAILIAN_CONFIG.visionSearchModel,
     messages: fitted.messages,
     tools,
-    maxTokens: fitted.maxTokens
+    maxTokens: fitted.maxTokens,
+    ...(onStream ? { onDelta: (text: string) => onStream({ kind: 'delta', text }) } : {})
   })
   stateRef.current = {
     ...stateRef.current,
     contextUsage: contextUsage(res.usage, fitted.inputBound, res.message)
   }
   if (tools && res.message.tool_calls?.some((c) => c.type === 'function' && c.function.name === 'search_similar_image')) {
+    onStream?.({ kind: 'reset' })
+    onStream?.({ kind: 'status', tool: 'search_similar_image', text: '正在按图找相似…' })
     const imageIds = await searchByImage(image, env.dirs)
     const evidence: MatchEvidence = { methods: Object.fromEntries(imageIds.map((id) => [id, 'vector'])) }
     const incomplete = (await missingSearchVector(EMBEDDING_CONFIG.model, { dirs: env.dirs, tagGroups: [], keywordGroups: [] }))
@@ -95,7 +116,8 @@ export async function runAgentLoop(
   env: ToolEnv,
   stateRef: { current: HarnessState },
   scopeName: string | null,
-  callModel: typeof chatCall
+  callModel: typeof chatCall,
+  onStream?: StreamCallback
 ): Promise<{ text: string; state: HarnessState }> {
   const u = user.content as UserContent
   const question = [userText(u), env.referenceNotes].filter(Boolean).join('\n\n')
@@ -129,6 +151,7 @@ export async function runAgentLoop(
     const fitted = fitContext([system], historyWithMark, compactTail, ASSISTANT_TOOLS)
     const requestMessages = step > 0 ? markStepCache(fitted.messages) : fitted.messages
     const afterProposal = step === 0 && turnEnv.previousProposal !== undefined && history.at(-1)?.id === turnEnv.previousProposal.messageId
+    const streamed = Boolean(onStream && !afterProposal)
 
     const res = await callModel({
       kind: 'chat',
@@ -136,7 +159,8 @@ export async function runAgentLoop(
       messages: requestMessages,
       tools: ASSISTANT_TOOLS,
       ...(afterProposal ? { requiredTool: 'propose_category_change' } : {}),
-      maxTokens: fitted.maxTokens
+      maxTokens: fitted.maxTokens,
+      ...(streamed ? { onDelta: (text: string) => onStream!({ kind: 'delta', text }) } : {})
     })
     stateRef.current = { ...stateRef.current, contextUsage: contextUsage(res.usage, fitted.inputBound, res.message) }
     const calls = res.message.tool_calls ?? []
@@ -149,12 +173,16 @@ export async function runAgentLoop(
     if (calls.length === 0) {
       const response = (res.message.content ?? '').trim()
       if (stateRef.current.awaitingContrast) {
+        if (streamed) onStream?.({ kind: 'reset' })
+        onStream?.({ kind: 'status', tool: 'search_images', text: TOOL_STATUS.search_images })
         const fallback = await dispatchTool(ASSISTANT_TOOL_MAP, 'search_images', '{}', turnEnv, stateRef.current)
         stateRef.current = reduceToolOutcome(stateRef.current, 'search_images', fallback.outcome)
         return { text: localReply(stateRef.current.lastSearch?.outcome.imageIds.length ?? 0), state: stateRef.current }
       }
       // 通用幻觉拦截：无附件时如果模型未调用 search_images 就编造“找到 N 张 / 给用户看了 N 张”，强制按原文语义核对一次
       if (!turnEnv.hasInputContext && !stateRef.current.lastSearch && /(?:给用户看了\s*\d+\s*张|找到\s*\d+\s*张)/u.test(response)) {
+        if (streamed) onStream?.({ kind: 'reset' })
+        onStream?.({ kind: 'status', tool: 'search_images', text: TOOL_STATUS.search_images })
         const check = await dispatchTool(ASSISTANT_TOOL_MAP, 'search_images', JSON.stringify({ semantic: turnEnv.query }), turnEnv, stateRef.current)
         stateRef.current = reduceToolOutcome(stateRef.current, 'search_images', check.outcome)
         if (stateRef.current.awaitingContrast) {
@@ -165,12 +193,17 @@ export async function runAgentLoop(
       return { text: response, state: stateRef.current }
     }
 
+    if (streamed) onStream?.({ kind: 'reset' })
     tail.push({ role: 'assistant', content: res.message.content ?? '', tool_calls: calls })
     for (const call of calls) {
       const fn = call.type === 'function' ? call.function : null
       if (fn?.name === 'reply_with_followup' && (calls.length !== 1 || stateRef.current.lastSearch || stateRef.current.awaitingContrast)) {
         tail.push({ role: 'tool', tool_call_id: call.id, content: '请先完成当前操作，再根据实际结果直接回答。' })
         continue
+      }
+      if (fn && onStream) {
+        const statusText = TOOL_STATUS[fn.name]
+        if (statusText) onStream({ kind: 'status', tool: fn.name, text: statusText })
       }
       const executed = fn
         ? await dispatchTool(ASSISTANT_TOOL_MAP, fn.name, fn.arguments, turnEnv, stateRef.current)

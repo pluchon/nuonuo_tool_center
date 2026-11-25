@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
-import { and, desc, eq, gt, inArray, lt } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, lte, sql } from 'drizzle-orm'
 import { getDatabase, type DatabaseHandle } from '../db/client'
 import { aiSearchCache } from '../db/schema'
 import { getLogger } from '../common/logger'
+import { stableStringify } from '../services/ai/promptPrefix'
 
 export const SEARCH_CACHE_TTL = 24 * 60 * 60 * 1000
 export async function recordLocalReuse(owner = getDatabase()): Promise<void> {
@@ -16,7 +17,16 @@ const log = getLogger('search-cache')
 const pending = new WeakMap<DatabaseHandle, Map<string, Promise<unknown>>>()
 
 export function searchCacheKey(kind: string, input: unknown): string {
-  return kind + ':' + createHash('sha256').update(JSON.stringify(input)).digest('hex')
+  return kind + ':' + createHash('sha256').update(stableStringify(input) ?? 'undefined').digest('hex')
+}
+
+export async function flushExpiredSearchCache(owner = getDatabase()): Promise<number> {
+  if (owner.pg.closed) return 0
+  const deleted = await owner.db
+    .delete(aiSearchCache)
+    .where(lte(aiSearchCache.expiresAt, new Date()))
+    .returning({ key: aiSearchCache.key })
+  return deleted.length
 }
 
 async function readSearchCache(owner: DatabaseHandle, key: string): Promise<unknown> {
@@ -35,12 +45,26 @@ async function writeSearchCache(owner: DatabaseHandle, key: string, value: unkno
   const now = new Date()
   const expiresAt = new Date(now.getTime() + SEARCH_CACHE_TTL)
   await owner.db.transaction(async (tx) => {
-    await tx.delete(aiSearchCache).where(lt(aiSearchCache.expiresAt, now))
     await tx.insert(aiSearchCache).values({ key, value, expiresAt })
       .onConflictDoUpdate({ target: aiSearchCache.key, set: { value, expiresAt } })
-    const oldest = tx.select({ key: aiSearchCache.key }).from(aiSearchCache)
-      .orderBy(desc(aiSearchCache.expiresAt), aiSearchCache.key).offset(MAX_ENTRIES)
-    await tx.delete(aiSearchCache).where(inArray(aiSearchCache.key, oldest))
+    const [hasExpired] = await tx
+      .select({ one: sql<number>`1` })
+      .from(aiSearchCache)
+      .where(lte(aiSearchCache.expiresAt, now))
+      .limit(1)
+    if (hasExpired) {
+      await tx.delete(aiSearchCache).where(lte(aiSearchCache.expiresAt, now))
+    }
+    const [overflow] = await tx
+      .select({ one: sql<number>`1` })
+      .from(aiSearchCache)
+      .offset(MAX_ENTRIES)
+      .limit(1)
+    if (overflow) {
+      const oldest = tx.select({ key: aiSearchCache.key }).from(aiSearchCache)
+        .orderBy(desc(aiSearchCache.expiresAt), aiSearchCache.key).offset(MAX_ENTRIES)
+      await tx.delete(aiSearchCache).where(inArray(aiSearchCache.key, oldest))
+    }
   }).catch((error: unknown) => log.warn('写入检索缓存失败', error))
 }
 

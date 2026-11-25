@@ -1,5 +1,6 @@
 import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AI_CONTEXT_WINDOW, AI_TEXT_MAX, AI_TITLE_MAX, type AiAttachment, type AiMessageVO, type AiSearchScope, type GalleryItemVO } from '@shared/api'
+import { fetchReferencePreviews, onAiCompaction, onAiStream } from '@/api/ai'
 import { copyImageToClipboard, startNativeDrag } from '@/api/files'
 import { thumbUrl } from '@/api/gallery'
 import { onRatingR18 } from '@/api/rating'
@@ -75,9 +76,10 @@ export default defineComponent({
       commandSelected.value = true
       inputRef.value?.focus()
     }
-    onBeforeUnmount(window.api.ai.onCompaction((id, active) => {
+    onBeforeUnmount(onAiCompaction((id, active) => {
       if (store.currentId === id) store.compacting = active
     }))
+    onBeforeUnmount(onAiStream((ev) => store.handleStreamEvent(ev)))
     const toast = useToastStore()
     const previews = ref(new Map<number, AiReferencePreview>())
     const previewRevision = ref(0)
@@ -89,8 +91,8 @@ export default defineComponent({
       let active = true
       onCleanup(() => { active = false })
       if (!ids) { previews.value = new Map(); return }
-      const reply = await window.api.ai.referencePreviews(ids.split(',').map(Number)).catch(() => null)
-      if (active) previews.value = new Map(reply?.ok ? reply.data.map((r) => [r.imageId, r]) : [])
+      const list = await fetchReferencePreviews(ids.split(',').map(Number)).catch(() => null)
+      if (active) previews.value = new Map(list ? list.map((r) => [r.imageId, r]) : [])
     }, { immediate: true })
 
     const scroller = ref<HTMLElement | null>(null)
@@ -425,6 +427,12 @@ export default defineComponent({
         el.scrollTop = el.scrollHeight
       }
     }
+    const scrollIfNearBottom = async (): Promise<void> => {
+      const el = scroller.value
+      if (!el || el.scrollHeight - el.scrollTop - el.clientHeight >= 96) return
+      await nextTick()
+      el.scrollTop = el.scrollHeight
+    }
     const editQuestion = (m: AiMessageVO): void => {
       editingId.value = m.id
       editedText.value = m.text
@@ -446,6 +454,7 @@ export default defineComponent({
       }
     }
     watch(() => [store.messages.length, store.waiting, store.failure, store.currentId], scrollToEnd)
+    watch(() => [store.streamingText, store.streamingStatus], scrollIfNearBottom)
 
     onMounted(() => {
       document.addEventListener('mousedown', onDocDown)

@@ -20,6 +20,7 @@ export async function launchWithMockBailian(dirs: CaseDirs, rejectedImages = 0) 
       }
       requests.push(url.pathname.split('/').at(-1)!)
       const body = await request.json() as {
+        stream?: boolean
         input?: { contents?: Array<{ image?: string }> }
         tools?: unknown[]
         messages?: Array<{ role: string; content?: string | Array<{ type: string; text?: string }> }>
@@ -67,6 +68,45 @@ export async function launchWithMockBailian(dirs: CaseDirs, rejectedImages = 0) 
           message = { role, content: jsonBlock({ folders: [{ name: '表情包', tags: ['表情包'] }] }) }
         } else {
           message = { role, content: '找到了几张合适的图片。' }
+        }
+        if (body.stream) {
+          const sse = (payload: unknown): string => `data: ${JSON.stringify(payload)}\n\n`
+          const chunks: string[] = []
+          if (message.tool_calls?.length) {
+            const tc = message.tool_calls[0] as { id: string; type: 'function'; function: { name: string; arguments: string } }
+            chunks.push(
+              sse({
+                id: 'chat-fixture',
+                object: 'chat.completion.chunk',
+                choices: [{ index: 0, delta: { role, tool_calls: [{ index: 0, id: tc.id, type: 'function', function: { name: tc.function.name, arguments: '' } }] }, finish_reason: null }]
+              }),
+              sse({
+                id: 'chat-fixture',
+                object: 'chat.completion.chunk',
+                choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: tc.function.arguments } }] }, finish_reason: null }]
+              }),
+              sse({ id: 'chat-fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+            )
+          } else {
+            const text = message.content ?? ''
+            const mid = Math.ceil(text.length / 2)
+            const parts = mid > 0 ? [text.slice(0, mid), text.slice(mid)].filter(Boolean) : ['']
+            parts.forEach((part, idx) => {
+              chunks.push(
+                sse({
+                  id: 'chat-fixture',
+                  object: 'chat.completion.chunk',
+                  choices: [{ index: 0, delta: idx === 0 ? { role, content: part } : { content: part }, finish_reason: null }]
+                })
+              )
+            })
+            chunks.push(sse({ id: 'chat-fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }))
+          }
+          chunks.push(sse({ id: 'chat-fixture', object: 'chat.completion.chunk', choices: [], usage }), 'data: [DONE]\n\n')
+          return new Response(chunks.join(''), {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' }
+          })
         }
         return Response.json({ id: 'chat-fixture', choices: [{ index: 0, message, finish_reason: message.tool_calls ? 'tool_calls' : 'stop' }], usage })
       }

@@ -147,13 +147,13 @@ describe('诺诺助手', () => {
       const fresh = await ask({ ...params, conversationId: null, text: '找标签为甘雨的图' })
       expect((await answer(fresh.conversation.id)).images.map((item) => item.imageId)).toEqual(ids.slice(0, 1))
       expect(calls).toHaveLength(0)
-      const { changePreference, getAiPolicy } = await import('../../src/main/services/ai/aiPolicy')
-      const preference = (await getAiPolicy()).preferences.find((p) => p.content === '以后检索时排除图片 #' + ids[1])!
-      await changePreference(preference.id, null)
+      const { excludedImageIds, removeImageExclusion } = await import('../../src/main/repositories/aiMemoryRepository')
+      expect((await excludedImageIds()).has(ids[1])).toBe(true)
+      expect((await getDatabase().pg.query("select 1 from ai_memory where content like '以后检索时排除图片 #%'")).rows).toHaveLength(0)
+      await removeImageExclusion(ids[1])
       expect((await next('找标签为甘雨的图')).images.map((item) => item.imageId)).toEqual(ids)
-      await getDatabase().pg.query('delete from ai_memory where id = $1', [preference.id])
     } finally {
-      await getDatabase().pg.query('delete from ai_memory where content = $1', ['以后检索时排除图片 #' + ids[1]])
+      await getDatabase().pg.query('delete from ai_image_exclusion where image_id = $1', [ids[1]])
     }
   })
 

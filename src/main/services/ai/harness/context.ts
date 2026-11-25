@@ -1,6 +1,6 @@
 import type { AiContextUsage } from '@shared/api'
 import { findVocabulary } from '../../../repositories/aiSearchRepository'
-import type { AiConversationEntity, AiMessageEntity } from '../../../repositories/aiConversationRepository'
+import { findCompactionMap, type AiConversationEntity, type AiMessageEntity } from '../../../repositories/aiConversationRepository'
 import { ASSISTANT_RULES, cardCaption } from '../assistantPrompt'
 import { proposalStatesInHistory } from '../categoryProposalService'
 import { fitContext, messageBound } from '../contextWindow'
@@ -53,6 +53,9 @@ export async function historyTurns(history: AiMessageEntity[]): Promise<{
       return row.role === 'ASSISTANT' && id ? [id] : []
     })
   )
+  const compactions = await findCompactionMap(
+    history.flatMap((row) => (row.role === 'ASSISTANT' ? [row.id] : []))
+  )
   let previousIncludeR18 = false
   let previousScope: UserContent['scope'] = null
   for (const m of history) {
@@ -63,6 +66,7 @@ export async function historyTurns(history: AiMessageEntity[]): Promise<{
       question = { role: 'user', content: userText(uc) }
     } else if (m.role === 'ASSISTANT') {
       const c = m.content as AssistantContent
+      const summary = compactions.get(m.id) ?? c.compactSummary
       if (c.how) {
         previousResults = {
           ids: c.imageIds ?? [],
@@ -79,12 +83,12 @@ export async function historyTurns(history: AiMessageEntity[]): Promise<{
         const messages: PromptMessage[] = question
           ? [question, { role: 'assistant', content: c.readLibraryMetadata ? '（本轮围绕图库图片作了回答。）' : '（本轮查询了图库。）' }]
           : []
-        turns.push({ id: m.id, messages, summary: c.compactSummary })
+        turns.push({ id: m.id, messages, summary })
         question = undefined
         continue
       }
       if (c.categoryProposalId) text += `\n[软件记录] 目录提案当前状态：${proposalStates.get(c.categoryProposalId) ?? '未知'}。`
-      if (question) turns.push({ id: m.id, messages: [question, { role: 'assistant', content: text }], summary: c.compactSummary })
+      if (question) turns.push({ id: m.id, messages: [question, { role: 'assistant', content: text }], summary })
       question = undefined
     }
   }
