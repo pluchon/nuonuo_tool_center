@@ -137,14 +137,24 @@ export async function findSearchVisualFeatures(imageId: number) {
   return row
 }
 
-// 批量判断具有当前版本识别记录的普通图，只返回编号和是否匹配。调用处提供本轮可见候选。
-export async function cachedFeatureMatches(ids: number[], revision: string, required: string, anyOf: string[], ambiguous: string[]) {
-  if (!ids.length) return []
+// 批量按通用标签条件匹配具有当前版本识别记录的普通图。返回编号和是否匹配（ambiguous 命中时为 null）。
+export async function matchCachedVisualFeatures(
+  ids: number[],
+  revision: string,
+  includeTags: string[],
+  excludeTags: string[] = [],
+  ambiguousTags: string[] = []
+): Promise<Array<{ id: number; matches: boolean | null }>> {
+  if (!ids.length || (!includeTags.length && !excludeTags.length)) return []
   const tags = sql`(${image.visualFeatures}->'tags')`
+  const includeOk = includeTags.length ? sql`${tags} ?& ${sql.param(includeTags)}::text[]` : sql`true`
+  const excludeOk = excludeTags.length ? sql`not (${tags} ?| ${sql.param(excludeTags)}::text[])` : sql`true`
+  const expr = ambiguousTags.length
+    ? sql<boolean | null>`case when not (${includeOk} and ${excludeOk}) then false when ${tags} ?| ${sql.param(ambiguousTags)}::text[] then null else true end`
+    : sql<boolean | null>`(${includeOk} and ${excludeOk})`
   return getDatabase().db.select({
     id: image.id,
-    matches: sql<boolean | null>`case when not (${tags} ? ${required} and ${tags} ?| ${sql.param(anyOf)}::text[]) then false
-      when ${tags} ?| ${sql.param(ambiguous)}::text[] then null else true end`
+    matches: expr
   }).from(image).where(and(
     sql`${image.id} = any(${sql.param(ids)}::bigint[])`, eq(image.isR18, false),
     sql`${image.visualFeatures}->>'revision' = ${revision} and jsonb_typeof(${tags}) = 'array'`

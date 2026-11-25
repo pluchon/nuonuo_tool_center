@@ -24,6 +24,9 @@ export interface SearchSpec {
   keywordGroups: string[][]
   // 未收录为标签的角色、作品等明确条件，语义检索也要核对。
   requiredWords?: string[]
+  // 通用 WD 视觉特征过滤标签（英文 Danbooru 标签）
+  visualInclude?: string[]
+  visualExclude?: string[]
   orientation?: 'portrait' | 'landscape' | 'square'
   recent?: boolean
   untagged?: boolean

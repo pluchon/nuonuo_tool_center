@@ -8,7 +8,7 @@ import { findRecentUsage, insertApiUsage } from '../../src/main/repositories/api
 import { checkHitRate } from '../../src/main/services/ai/bailianClient'
 import { embed } from '../../src/main/services/ai/embeddingClient'
 import { EMBEDDING_CONFIG } from '../../src/main/config/cloudConfig'
-import { assertCacheMarks, buildMessages, countCacheMarks, stableStringify } from '../../src/main/services/ai/promptPrefix'
+import { assertCacheMarks, buildMessages, countCacheMarks, markStepCache, stableStringify } from '../../src/main/services/ai/promptPrefix'
 import { collectSearchSources, keepToolSources } from '../../src/main/services/ai/searchSources'
 import { normalizeChatUsage, normalizeResponsesUsage, reportedChatCache, textHitRate } from '../../src/main/services/ai/usage'
 
@@ -45,10 +45,36 @@ describe('四层前缀', () => {
     expect(JSON.stringify(a.slice(0, 3))).toBe(JSON.stringify(b.slice(0, 3)))
   })
 
-  it('标记超过上限直接报错', () => {
+  it('标记超过上限直接报错；多步工具循环可推进缓存断点到最后一条 tool 结果', () => {
     const mark = { type: 'ephemeral' as const }
-    const msgs = [1, 2, 3].map(() => ({ role: 'user' as const, content: [{ type: 'text' as const, text: 'x', cache_control: mark }] }))
+    const msgs = [1, 2, 3, 4, 5].map(() => ({ role: 'user' as const, content: [{ type: 'text' as const, text: 'x', cache_control: mark }] }))
     expect(() => assertCacheMarks(msgs)).toThrow()
+
+    const base = buildMessages({
+      rules: '规则',
+      profile: '档案',
+      history,
+      tail: [
+        { role: 'user', content: '查图' },
+        { role: 'assistant', content: '', tool_calls: [{ id: 't1' }] },
+        { role: 'tool', tool_call_id: 't1', content: '{"total":1}' }
+      ],
+      cache: true
+    })
+    const step1 = markStepCache(base)
+    expect(countCacheMarks(step1)).toBe(3)
+    expect(step1[3].content).toEqual([{ type: 'text', text: '查图', cache_control: mark }])
+    expect(step1[5].content).toBe('{"total":1}')
+    const step2 = markStepCache([
+      ...step1,
+      { role: 'assistant', content: '', tool_calls: [{ id: 't2' }] },
+      { role: 'tool', tool_call_id: 't2', content: '{"total":2}' }
+    ])
+    expect(countCacheMarks(step2)).toBe(4)
+    expect(step2[5].content).toEqual([{ type: 'text', text: '{"total":1}', cache_control: mark }])
+    // 达到 4 个上限不再追加
+    const fourMarked = [1, 2, 3, 4].map(() => ({ role: 'user' as const, content: [{ type: 'text' as const, text: 'ok', cache_control: mark }] }))
+    expect(countCacheMarks(markStepCache([...fourMarked, { role: 'user', content: 'tail' }]))).toBe(4)
   })
 
   it('键序不同的对象序列化结果相同，数组顺序保留', () => {

@@ -30,8 +30,8 @@ export interface PrefixParts {
   cache: boolean
 }
 
-// 一个请求最多 4 个缓存标记，这里最多用 2 个
-const MAX_MARKS = 2
+// 一个请求最多 4 个缓存标记；基础前缀用 2 个，其余留给多步工具循环推进断点
+const MAX_MARKS = 4
 
 // 键名按字典序排好再序列化，同样的数据永远得到同样的文本，前缀才不会因为键序抖动而失效
 export function stableStringify(value: unknown): string {
@@ -98,4 +98,28 @@ export function assertCacheMarks(messages: PromptMessage[]): void {
   if (n > MAX_MARKS) {
     throw new Error(`缓存标记 ${n} 个，超过上限 ${MAX_MARKS}`)
   }
+}
+
+// 多步工具循环时，在还有可用断点额度的前提下推进缓存断点（优先标定本轮用户问题，后续步再标定已稳定的早期 tool 结果），保持最新 tool 文本不变
+export function markStepCache(messages: PromptMessage[]): PromptMessage[] {
+  if (countCacheMarks(messages) >= MAX_MARKS) {
+    return messages
+  }
+  const hasMark = (m: PromptMessage): boolean => Array.isArray(m.content) && m.content.some((p) => p.cache_control)
+  const lastAssistantIdx = messages.findLastIndex((m) => m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0)
+  const userIdx = messages.findLastIndex((m) => m.role === 'user')
+  if (userIdx >= 0 && !hasMark(messages[userIdx])) {
+    const next = [...messages]
+    next[userIdx] = withMark(messages[userIdx])
+    return next
+  }
+  if (lastAssistantIdx > 0) {
+    const earlierToolIdx = messages.slice(0, lastAssistantIdx).findLastIndex((m) => m.role === 'tool' && !hasMark(m))
+    if (earlierToolIdx >= 0) {
+      const next = [...messages]
+      next[earlierToolIdx] = withMark(messages[earlierToolIdx])
+      return next
+    }
+  }
+  return messages
 }

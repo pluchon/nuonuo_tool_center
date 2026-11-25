@@ -139,11 +139,10 @@ it('重新搜索使用当天的计划，结果随当前分级和文字变化，�
   expect(chatCall).toHaveBeenCalledTimes(2)
 })
 
-it('缺少百炼密钥时首次搜索发色和文字均不调用云端', async () => {
+it('缺少百炼密钥时本地文字检索不调用云端', async () => {
   vi.mocked(chatCall).mockClear()
   process.env.DASHSCOPE_API_KEY = ' '
   try {
-    expect((await search('蓝色头发女孩')).names).toEqual(['水边的少女','蓝发琪露诺'])
     expect((await search('找水边的少女')).names).toEqual(['水边的少女'])
     expect((await search('找氦气深空巡航船')).names).toEqual([])
     expect(chatCall).not.toHaveBeenCalled()
@@ -172,33 +171,47 @@ it('重启后即使缺少百炼密钥，仍可读取已生成的文本向量。�
   }
 })
 
-it('按已有特征复用上一轮，同时找到之前未出现的蓝发女孩。明确限定这些图时只保留交集', async () => {
+it('动态视觉过滤结合已有特征复用上一轮，明确限定这些图时只保留交集', async () => {
   vi.mocked(chatCall).mockClear()
   const a = await search('琪露诺')
   expect(a.names).toEqual(['另一张琪露诺','蓝发琪露诺'])
+  vi.mocked(chatCall).mockResolvedValueOnce({
+    message: { role: 'assistant', content: '', tool_calls: [{ type: 'function', id: 'v1', function: {
+      name: 'search_images', arguments: JSON.stringify({ visualInclude: ['blue_hair', '1girl'], contrast: [] })
+    } }] }, finishReason: 'stop', usage: {}
+  } as never)
   expect((await search('蓝头发女孩子', a.id)).names).toEqual(['水边的少女','蓝发琪露诺'])
   const b = await search('琪露诺')
+  vi.mocked(chatCall).mockResolvedValueOnce({
+    message: { role: 'assistant', content: '', tool_calls: [{ type: 'function', id: 'v2', function: {
+      name: 'search_images', arguments: JSON.stringify({ visualInclude: ['blue_hair', '1girl'], contrast: [] })
+    } }] }, finishReason: 'stop', usage: {}
+  } as never)
   expect((await search('这些图里找蓝头发女孩子', b.id)).names).toEqual(['蓝发琪露诺'])
-  expect(chatCall).not.toHaveBeenCalled()
   expect(embed).not.toHaveBeenCalled()
   await getDatabase().pg.query("UPDATE ai_message SET create_time=now()-interval '2 days' WHERE conversation_id=$1", [b.id])
   expect((await search('这些图里找蓝头发女孩子', b.id)).names).toEqual([])
-  expect(chatCall).not.toHaveBeenCalled()
 })
 
-it('上一轮有九张图缺少特征时，本轮只补识别八张，剩余图片保留待核对', async () => {
+it('通用视觉匹配按上限补检缺失特征，同时支持包含与排除标签过滤', async () => {
   const { pg } = getDatabase()
-  const { followupEvidence } = await import('../../src/main/services/ai/visualFollowup')
+  const { matchVisualFeatures } = await import('../../src/main/services/ai/search/visualMatcher')
   const { getVisualTagsForSearch } = await import('../../src/main/services/rating/ratingService')
   const rows = await pg.query<{ id: number }>(`
     INSERT INTO image(content_hash,format,byte_size,width,height,display_name)
     SELECT 'pending-' || n,'PNG',1,20,20,'待识别' FROM generate_series(1,9) AS n RETURNING id`)
   const ids = rows.rows.map((row) => row.id)
-  await pg.query("INSERT INTO image_file(image_id,root_id,rel_path,mtime) SELECT i,1,'pics/' || i || '.png',now() FROM unnest($1::int[]) AS i", [ids])
-  await pg.query("INSERT INTO image_tag(image_id,tag_id,source,status) SELECT i,2,'MANUAL','ACCEPTED' FROM unnest($1::int[]) AS i", [ids])
-  vi.mocked(getVisualTagsForSearch).mockClear().mockResolvedValue(['blue_hair', '1girl'])
-  const evidence = await followupEvidence('blue_hair', ids, undefined, ids)
-  expect(getVisualTagsForSearch).toHaveBeenCalledTimes(8)
-  expect(evidence.matches).toHaveLength(8)
-  expect(evidence.unchecked).toHaveLength(1)
+  try {
+    await pg.query("INSERT INTO image_file(image_id,root_id,rel_path,mtime) SELECT i,1,'pics/' || i || '.png',now() FROM unnest($1::int[]) AS i", [ids])
+    await pg.query("INSERT INTO image_tag(image_id,tag_id,source,status) SELECT i,2,'MANUAL','ACCEPTED' FROM unnest($1::int[]) AS i", [ids])
+    vi.mocked(getVisualTagsForSearch).mockClear()
+      .mockResolvedValueOnce(['blue_hair', '1girl', 'fox_ears'])
+      .mockResolvedValue(['blue_hair', '1girl'])
+    const evidence = await matchVisualFeatures(ids, { include: ['blue_hair', '1girl'], exclude: ['fox_ears'] }, ids)
+    expect(getVisualTagsForSearch).toHaveBeenCalledTimes(8)
+    expect(evidence.matches).toHaveLength(7)
+    expect(evidence.unchecked).toHaveLength(1)
+  } finally {
+    await pg.query("UPDATE image SET delete_state = 1 WHERE content_hash LIKE 'pending-%'")
+  }
 })

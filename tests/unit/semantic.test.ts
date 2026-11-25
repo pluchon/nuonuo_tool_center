@@ -29,6 +29,7 @@ vi.mock('../../src/main/services/ai/embeddingClient', () => ({
 // 上传图的本地分级：可以切换成“判为 R-18”或“模型不可用”
 let rating: { scores: Record<string, number>; r18: boolean } | null = { scores: {}, r18: false }
 vi.mock('../../src/main/services/rating/ratingService', () => ({
+  FEATURE_REVISION: 'semantic-test',
   rateFileNow: vi.fn(async () => rating),
   getVisualTagsForSearch: vi.fn<(id: number) => Promise<string[] | null>>()
 }))
@@ -308,13 +309,13 @@ describe('语义检索和按图找相似', () => {
       expect(chatCall).not.toHaveBeenCalled()
       expect(embedCalls).toEqual([])
       script.push({ tool_calls: [{ id: 'ears', type: 'function', function: { name: 'search_images',
-        arguments: JSON.stringify({ keywordGroups: [['猫娘','猫耳少女','兽耳']], semantic: '猫耳少女', contrast: ['夜景'] })
+        arguments: JSON.stringify({ keywordGroups: [['猫娘','猫耳少女']], visualInclude: ['cat_ears'], semantic: '猫耳少女', contrast: ['夜景'] })
       } }] })
       const q = await ask({ conversationId: null, text: '想看猫娘', scope, includeR18: true })
       const result = await answer(q.conversation.id)
-      expect(vi.mocked(chatCall).mock.calls[0][0].tools).toEqual([expect.objectContaining({
+      expect(vi.mocked(chatCall).mock.calls[0][0].tools).toEqual(expect.arrayContaining([expect.objectContaining({
         function: expect.objectContaining({ name: 'search_images' })
-      })])
+      })]))
       expect(result.images.map((item) => item.imageId)).toEqual([ids[6], ids[2], ids[3]])
       expect(traits).not.toHaveBeenCalledWith(ids[2])
       expect(traits).not.toHaveBeenCalledWith(ids[5])
