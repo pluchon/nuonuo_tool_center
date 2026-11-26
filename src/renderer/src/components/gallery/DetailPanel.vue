@@ -113,27 +113,26 @@
         </button>
       </div>
 
-      <div class="detail-panel__ai-card">
-        <div class="detail-panel__ai-row">
-          <span class="detail-panel__ai-name">AI</span>
-          <button class="detail-panel__ask" type="button" @click="askNono">问诺诺</button>
-        </div>
-        <div class="detail-panel__ai-row detail-panel__ai-row--sep">
-          <span class="detail-panel__ai-name">重新整理</span>
-          <div class="detail-panel__ai-acts">
-            <button
-              class="detail-panel__ai-btn"
-              type="button"
-              :disabled="singleBusy"
-              @click="resetSingle"
-            >回归源目录</button>
-            <button
-              class="detail-panel__ai-btn detail-panel__ai-btn--main"
-              type="button"
-              :disabled="singleBusy || detail.isR18 || look.isActive(detail.imageId)"
-              @click="relookSingle"
-            >诺诺重新看</button>
-          </div>
+      <div class="detail-panel__row-head detail-panel__ai-row">
+        <span class="detail-panel__label">AI</span>
+        <button class="detail-panel__ask" type="button" @click="askNono">问诺诺</button>
+      </div>
+
+      <div class="detail-panel__row-head detail-panel__reorg-row">
+        <span class="detail-panel__label">重新整理</span>
+        <div class="detail-panel__ai-acts">
+          <button
+            class="detail-panel__ai-btn"
+            type="button"
+            :disabled="singleBusy"
+            @click="resetSingle"
+          >回归源目录</button>
+          <button
+            class="detail-panel__ai-btn detail-panel__ai-btn--main"
+            type="button"
+            :disabled="singleBusy || detail.isR18 || look.isActive(detail.imageId)"
+            @click="relookSingle"
+          >诺诺重新看</button>
         </div>
       </div>
 

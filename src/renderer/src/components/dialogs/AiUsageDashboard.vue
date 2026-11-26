@@ -18,6 +18,7 @@ interface PopoverState {
   flipped: boolean
   caretOffsetPx: number
   title: string
+  titleRight?: string
   rows: { label: string; value: string }[]
 }
 
@@ -73,7 +74,6 @@ function stepYear(delta: number): void {
   const years = stats.value?.availableYears ?? []
   const idx = years.indexOf(selectedYear.value)
   if (idx < 0) return
-  // availableYears 按降序排列：往前一年即 idx + 1，往后一年即 idx - 1
   const nextIdx = idx - delta
   if (nextIdx < 0 || nextIdx >= years.length) return
   selectedYear.value = years[nextIdx]
@@ -129,7 +129,7 @@ function heatClass(level: 0 | 1 | 2 | 3 | 4): string {
   return `ai-usage__heat--${level}`
 }
 
-// ---- 年度热力图（全年 1月~12月，左侧不标周几） ----
+// ---- 年度热力图（当年 1月~12月，左侧不标周几） ----
 interface HeatCell {
   col: number
   row: number
@@ -202,7 +202,7 @@ const heatmapLayout = computed(() => {
 
 // ---- 趋势堆叠柱图（7天 / 15天 / 30天 / 6个月 / 1年） ----
 const BAR_VB_W = 580
-const BAR_VB_H = 132
+const BAR_VB_H = 152
 const BAR_LEFT = 42
 const BAR_RIGHT = 10
 const BAR_TOP = 10
@@ -284,10 +284,10 @@ const barLayout = computed(() => {
   return { bars, gridLines, yMax }
 })
 
-// ---- 5 轴效率雷达（不显示数值占比） + 右侧分场景明细 ----
-const RADAR_CX = 116
-const RADAR_CY = 104
-const RADAR_R = 62
+// ---- 5 轴效率雷达（不显示数值占比） + 右侧 3×2 条形场景 ----
+const RADAR_CX = 114
+const RADAR_CY = 102
+const RADAR_R = 60
 
 function polarPoint(index: number, total: number, radius: number): { x: number; y: number } {
   const angle = -Math.PI / 2 + (index * 2 * Math.PI) / total
@@ -325,9 +325,10 @@ const radarLayout = computed(() => {
   return { rings, spokes, polygonPoints }
 })
 
+const kindGridRows = computed(() => (stats.value?.byKind ?? []).slice(0, 6))
+
 const maxKindTokens = computed(() => {
-  const rows = stats.value?.byKind ?? []
-  return Math.max(1, ...rows.map((r) => r.totalTokens))
+  return Math.max(1, ...kindGridRows.value.map((r) => r.totalTokens))
 })
 
 // ---- 通用毛玻璃 V 尖角浮层定位 ----
@@ -335,7 +336,8 @@ function showPopoverAtClientPoint(
   anchorRect: { left: number; top: number; width: number; height: number },
   title: string,
   rows: { label: string; value: string }[],
-  flipThreshold = 68
+  flipThreshold = 68,
+  titleRight?: string
 ): void {
   const stage = stageRef.value
   if (!stage) return
@@ -355,6 +357,7 @@ function showPopoverAtClientPoint(
     flipped,
     caretOffsetPx,
     title,
+    titleRight,
     rows
   }
 }
@@ -367,12 +370,12 @@ function onHeatHover(event: MouseEvent, cell: HeatCell): void {
     el.getBoundingClientRect(),
     pt.date,
     [
-      { label: '总计', value: `${formatTokens(pt.totalTokens)} tokens` },
       { label: '缓存命中', value: formatTokens(pt.cachedTokens) },
       { label: '调用次数', value: `${pt.calls} 次` },
       { label: '估算费用', value: `¥${formatYuan(pt.estCostYuan)}` }
     ],
-    -56
+    -56,
+    formatTokens(pt.totalTokens)
   )
 }
 
@@ -393,7 +396,8 @@ function onBarHover(event: MouseEvent, bar: StackedBarGeom): void {
       { label: '调用次数', value: `${pt.calls} 次` },
       { label: '估算费用', value: `¥${formatYuan(pt.estCostYuan)}` }
     ],
-    44
+    44,
+    formatTokens(pt.totalTokens)
   )
 }
 
@@ -456,14 +460,7 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
 <template>
   <section class="set-dlg__group ai-usage" aria-label="用量统计">
     <div class="ai-usage__head">
-      <div class="ai-usage__title-wrap">
-        <span class="ai-usage__title-badge" aria-hidden="true">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 19h16M7 16V9M12 16V5M17 16v-4" />
-          </svg>
-        </span>
-        <h3 class="set-dlg__group-title ai-usage__title">用量统计</h3>
-      </div>
+      <h3 class="set-dlg__group-title ai-usage__title">用量统计</h3>
 
       <div class="ai-usage__tabs" role="tablist" aria-label="用量视图">
         <button
@@ -627,51 +624,6 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
 
         <!-- 2. 趋势堆叠柱图 -->
         <div v-else-if="viewMode === 'trend'" :key="`trend-${trendRange}-${animSeed}`" class="ai-usage__panel ai-usage__panel--trend">
-          <div class="ai-usage__subbar">
-            <div class="ai-usage__ranges" role="tablist" aria-label="时间范围">
-              <button
-                type="button"
-                role="tab"
-                class="ai-usage__range-btn"
-                :class="{ 'is-active': trendRange === 'd7' }"
-                :aria-selected="trendRange === 'd7'"
-                @click="switchRange('d7')"
-              >7天</button>
-              <button
-                type="button"
-                role="tab"
-                class="ai-usage__range-btn"
-                :class="{ 'is-active': trendRange === 'd15' }"
-                :aria-selected="trendRange === 'd15'"
-                @click="switchRange('d15')"
-              >15天</button>
-              <button
-                type="button"
-                role="tab"
-                class="ai-usage__range-btn"
-                :class="{ 'is-active': trendRange === 'd30' }"
-                :aria-selected="trendRange === 'd30'"
-                @click="switchRange('d30')"
-              >30天</button>
-              <button
-                type="button"
-                role="tab"
-                class="ai-usage__range-btn"
-                :class="{ 'is-active': trendRange === 'm6' }"
-                :aria-selected="trendRange === 'm6'"
-                @click="switchRange('m6')"
-              >6个月</button>
-              <button
-                type="button"
-                role="tab"
-                class="ai-usage__range-btn"
-                :class="{ 'is-active': trendRange === 'm12' }"
-                :aria-selected="trendRange === 'm12'"
-                @click="switchRange('m12')"
-              >1年</button>
-            </div>
-          </div>
-
           <svg
             class="ai-usage__bar-svg"
             :viewBox="`0 0 ${BAR_VB_W} ${BAR_VB_H}`"
@@ -758,25 +710,70 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
             </g>
           </svg>
 
-          <div class="ai-usage__legend ai-usage__legend--center">
-            <span class="ai-usage__legend-item">
-              <i class="ai-usage__swatch ai-usage__swatch--cached" />缓存命中
-            </span>
-            <span class="ai-usage__legend-item">
-              <i class="ai-usage__swatch ai-usage__swatch--fresh" />新增输入
-            </span>
-            <span class="ai-usage__legend-item">
-              <i class="ai-usage__swatch ai-usage__swatch--out" />模型输出
-            </span>
+          <div class="ai-usage__foot">
+            <div class="ai-usage__legend">
+              <span class="ai-usage__legend-item">
+                <i class="ai-usage__swatch ai-usage__swatch--cached" />缓存命中
+              </span>
+              <span class="ai-usage__legend-item">
+                <i class="ai-usage__swatch ai-usage__swatch--fresh" />新增输入
+              </span>
+              <span class="ai-usage__legend-item">
+                <i class="ai-usage__swatch ai-usage__swatch--out" />模型输出
+              </span>
+            </div>
+
+            <div class="ai-usage__range-links" role="tablist" aria-label="时间范围">
+              <button
+                type="button"
+                role="tab"
+                class="ai-usage__range-link"
+                :class="{ 'is-active': trendRange === 'd7' }"
+                :aria-selected="trendRange === 'd7'"
+                @click="switchRange('d7')"
+              >7天</button>
+              <button
+                type="button"
+                role="tab"
+                class="ai-usage__range-link"
+                :class="{ 'is-active': trendRange === 'd15' }"
+                :aria-selected="trendRange === 'd15'"
+                @click="switchRange('d15')"
+              >15天</button>
+              <button
+                type="button"
+                role="tab"
+                class="ai-usage__range-link"
+                :class="{ 'is-active': trendRange === 'd30' }"
+                :aria-selected="trendRange === 'd30'"
+                @click="switchRange('d30')"
+              >30天</button>
+              <button
+                type="button"
+                role="tab"
+                class="ai-usage__range-link"
+                :class="{ 'is-active': trendRange === 'm6' }"
+                :aria-selected="trendRange === 'm6'"
+                @click="switchRange('m6')"
+              >6个月</button>
+              <button
+                type="button"
+                role="tab"
+                class="ai-usage__range-link"
+                :class="{ 'is-active': trendRange === 'm12' }"
+                :aria-selected="trendRange === 'm12'"
+                @click="switchRange('m12')"
+              >1年</button>
+            </div>
           </div>
         </div>
 
-        <!-- 3. 5 轴效率雷达 + 分场景分布 -->
+        <!-- 3. 5 轴效率雷达 + 3×2 场景分布 -->
         <div v-else :key="`radar-${animSeed}`" class="ai-usage__panel ai-usage__radar-grid">
           <div class="ai-usage__radar-wrap">
             <svg
               class="ai-usage__radar-svg"
-              viewBox="0 0 232 204"
+              viewBox="0 0 228 200"
               role="img"
               aria-label="AI省流与效率五维雷达图"
             >
@@ -827,25 +824,20 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
             </svg>
           </div>
 
-          <div class="ai-usage__kinds nn-thin">
-            <div v-if="stats.byKind.length === 0" class="ai-usage__kind-empty">暂无调用记录</div>
+          <div class="ai-usage__kinds">
+            <div v-if="kindGridRows.length === 0" class="ai-usage__kind-empty">暂无调用记录</div>
             <div
-              v-for="(row, rIdx) in stats.byKind"
+              v-for="(row, rIdx) in kindGridRows"
               :key="row.api"
               class="ai-usage__kind-row"
               @mouseenter="onKindHover($event, row)"
             >
-              <div class="ai-usage__kind-top">
-                <span class="ai-usage__kind-name">{{ row.label }}</span>
-                <span class="ai-usage__kind-meta">
-                  {{ formatTokens(row.totalTokens) }} · ¥{{ formatYuan(row.estCostYuan) }}
-                </span>
-              </div>
+              <span class="ai-usage__kind-name">{{ row.label }}</span>
               <div class="ai-usage__kind-track">
                 <div
                   class="ai-usage__kind-fill"
                   :style="{
-                    width: `${Math.max(5, (row.totalTokens / maxKindTokens) * 100)}%`,
+                    width: `${Math.max(8, (row.totalTokens / maxKindTokens) * 100)}%`,
                     '--row-delay': `${rIdx * 45}ms`
                   }"
                 />
@@ -865,7 +857,10 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
             '--caret-offset': `${popover.caretOffsetPx}px`
           }"
         >
-          <div class="ai-usage__pop-title">{{ popover.title }}</div>
+          <div class="ai-usage__pop-title">
+            <span>{{ popover.title }}</span>
+            <strong v-if="popover.titleRight">{{ popover.titleRight }}</strong>
+          </div>
           <div v-for="r in popover.rows" :key="r.label" class="ai-usage__pop-row">
             <span>{{ r.label }}</span>
             <strong>{{ r.value }}</strong>
@@ -889,24 +884,6 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-
-.ai-usage__title-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.ai-usage__title-badge {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--a-soft);
-  color: var(--a-ink);
-  border: 1px solid var(--a-line2);
 }
 
 .ai-usage__title {
@@ -1089,8 +1066,7 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
   user-select: none;
 }
 
-.ai-usage__foot,
-.ai-usage__subbar {
+.ai-usage__foot {
   flex: none;
   display: flex;
   align-items: center;
@@ -1098,19 +1074,10 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
   gap: 10px;
 }
 
-.ai-usage__subbar {
-  justify-content: flex-end;
-}
-
 .ai-usage__year-switch {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 4px;
-  border-radius: 6px;
-  border: 1px solid var(--settings-rule);
-  background: var(--settings-card);
+  gap: 6px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1119,7 +1086,7 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
   height: 20px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: 5px;
   background: transparent;
   color: var(--c-i-6E6280);
   display: inline-flex;
@@ -1134,31 +1101,26 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
   }
 
   &:disabled {
-    opacity: 0.35;
+    opacity: 0.3;
     cursor: default;
   }
 }
 
 .ai-usage__year-label {
-  font-size: 11px;
-  font-weight: 600;
+  position: relative;
+  font-size: 11.5px;
+  font-weight: 700;
   color: var(--c-i-3B3047);
-  padding: 0 4px;
+  padding: 1px 2px 3px;
+  border-bottom: 1.5px solid var(--a-line);
 }
 
 .ai-usage__legend {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-size: 11px;
   color: var(--c-i-7F7494);
-}
-
-.ai-usage__legend--center {
-  flex: none;
-  align-self: center;
-  justify-content: center;
-  gap: 16px;
 }
 
 .ai-usage__legend-dot {
@@ -1198,42 +1160,42 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
   fill: color-mix(in srgb, var(--a) 28%, var(--c-i-7F7494));
 }
 
-.ai-usage__ranges {
+.ai-usage__range-links {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 2px;
-  border-radius: 7px;
-  border: 1px solid var(--settings-rule);
-  background: color-mix(in srgb, var(--c-i-9C90B3) 8%, transparent);
+  gap: 12px;
 }
 
-.ai-usage__range-btn {
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 5px;
-  border: 1px solid transparent;
+.ai-usage__range-link {
+  position: relative;
+  padding: 2px 1px 4px;
+  border: 0;
   background: transparent;
-  color: var(--c-i-6E6280);
+  color: var(--c-i-7F7494);
   font: inherit;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
-  transition:
-    background 0.14s ease,
-    color 0.14s ease,
-    border-color 0.14s ease;
+  transition: color 0.14s ease;
 
   &:hover:not(.is-active) {
-    background: var(--a06);
     color: var(--c-i-3B3047);
   }
 
   &.is-active {
-    background: var(--a-soft);
-    border-color: var(--a-line2);
     color: var(--a-ink);
     font-weight: 700;
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 2px;
+      border-radius: 2px;
+      background: var(--a);
+    }
   }
 }
 
@@ -1257,7 +1219,7 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
 
 .ai-usage__radar-grid {
   display: grid;
-  grid-template-columns: 214px minmax(0, 1fr);
+  grid-template-columns: 210px minmax(0, 1fr);
   align-items: center;
   gap: 16px;
 }
@@ -1270,7 +1232,7 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
 }
 
 .ai-usage__radar-svg {
-  width: 210px;
+  width: 206px;
   max-width: 100%;
   height: auto;
   overflow: visible;
@@ -1312,22 +1274,22 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
 
 .ai-usage__radar-lbl {
   fill: var(--c-i-5E5270);
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 600;
 }
 
 .ai-usage__kinds {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 7px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: center;
+  gap: 14px 16px;
   min-width: 0;
   max-height: 100%;
-  overflow-y: auto;
-  padding-right: 2px;
+  overflow: hidden;
 }
 
 .ai-usage__kind-empty {
+  grid-column: 1 / -1;
   font-size: 12px;
   color: var(--c-i-7F7494);
   text-align: center;
@@ -1337,8 +1299,9 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
 .ai-usage__kind-row {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 2px 6px;
+  gap: 5px;
+  min-width: 0;
+  padding: 4px 6px;
   border-radius: 6px;
   transition: background 0.14s ease;
   cursor: default;
@@ -1348,25 +1311,13 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
   }
 }
 
-.ai-usage__kind-top {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  font-variant-numeric: tabular-nums;
-}
-
 .ai-usage__kind-name {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--c-i-3B3047);
   font-weight: 600;
   white-space: nowrap;
-}
-
-.ai-usage__kind-meta {
-  font-size: 11px;
-  color: var(--c-i-7F7494);
-  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ai-usage__kind-track {
@@ -1430,12 +1381,21 @@ function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
 }
 
 .ai-usage__pop-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   font-size: 11px;
   font-weight: 600;
   color: var(--c-i-3B3047);
   border-bottom: 1px solid var(--settings-rule);
   padding-bottom: 3px;
   margin-bottom: 1px;
+
+  strong {
+    font-weight: 700;
+    color: var(--a-ink);
+  }
 }
 
 .ai-usage__pop-row {

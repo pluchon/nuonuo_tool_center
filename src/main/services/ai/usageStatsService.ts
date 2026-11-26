@@ -299,6 +299,26 @@ export async function getAiUsageStats(now = new Date()): Promise<AiUsageStatsVO>
     return out
   }
 
+  const buildCalendarYearSeries = (year: number): AiUsageSeriesPoint[] => {
+    const out: AiUsageSeriesPoint[] = []
+    for (let month = 0; month < 12; month += 1) {
+      const d = new Date(year, month, 1)
+      const key = localMonthKey(d)
+      const b = monthBuckets.get(key)
+      out.push({
+        key,
+        label: `${month + 1}月`,
+        inputFreshTokens: b?.inputFreshTokens ?? 0,
+        cachedTokens: b?.cachedTokens ?? 0,
+        outputTokens: b?.outputTokens ?? 0,
+        totalTokens: b?.totalTokens ?? 0,
+        calls: b?.calls ?? 0,
+        estCostYuan: roundYuan(b?.estCostYuan ?? 0)
+      })
+    }
+    return out
+  }
+
   const byKind: AiUsageKindRow[] = Array.from(kindBuckets.entries())
     .map(([api, b]) => ({
       api,
@@ -353,7 +373,7 @@ export async function getAiUsageStats(now = new Date()): Promise<AiUsageStatsVO>
       d15: buildDaySeries(15),
       d30: buildDaySeries(30),
       m6: buildMonthSeries(6),
-      m12: buildMonthSeries(12)
+      m12: buildCalendarYearSeries(currentYear)
     },
     byKind,
     radar

@@ -58,7 +58,8 @@ describe('getAiUsageStats', () => {
     expect(stats.series.d30).toHaveLength(30)
     expect(stats.series.m6).toHaveLength(6)
     expect(stats.series.m12).toHaveLength(12)
-    expect(stats.series.m12[11]).toMatchObject({ key: '2026-11', label: '11月' })
+    expect(stats.series.m12[0]).toMatchObject({ key: '2026-01', label: '1月' })
+    expect(stats.series.m12[11]).toMatchObject({ key: '2026-12', label: '12月' })
     expect(stats.byKind).toEqual([])
     expect(stats.radar).toHaveLength(5)
     expect(stats.radar.every((axis) => axis.value === 0)).toBe(true)
@@ -184,8 +185,9 @@ describe('getAiUsageStats', () => {
       outputTokens: 300_000,
       calls: 2
     })
-    expect(stats.series.m12[10]).toMatchObject({
+    expect(stats.series.m12[9]).toMatchObject({
       key: '2026-10',
+      label: '10月',
       calls: 1,
       estCostYuan: 0.01
     })
