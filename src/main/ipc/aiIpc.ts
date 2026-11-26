@@ -99,6 +99,11 @@ export function registerAiIpc(paths: DataPaths): void {
     return abortAnswer(conversationId)
   })
   handle(IpcChannel.aiPolicy, async () => { requireDatabase(); return getAiPolicy() })
+  handle(IpcChannel.aiUsageStats, async () => {
+    requireDatabase()
+    const { getAiUsageStats } = await import('../services/ai/usageStatsService')
+    return getAiUsageStats()
+  })
   handle(IpcChannel.aiReferencePreviews, async (_event, ids: number[]) => { requireDatabase(); return referencePreviews(ids) })
   handle(IpcChannel.aiResetRules, async () => { requireDatabase(); await resetOrganizeRules() })
   handle(IpcChannel.aiEmbeddingLimit, async (_event, limit: number) => {

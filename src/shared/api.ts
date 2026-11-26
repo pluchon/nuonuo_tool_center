@@ -74,6 +74,7 @@ export const IpcChannel = {
   aiAbort: 'ai:abort',
   aiCompact: 'ai:compact',
   aiPolicy: 'ai:policy',
+  aiUsageStats: 'ai:usageStats',
   aiReferencePreviews: 'ai:referencePreviews',
   aiEmbeddingLimit: 'ai:embeddingLimit',
   aiResetRules: 'ai:resetRules',
@@ -824,5 +825,73 @@ export const ORGANIZE_TERMS_MAX = 20
 // 一句话最多几个字、对话名最多几个字
 export const AI_TEXT_MAX = 500
 export const AI_TITLE_MAX = 30
+
+export interface AiUsageSummary {
+  totalTokens: number
+  inputTokens: number
+  cachedTokens: number
+  cacheWriteTokens: number
+  outputTokens: number
+  imageTokens: number
+  totalCalls: number
+  successCalls: number
+  errorCalls: number
+  batchCalls: number
+  searchCalls: number
+  estCostYuan: number
+  savedCostYuan: number
+  cloudHitRate: number
+  localHits: number
+}
+
+export interface AiUsageDailyPoint {
+  date: string
+  totalTokens: number
+  inputTokens: number
+  cachedTokens: number
+  outputTokens: number
+  calls: number
+  estCostYuan: number
+}
+
+export interface AiUsageSeriesPoint {
+  key: string
+  label: string
+  inputFreshTokens: number
+  cachedTokens: number
+  outputTokens: number
+  totalTokens: number
+  calls: number
+  estCostYuan: number
+}
+
+export interface AiUsageKindRow {
+  api: ApiKind
+  label: string
+  calls: number
+  totalTokens: number
+  estCostYuan: number
+  avgLatencyMs: number
+  errorCalls: number
+}
+
+export interface AiUsageRadarAxis {
+  key: 'cacheHit' | 'localHit' | 'batchRatio' | 'successRate' | 'costSaved'
+  label: string
+  value: number
+  display: string
+}
+
+export interface AiUsageStatsVO {
+  summary: AiUsageSummary
+  heatmap: AiUsageDailyPoint[]
+  series: {
+    d7: AiUsageSeriesPoint[]
+    d30: AiUsageSeriesPoint[]
+    m12: AiUsageSeriesPoint[]
+  }
+  byKind: AiUsageKindRow[]
+  radar: AiUsageRadarAxis[]
+}
 
 export type { AppSettings }

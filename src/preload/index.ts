@@ -15,6 +15,7 @@ import {
   type ApiResponse,
   type CategoryProposalVO,
   type AiPolicyVO,
+  type AiUsageStatsVO,
   type AiCompactResult,
   type AiReferencePreview,
   type AppSettings,
@@ -222,6 +223,7 @@ const api = {
   },
   ai: {
     policy: (): Promise<ApiResponse<AiPolicyVO>> => ipcRenderer.invoke(IpcChannel.aiPolicy),
+    usageStats: (): Promise<ApiResponse<AiUsageStatsVO>> => ipcRenderer.invoke(IpcChannel.aiUsageStats),
     referencePreviews: (ids: number[]): Promise<ApiResponse<AiReferencePreview[]>> => ipcRenderer.invoke(IpcChannel.aiReferencePreviews, ids),
     resetRules: (): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.aiResetRules),
     embeddingLimit: (value: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.aiEmbeddingLimit, value),

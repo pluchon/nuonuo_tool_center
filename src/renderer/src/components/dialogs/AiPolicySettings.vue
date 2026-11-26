@@ -29,21 +29,12 @@
         <div class="set-dlg__ctl"><span class="set-dlg__value">{{ data.dailyUsed.toLocaleString() }} 张</span></div>
       </div>
     </section>
-    <section class="set-dlg__group" aria-label="缓存用量">
-      <h3 class="set-dlg__group-title">缓存用量</h3>
-      <div class="set-dlg__row">
-        <span class="set-dlg__label">本地缓存命中</span>
-        <div class="set-dlg__ctl"><strong class="policy-number">{{ data.localHits.toLocaleString() }} 次</strong></div>
-      </div>
-      <div class="set-dlg__row set-dlg__row--sep">
-        <span class="set-dlg__label">云端前缀缓存命中</span>
-        <div class="set-dlg__ctl"><strong class="policy-number">{{ data.cloudCachedTokens.toLocaleString() }} token</strong></div>
-      </div>
-    </section>
+    <AiUsageDashboard />
   </template>
   <p v-if="error" role="alert">{{ error }}</p>
 </template>
 <script setup lang="ts">
+import AiUsageDashboard from './AiUsageDashboard.vue'
 import { computed, nextTick, onMounted, ref } from 'vue'
 import type { AiPolicyVO, ApiResponse } from '@shared/api'
 const data = ref<AiPolicyVO | null>(null)

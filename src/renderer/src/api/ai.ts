@@ -10,6 +10,9 @@ import type {
   AiStreamEvent
 } from '@shared/api'
 import { unwrap } from './request'
+import type { AiUsageStatsVO } from '@shared/api'
+
+export const fetchAiUsageStats = (): Promise<AiUsageStatsVO> => unwrap(window.api.ai.usageStats())
 
 // 诺诺能不能用（有没有配置云端凭证）
 export function fetchAiStatus(): Promise<AiStatusVO> {
