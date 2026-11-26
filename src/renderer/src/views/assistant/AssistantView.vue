@@ -1,6 +1,6 @@
 <template>
   <div class="assistant" @dragover="overFiles" @drop="dropFiles">
-    <section class="assistant__pane" aria-label="诺诺助手">
+    <section ref="paneRef" class="assistant__pane" aria-label="诺诺助手">
       <header class="assistant__head">
         <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" class="assistant__star">
           <defs>
@@ -68,20 +68,21 @@
               </button>
             </template>
           </div>
-          <Transition name="nn-pop">
-            <div v-if="ctx" class="assistant__ctx" role="menu" aria-label="对话操作" :style="{ top: `${ctx.top}px` }">
-              <button role="menuitem" class="assistant__mi" type="button" @click="startRename">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>重命名
-              </button>
-              <button role="menuitem" class="assistant__mi" type="button" @click="ctxPin">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l-1 6 4 3v2H6v-2l4-3zM12 15v6" /></svg>{{ ctxPinned ? '取消置顶' : '置顶' }}
-              </button>
-              <span class="assistant__mi-rule" aria-hidden="true" />
-              <button role="menuitem" class="assistant__mi assistant__mi--del" type="button" @click="ctxDelete">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>删除
-              </button>
-            </div>
-          </Transition>
+        </div>
+      </Transition>
+      <Transition name="nn-pop">
+        <div v-if="ctx" class="assistant__ctx" role="menu" aria-label="对话操作" data-ai-menu :style="{ top: `${ctx.top}px`, left: `${ctx.left}px` }">
+          <span class="assistant__caret assistant__caret--up assistant__caret--ctx" :style="{ left: `${ctx.caretLeft}px` }" aria-hidden="true" />
+          <button role="menuitem" class="assistant__mi" type="button" @click="startRename">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>重命名
+          </button>
+          <button role="menuitem" class="assistant__mi" type="button" @click="ctxPin">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l-1 6 4 3v2H6v-2l4-3zM12 15v6" /></svg>{{ ctxPinned ? '取消置顶' : '置顶' }}
+          </button>
+          <span class="assistant__mi-rule" aria-hidden="true" />
+          <button role="menuitem" class="assistant__mi assistant__mi--del" type="button" @click="ctxDelete">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>删除
+          </button>
         </div>
       </Transition>
 
@@ -440,10 +441,11 @@
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" /></svg>
                 </button>
                 <button
+                  v-else
                   class="assistant__send"
                   :class="{ 'assistant__send--on': store.canSend && !reading }"
                   type="button"
-                  :aria-label="store.waiting ? '加入队列' : '发送'"
+                  aria-label="发送"
                   :disabled="!store.canSend || reading"
                   @click="submitComposer"
                 >

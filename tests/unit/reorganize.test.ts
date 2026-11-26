@@ -8,6 +8,7 @@ import { hashBuffer } from '../../src/main/services/scan/imageProbe'
 const chatCallMock = vi.fn()
 const searchCallMock = vi.fn()
 const scheduleLookMock = vi.fn()
+const pushLookStateMock = vi.fn(async () => undefined)
 
 vi.mock('../../src/main/services/ai/bailianClient', () => ({
   chatCall: chatCallMock,
@@ -17,7 +18,8 @@ vi.mock('../../src/main/services/ai/bailianClient', () => ({
 }))
 
 vi.mock('../../src/main/services/ai/lookService', () => ({
-  scheduleLook: scheduleLookMock
+  scheduleLook: scheduleLookMock,
+  pushLookState: pushLookStateMock
 }))
 
 vi.mock('electron', () => ({ clipboard: {}, ClipboardItem: class {}, nativeImage: {}, shell: {} }))

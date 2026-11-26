@@ -192,6 +192,8 @@ async function pushState(): Promise<void> {
   }
 }
 
+export const pushLookState = pushState
+
 // 启动：上次退出时没做完的放回排队，接着查批量任务，再排新图
 export async function initLook(): Promise<void> {
   await archiveReviewedLookFailures()

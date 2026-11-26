@@ -46,6 +46,22 @@ function parseArgsObject(rawArgs: string): Record<string, unknown> {
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
 }
 
+function normalizeForDedup(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+function dedupTrailingNarration(finalText: string, stateRef: { current: HarnessState }): void {
+  const blocks = stateRef.current.blocks
+  const last = blocks.at(-1)
+  if (last?.type !== 'narration') return
+  const normFinal = normalizeForDedup(finalText)
+  const normLast = normalizeForDedup(last.text)
+  if (!normFinal || !normLast) return
+  if (normLast === normFinal || normFinal.includes(normLast)) {
+    stateRef.current = { ...stateRef.current, blocks: blocks.slice(0, -1) }
+  }
+}
+
 function appendBlock(stateRef: { current: HarnessState }, block: AiTimelineBlock): void {
   stateRef.current = {
     ...stateRef.current,
@@ -440,17 +456,9 @@ export async function runAgentLoop(
           continue
         }
       }
+      dedupTrailingNarration(response, stateRef)
       return { text: response, state: stateRef.current }
     }
-
-    // 交错叙事：绝不在 tool_calls 前发送 reset 擦除已输出的过渡念白，而是固化为 narration_commit
-    emitNarration(res.message.content, stateRef, onStream)
-    tail.push({
-      role: 'assistant',
-      content: res.message.content ?? '',
-      ...(res.reasoningContent ? { reasoning_content: res.reasoningContent } : {}),
-      tool_calls: calls
-    })
 
     const prepared: PreparedToolCall[] = calls.map((call, idx) => {
       const fn = call.type === 'function' ? call.function : null
@@ -517,6 +525,21 @@ export async function runAgentLoop(
       return { callId: call.id, actionId, toolName, tool, rawArgs, argsObj, startSummary }
     })
 
+    // 静默内部工具（如 reply_with_followup）不把同轮正文固化为叙事段，避免与最终回复重复
+    const onlySilentTools = prepared.every((item) => item.tool?.silent && !item.blockedResult)
+    if (!onlySilentTools) {
+      // 交错叙事：绝不在 tool_calls 前发送 reset 擦除已输出的过渡念白，而是固化为 narration_commit
+      emitNarration(res.message.content, stateRef, onStream)
+    }
+    tail.push({
+      role: 'assistant',
+      content: res.message.content ?? '',
+      ...(res.reasoningContent ? { reasoning_content: res.reasoningContent } : {}),
+      tool_calls: calls
+    })
+
+    const isVisibleAction = (item: PreparedToolCall): boolean => !(item.tool?.silent && !item.blockedResult)
+
     let stepNeedsRepair = false
     const finalizeItem = (
       item: PreparedToolCall,
@@ -528,7 +551,9 @@ export async function runAgentLoop(
       const summary = item.blockedResult
         ? item.blockedResult.summary
         : item.tool?.formatDone?.(item.argsObj, executed) ?? item.startSummary
-      finishAction(item.actionId, item.toolName ?? 'unknown', summary, status, stateRef, onStream)
+      if (isVisibleAction(item)) {
+        finishAction(item.actionId, item.toolName ?? 'unknown', summary, status, stateRef, onStream)
+      }
 
       if (item.toolName && !item.blockedResult) {
         const prevNotices = stateRef.current.memoryNotices
@@ -541,6 +566,7 @@ export async function runAgentLoop(
       tail.push({ role: 'tool', tool_call_id: item.callId, content: executed.content })
 
       if (stateRef.current.discussionReply) {
+        dedupTrailingNarration(stateRef.current.discussionReply.text, stateRef)
         return { text: stateRef.current.discussionReply.text, state: stateRef.current }
       }
       if (stateRef.current.directoryProposal) {
@@ -556,7 +582,9 @@ export async function runAgentLoop(
       prepared.length > 1 && prepared.every((item) => item.tool?.sideEffect === 'read')
     if (allReadOnly) {
       for (const item of prepared) {
-        startAction(item.actionId, item.toolName ?? 'unknown', item.startSummary, stateRef, onStream)
+        if (isVisibleAction(item)) {
+          startAction(item.actionId, item.toolName ?? 'unknown', item.startSummary, stateRef, onStream)
+        }
       }
       const snapshotState = stateRef.current
       let results: ToolExecutionResult[]
@@ -591,7 +619,9 @@ export async function runAgentLoop(
           markRunningActionsAborted(stateRef, onStream)
           return { text: '', state: stateRef.current, interrupted: true }
         }
-        startAction(item.actionId, item.toolName ?? 'unknown', item.startSummary, stateRef, onStream)
+        if (isVisibleAction(item)) {
+          startAction(item.actionId, item.toolName ?? 'unknown', item.startSummary, stateRef, onStream)
+        }
         let executed: ToolExecutionResult
         try {
           executed = item.blockedResult

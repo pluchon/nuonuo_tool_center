@@ -24,7 +24,7 @@ import { verifyImageFile } from '../fileOps/fileOpRecovery'
 import { enqueue, trashPath } from '../fileOps/fileOpsService'
 import { isRatingBusy } from '../rating/ratingService'
 import { getScanState } from '../scan/scanService'
-import { scheduleLook } from './lookService'
+import { pushLookState, scheduleLook } from './lookService'
 import { getOrganizeState, isOrganizing } from './organizeService'
 
 const log = getLogger('reorganize')
@@ -508,6 +508,7 @@ export async function startReorganizeRelook(): Promise<ReorganizeRelookResultVO>
 
   if (enqueued > 0) {
     log.info(`重新 AI 整理：排进 ${enqueued} 张参考上下文重看`)
+    await pushLookState()
     scheduleLook()
   }
   return { enqueued }

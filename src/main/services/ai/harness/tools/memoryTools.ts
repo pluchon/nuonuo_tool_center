@@ -81,11 +81,7 @@ export const replyWithFollowupTool = defineTool({
   description:
     '开放式讨论已有明确下一步时，用这个工具一次提交本轮完整回答和一条用户可能想发送的后续指令。闲聊、已有结论或尚需查询图库时直接回答或调用相应工具。',
   sideEffect: 'read',
-  formatStart: () => '整理回复建议',
-  formatDone(_args, result) {
-    const parsed = parseToolJson(result.content)
-    return isToolError(parsed) ? '整理回复建议 · 未完成' : '整理回复建议 · 已生成'
-  },
+  silent: true,
   parameters: {
     type: 'object',
     required: ['answer', 'suggestion'],

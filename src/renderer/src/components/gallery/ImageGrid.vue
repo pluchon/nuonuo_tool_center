@@ -83,7 +83,7 @@
                   draggable="false"
                 />
                 <span v-if="item(t.id).thumb === 'PENDING' && !item(t.id).missing" class="tile__shim" role="img" aria-label="缩略图生成中" />
-                <span v-if="aiView && look.isActive(t.id)" class="tile__refreshing" role="status" aria-label="重新识别中">
+                <span v-if="look.isActive(t.id)" class="tile__refreshing" role="status" aria-label="重新识别中">
                   <span class="tile__spinner" />
                 </span>
                 <span v-if="item(t.id).missing" class="tile__bad tile__bad--missing">

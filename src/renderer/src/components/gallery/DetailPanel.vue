@@ -14,7 +14,7 @@
       <div class="detail-panel__preview">
         <img v-if="detail.thumb === 'READY'" :key="detail.hash" class="detail-panel__pic nn-appear" :class="{ 'detail-panel__pic--off': location?.offline }" :src="thumbUrl(detail.hash)" alt="" draggable="false" />
         <svg v-else width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>
-        <div v-if="aiView && look.isActive(detail.imageId)" class="detail-panel__loading" role="status" aria-label="重新识别中">
+        <div v-if="look.isActive(detail.imageId)" class="detail-panel__loading" role="status" aria-label="重新识别中">
           <span class="detail-panel__spinner" />
         </div>
         <button class="detail-panel__zoom" type="button" aria-label="查看大图" @click="viewer.show()"></button>

@@ -108,12 +108,13 @@ export default defineComponent({
       }
     }
     watch([formattedDraft, () => store.currentId], () => { previewDraft.value = false })
+    const paneRef = ref<HTMLElement | null>(null)
     const histList = ref<HTMLElement | null>(null)
     // 打开着的弹出：对话记录 / 范围下拉 / “+”菜单
     const menu = ref<'hist' | 'dir' | 'plus' | null>(null)
     const fileRef = ref<HTMLInputElement | null>(null)
-    // 对话记录里的右键菜单
-    const ctx = ref<{ id: number; top: number } | null>(null)
+    // 对话记录里的右键菜单（渲染在面板层避免父级 backdrop-filter 阻断子层模糊）
+    const ctx = ref<{ id: number; top: number; left: number; caretLeft: number } | null>(null)
     const renaming = ref<number | null>(null)
     const renameDraft = ref('')
     // 选中的结果图（消息 id:图片 id）和刚复制过的回复
@@ -241,13 +242,20 @@ export default defineComponent({
       menu.value = menu.value === which ? null : which
       ctx.value = null
     }
+    watch(menu, (m) => {
+      if (m !== 'hist') ctx.value = null
+    })
     const closeMenus = (): void => {
       menu.value = null
       ctx.value = null
     }
     // 点在弹出和它的按钮以外的地方就关掉
     const onDocDown = (e: MouseEvent): void => {
-      if (menu.value && !(e.target as HTMLElement).closest('[data-ai-menu]')) {
+      const target = e.target as HTMLElement | null
+      if (ctx.value && e.button === 0 && !target?.closest('.assistant__ctx')) {
+        ctx.value = null
+      }
+      if (menu.value && !target?.closest('[data-ai-menu]')) {
         closeMenus()
       }
     }
@@ -276,11 +284,21 @@ export default defineComponent({
       picked.value = null
       await store.open(id)
     }
-    // 右键：菜单出现在这一行下面
+    // 右键：菜单出现在这一行下面并贴合助手面板坐标
     const openCtx = (id: number, e: MouseEvent): void => {
       const row = e.currentTarget as HTMLElement
-      const list = histList.value
-      ctx.value = { id, top: row.offsetTop - (list?.scrollTop ?? 0) + row.offsetHeight + 10 }
+      const pane = paneRef.value?.getBoundingClientRect()
+      const rowRect = row.getBoundingClientRect()
+      if (!pane) return
+      const menuW = 152
+      const menuH = 122
+      const padEdge = 12
+      const anchorX = e.clientX > 0 ? e.clientX - pane.left : rowRect.left - pane.left + 44
+      const left = Math.max(padEdge, Math.min(pane.width - menuW - padEdge, Math.round(anchorX - 36)))
+      const rawTop = Math.round(rowRect.bottom - pane.top + 8)
+      const top = Math.max(padEdge, Math.min(pane.height - menuH - padEdge, rawTop))
+      const caretLeft = Math.max(16, Math.min(menuW - 28, Math.round(anchorX - left - 6)))
+      ctx.value = { id, top, left, caretLeft }
     }
     const startRename = async (): Promise<void> => {
       const c = store.conversations.find((x) => x.id === ctx.value?.id)
@@ -560,6 +578,7 @@ export default defineComponent({
       onFilePicked,
       pasteFromClipboard,
       usedPercent, showCompact, commandSelected, selectCompact, onPaste, overFiles, dropFiles,
+      paneRef,
       histList,
       menu,
       ctx,

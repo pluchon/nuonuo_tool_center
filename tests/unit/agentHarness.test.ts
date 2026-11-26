@@ -738,4 +738,30 @@ describe('AgentHarness 集成动态工具与通用视觉过滤', () => {
       await pg.query('DELETE FROM ai_memory')
     }
   })
+
+  it('reply_with_followup 静默提交回答且不产生重复叙事段落或过程步骤行', async () => {
+    const story = '从前有一只住在钟楼顶层的小白猫，每天帮月亮擦拭微光。'
+    script.push({
+      content: story,
+      tool_calls: [
+        {
+          id: 'rf1',
+          type: 'function',
+          function: {
+            name: 'reply_with_followup',
+            arguments: JSON.stringify({ answer: story, suggestion: '换一个温暖一点的结局' })
+          }
+        }
+      ]
+    })
+
+    const q = await ask({ conversationId: null, text: '讲个睡前小故事', scope: null, includeR18: false })
+    const events: Array<{ kind: string; tool?: string; text?: string }> = []
+    const reply = await answer(q.conversation.id, undefined, (ev) => events.push(ev))
+
+    expect(reply.text).toBe(story)
+    expect(reply.blocks ?? []).toEqual([])
+    expect(events.some((e) => e.kind === 'narration_commit')).toBe(false)
+    expect(events.some((e) => e.kind === 'action_start' || e.kind === 'action_end')).toBe(false)
+  })
 })

@@ -98,6 +98,12 @@
       clip-path: polygon(0 0, 100% 0, 0 100%);
     }
 
+    &--ctx {
+      right: auto;
+      border-left: 1px solid var(--look-edge);
+      border-top: 1px solid var(--look-edge);
+    }
+
     &--down {
       left: 18px;
       bottom: -6px;
@@ -209,10 +215,13 @@
   }
 
   &__ctx {
-    z-index: 2;
-    left: 46px;
-    width: 150px;
-    background: var(--ai-ctx-bg);
+    z-index: 25;
+    width: 152px;
+    background: var(--look-pop-bg);
+    backdrop-filter: var(--look-pop-blur);
+    -webkit-backdrop-filter: var(--look-pop-blur);
+    border-color: var(--look-edge);
+    box-shadow: var(--look-pop-shadow);
   }
 
   &__mi {

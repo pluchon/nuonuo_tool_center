@@ -25,6 +25,7 @@ export interface RegisteredTool {
   description: string
   parameters: ObjectSchema
   sideEffect?: ToolSideEffect
+  silent?: boolean
   formatStart?: (args: Record<string, unknown>) => string
   formatDone?: (args: Record<string, unknown>, result: ToolExecutionResult) => string
   execute: (args: Record<string, unknown>, env: ToolEnv, state: HarnessState) => Promise<ToolExecutionResult> | ToolExecutionResult

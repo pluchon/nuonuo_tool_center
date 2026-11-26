@@ -72,7 +72,6 @@ body {
 // 诺诺助手的弹出菜单：跟随主题透明度与磨砂变量
 :root {
   --ai-menu-bg: var(--look-pop-bg);
-  --ai-ctx-bg: var(--look-pop-bg);
   --ai-menu-line: var(--a-line2);
   --ai-menu-shadow: 0 22px 44px -22px rgba(var(--sh), 0.6);
   --ai-del-ink: var(--c-i-C25B85);
@@ -80,7 +79,6 @@ body {
 
 :root.dark {
   --ai-menu-bg: var(--look-pop-bg);
-  --ai-ctx-bg: var(--look-pop-bg);
   --ai-menu-line: rgba(255, 255, 255, 0.12);
   --ai-menu-shadow: 0 22px 44px -18px rgba(0, 0, 0, 0.75);
   --ai-del-ink: #f29bba;
