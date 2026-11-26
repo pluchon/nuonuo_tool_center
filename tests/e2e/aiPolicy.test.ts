@@ -5,7 +5,7 @@ import {openDatabase, closeDatabase} from '../../src/main/db/client'
 import {closeLeftoverApps, freshCase, launchApp} from './support/app'
 
 afterEach(closeLeftoverApps)
-it('在 AI 设置调整每日上限、纠正和忘记推断偏好，重新打开后设置生效', async () => {
+it('在 AI 设置展示后台画面索引与缓存用量并保存每日上限，且不渲染长期记忆或偏好控制', async () => {
   const dirs = freshCase('policy-settings')
   mkdirSync(dirs.data,{recursive:true})
   const {pg} = await openDatabase(join(dirs.data,'pgdata'),resolve('drizzle'))
@@ -19,6 +19,15 @@ it('在 AI 设置调整每日上限、纠正和忘记推断偏好，重新打开
     return desktop
   }
   const first = await open()
+  expect(await first.page.getByRole('region', { name: '后台画面索引' }).isVisible()).toBe(true)
+  expect(await first.page.getByRole('region', { name: '缓存用量' }).isVisible()).toBe(true)
+  expect(await first.page.getByRole('region', { name: '长期记忆' }).count()).toBe(0)
+  expect(await first.page.getByText('长期记忆', { exact: true }).count()).toBe(0)
+  expect(await first.page.getByText('测试推断', { exact: true }).count()).toBe(0)
+  expect(await first.page.getByRole('button', { name: '纠正', exact: true }).count()).toBe(0)
+  expect(await first.page.getByRole('button', { name: '忘记', exact: true }).count()).toBe(0)
+  expect(await first.page.getByLabel('偏好内容').count()).toBe(0)
+  expect(await first.page.getByRole('button', { name: '下次重新规划', exact: true }).count()).toBe(0)
   const rightEdges = await first.page.locator('.set-dlg__group[aria-label="后台画面索引"] .set-dlg__ctl > :last-child').evaluateAll(
     elements => elements.map(el => el.getBoundingClientRect().right))
   expect(Math.max(...rightEdges) - Math.min(...rightEdges)).toBeLessThan(1)
@@ -27,26 +36,17 @@ it('在 AI 设置调整每日上限、纠正和忘记推断偏好，重新打开
   const limit = first.page.getByLabel('后台向量每日上限')
   await limit.fill('750')
   await limit.press('Tab')
-  await first.page.getByRole('button',{name:'纠正'}).click()
-  const editor = first.page.getByLabel('偏好内容')
-  await editor.fill(' ')
-  await editor.press('Enter')
-  expect(await first.page.getByRole('alert').count()).toBe(0)
-  await editor.fill('尚在选词')
-  const composingHandled = await editor.evaluate((input) =>
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true })))
-  expect(composingHandled).toBe(true)
-  expect((await first.page.evaluate(() => window.api.ai.policy())).data?.preferences[0].content).toBe('测试推断')
-  await editor.fill('测试明确偏好')
-  await editor.press('Enter')
-  await first.page.getByText('用户明说',{exact:true}).waitFor()
+  await expect.poll(async () => (await first.page.evaluate(() => window.api.ai.policy())).data?.dailyLimit).toBe(750)
   await first.app.close()
   const next = await open()
   expect(await next.page.getByLabel('后台向量每日上限').inputValue()).toBe('750')
-  await next.page.getByText('测试明确偏好',{exact:true}).waitFor()
-  await next.page.getByRole('button',{name:'忘记'}).click()
-  await next.page.getByText('暂无记忆',{exact:true}).waitFor()
+  expect(await next.page.getByRole('region', { name: '后台画面索引' }).isVisible()).toBe(true)
+  expect(await next.page.getByRole('region', { name: '缓存用量' }).isVisible()).toBe(true)
+  expect(await next.page.getByText('本地缓存命中', { exact: true }).isVisible()).toBe(true)
   expect(await next.page.getByText('云端前缀缓存命中',{exact:true}).isVisible()).toBe(true)
+  expect(await next.page.getByRole('region', { name: '长期记忆' }).count()).toBe(0)
+  expect(await next.page.getByRole('button', { name: '纠正', exact: true }).count()).toBe(0)
+  expect(await next.page.getByRole('button', { name: '忘记', exact: true }).count()).toBe(0)
   await next.page.getByRole('button', { name: '不限量', exact: true }).click()
   await expect.poll(async () => (await next.page.evaluate(() => window.api.ai.policy())).data?.dailyLimit).toBe(-1)
   await next.page.getByRole('button', { name: '每日限量', exact: true }).click()

@@ -50,6 +50,11 @@ export interface ChatCallInput extends CallMeta {
   requiredTool?: string
   timeoutMs?: number
   maxTokens?: number
+  temperature?: number
+  presencePenalty?: number
+  parallelToolCalls?: boolean
+  enableThinking?: boolean
+  thinkingBudget?: number
   onDelta?: (delta: string) => void
 }
 
@@ -59,6 +64,7 @@ export interface ChatCallResult {
   finishReason: string | null
   usage: NormalizedUsage
   cacheUsage?: AiReplyCacheUsage
+  reasoningContent?: string
 }
 
 // 带联网搜索的调用结果：sources 只来自搜索工具
@@ -122,19 +128,35 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.name : 'Error'
 }
 
-// Chat Completions 调用：关闭思考，固定工具集，调用后记账
+function readReasoningContent(message: unknown): string | undefined {
+  const rc = (message as { reasoning_content?: unknown } | null | undefined)?.reasoning_content
+  return typeof rc === 'string' && rc.length > 0 ? rc : undefined
+}
+
+// Chat Completions 调用：按需配置思考与采样参数，固定工具集，调用后记账
 export async function chatCall(input: ChatCallInput): Promise<ChatCallResult> {
   assertCacheMarks(input.messages)
   const t0 = Date.now()
   try {
+    const defaultChatSampling = input.kind === 'chat' && !input.requiredTool && !input.enableThinking
+    const temperature = input.temperature ?? (defaultChatSampling ? 0.78 : undefined)
+    const presencePenalty = input.presencePenalty ?? (defaultChatSampling ? 0.25 : undefined)
     const body = {
       model: input.model,
       messages: input.messages,
-      ...(input.tools && input.tools.length > 0 ? { tools: input.tools } : {}),
+      ...(input.tools && input.tools.length > 0
+        ? {
+            tools: input.tools,
+            parallel_tool_calls: input.parallelToolCalls ?? true
+          }
+        : {}),
       ...(input.requiredTool ? { tool_choice: { type: 'function', function: { name: input.requiredTool } } } : {}),
       ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-      // 百炼扩展参数放在顶层；思考会让输出 token 翻好几倍，诺诺的任务用不到
-      enable_thinking: false
+      ...(temperature !== undefined ? { temperature } : {}),
+      ...(presencePenalty !== undefined ? { presence_penalty: presencePenalty } : {}),
+      // 百炼扩展参数放在顶层
+      enable_thinking: input.enableThinking === true,
+      ...(input.enableThinking && input.thinkingBudget ? { thinking_budget: input.thinkingBudget } : {})
     }
     const timeout = input.timeoutMs ?? BAILIAN_CONFIG.chatTimeoutMs
     if (input.onDelta) {
@@ -156,15 +178,26 @@ export async function chatCall(input: ChatCallInput): Promise<ChatCallResult> {
         if (typeof choice.message.content === 'string' && choice.message.content.length > 0) {
           input.onDelta(choice.message.content)
         }
-        return { message: choice.message, finishReason: choice.finish_reason, usage, cacheUsage: reportedChatCache(res.usage) }
+        const reasoningContent = readReasoningContent(choice.message)
+        return {
+          message: choice.message,
+          finishReason: choice.finish_reason,
+          usage,
+          cacheUsage: reportedChatCache(res.usage),
+          ...(reasoningContent ? { reasoningContent } : {})
+        }
       }
       let text = ''
+      let reasoningContent = ''
       let finishReason: string | null = null
       let rawUsage: unknown
       const toolCallMap = new Map<number, OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall>()
       for await (const chunk of stream) {
         const choice = chunk.choices?.[0]
-        const delta = choice?.delta
+        const delta = choice?.delta as (OpenAI.Chat.Completions.ChatCompletionChunk.Choice.Delta & { reasoning_content?: string }) | undefined
+        if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+          reasoningContent += delta.reasoning_content
+        }
         if (typeof delta?.content === 'string' && delta.content.length > 0) {
           text += delta.content
           input.onDelta(delta.content)
@@ -195,7 +228,13 @@ export async function chatCall(input: ChatCallInput): Promise<ChatCallResult> {
       }
       const usage = normalizeChatUsage(rawUsage)
       await record(input, usage, Date.now() - t0)
-      return { message, finishReason, usage, cacheUsage: reportedChatCache(rawUsage) }
+      return {
+        message,
+        finishReason,
+        usage,
+        cacheUsage: reportedChatCache(rawUsage),
+        ...(reasoningContent ? { reasoningContent } : {})
+      }
     }
     const res = await getBailianClient().chat.completions.create(body as never, {
       timeout,
@@ -204,7 +243,14 @@ export async function chatCall(input: ChatCallInput): Promise<ChatCallResult> {
     const usage = normalizeChatUsage(res.usage)
     await record(input, usage, Date.now() - t0)
     const choice = res.choices[0]
-    return { message: choice.message, finishReason: choice.finish_reason, usage, cacheUsage: reportedChatCache(res.usage) }
+    const reasoningContent = readReasoningContent(choice.message)
+    return {
+      message: choice.message,
+      finishReason: choice.finish_reason,
+      usage,
+      cacheUsage: reportedChatCache(res.usage),
+      ...(reasoningContent ? { reasoningContent } : {})
+    }
   } catch (err) {
     await record(input, EMPTY_USAGE, Date.now() - t0, errorText(err))
     throw err

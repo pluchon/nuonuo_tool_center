@@ -8,6 +8,7 @@ import {
   type TagCatalogVO
 } from '@shared/api'
 import { BizError } from '../common/bizError'
+import { bumpLibraryVersion } from '../common/readCache'
 import { getDatabase } from '../db/client'
 import { recordEvent, recordEvents } from './ai/eventService'
 import { updateDisplayName, updateR18 } from '../repositories/imageRepository'
@@ -79,6 +80,7 @@ export async function renameImage(imageId: number, raw: unknown, opts: { record?
   }
   const value = name === '' ? null : name
   await updateDisplayName(id, value)
+  bumpLibraryVersion()
   if (opts.record !== false && value) {
     await recordEvent('rename', id, { to: value })
   }
@@ -92,12 +94,14 @@ export async function setR18(imageIds: unknown, value: unknown): Promise<number>
   }
   const ids = await checkImageIds(imageIds)
   await updateR18(ids, value)
+  bumpLibraryVersion()
   return ids.length
 }
 
 // 给图加标签：名字或别名命中已有标签就用它（分类不变），否则在指定分类下新建；已有的不重复加，标签已满的图片跳过
 export async function addTag(dto: AddTagDTO, opts: { record?: boolean } = {}): Promise<AddTagResultVO> {
   const result = await addTagInTx(dto)
+  bumpLibraryVersion()
   // 事件在事务外记（PGlite 只有一条连接，事务里再查会卡住）；采用 AI 建议时由建议那边记
   if (opts.record !== false && result.added > 0) {
     await recordEvents('tag.add', (dto.imageIds as number[]).slice(0, 50), { tag: result.tag.name })
@@ -177,6 +181,7 @@ export async function removeTag(imageIds: unknown, tagId: unknown): Promise<numb
   const ids = await checkImageIds(imageIds)
   const removed = await removeImageTags(ids, tagId as number)
   if (removed > 0) {
+    bumpLibraryVersion()
     await recordEvents('tag.remove', ids.slice(0, 50), { tagId })
   }
   return removed

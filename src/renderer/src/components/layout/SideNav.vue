@@ -35,12 +35,12 @@
             />
             <button
               class="side-nav__item"
-              :class="{ 'side-nav__item--on': row.active, 'side-nav__item--tree': row.tree }"
+              :class="{ 'side-nav__item--on': isActiveRow(row), 'side-nav__item--tree': row.tree }"
               :style="row.depth ? { marginLeft: `${row.depth * 14 + 2}px`, paddingLeft: '2px' } : undefined"
               type="button"
               :disabled="row.disabled"
-              :aria-current="row.active ? 'page' : undefined"
-              @click="row.go"
+              :aria-current="isActiveRow(row) ? 'page' : undefined"
+              @click="onRowClick(row)"
             >
               <span
                 v-if="row.tree"
@@ -60,7 +60,7 @@
                 height="16"
                 viewBox="0 0 24 24"
                 fill="none"
-                :stroke="row.active ? 'var(--a-ink)' : row.ink"
+                :stroke="isActiveRow(row) ? 'var(--a-ink)' : row.ink"
                 stroke-width="2"
                 stroke-linecap="round"
                 stroke-linejoin="round"

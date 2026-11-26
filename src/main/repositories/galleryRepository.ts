@@ -234,8 +234,10 @@ export async function findGalleryRows(f: GalleryFilter): Promise<GalleryRow[]> {
   if (f.more) {
     conds.push(...moreConditions(f.more, f.now ?? new Date()))
   }
+  const taggedColumn =
+    f.scope === 'all' ? sql<boolean>`true` : f.scope === 'untagged' ? sql<boolean>`false` : taggedExpr
   return db
-    .select(ROW_COLUMNS)
+    .select({ ...ROW_COLUMNS, tagged: taggedColumn })
     .from(imageFile)
     .innerJoin(image, eq(image.id, imageFile.imageId))
     .innerJoin(libraryRoot, eq(libraryRoot.id, imageFile.rootId))

@@ -113,10 +113,10 @@ describe('诺诺助手', () => {
       await page.locator('.assistant__idea').first().waitFor()
       await s('01-new')
 
-      // 明确按标签查询，始终在本地处理。
+      // 云端就绪时即使按标签查询也经由模型检索并自然作答，记录缓存命中率。
       await askAndWait(page, '找标签为猫的图')
-      await expect(page.locator('.assistant__how').last().textContent()).resolves.toContain('找到 1 张')
-      expect(await page.locator('.assistant__cache').last().innerText()).toBe('缓存命中率 —')
+      await expect(page.locator('.assistant__reply').last().locator('.assistant__step').last().textContent()).resolves.toContain('1 张')
+      expect(await page.locator('.assistant__cache').last().innerText()).toBe('缓存命中率 60%')
       await expect(page.locator('.assistant__reply').last().locator('.assistant__pic').count()).resolves.toBe(1)
 
       // 受保护结果在悬停、单击和历史会话中都保持模糊，双击才加载原图。
@@ -238,11 +238,11 @@ describe('诺诺助手', () => {
     }
     expect(errors).toEqual([])
     await app.close()
-    // 指令预测也使用同一接口；两次语义检索分别只应产生一次聊天请求。
+    // 指令预测使用 predict 接口；浅/深色共 6 轮云端检索，每轮含工具调用与最终回答 2 次 chat 请求。
     await openDatabase(join(dirs.data, 'pgdata'), resolve('drizzle'))
     try {
       const { rows } = await getDatabase().pg.query<{ count: number }>("select count(*)::int as count from api_usage where api='chat'")
-      expect(rows[0].count).toBe(2)
+      expect(rows[0].count).toBe(12)
     } finally {
       await closeDatabase()
     }

@@ -6,7 +6,7 @@ import { useGalleryStore } from '@/stores/gallery'
 import { useLibraryStore } from '@/stores/library'
 import { usePickerStore } from '@/stores/picker'
 import { useScanStore } from '@/stores/scan'
-import { sameDir, useViewStore, type GalleryView } from '@/stores/view'
+import { sameDir, useViewStore, type DirRef, type GalleryView, type MainPage } from '@/stores/view'
 import { ICON } from '@/theme/icons'
 
 // 目录树的连线：一段竖线或一个圆角拐角（照原型 guidesOf）
@@ -31,7 +31,6 @@ export interface NavRow {
   // 状态文字（扫描中 / 找不到）的颜色，以及找不到时变灰的名字颜色；没有状态时为空
   countInk: string
   labelInk: string
-  active: boolean
   // 目录树行：箭头位占位，有子文件夹时显示箭头
   tree: boolean
   hasChildren: boolean
@@ -42,7 +41,9 @@ export interface NavRow {
   ref: FolderRefDTO | null
   top: boolean
   disabled: boolean
-  go: () => void
+  viewTarget?: Exclude<GalleryView, 'dir'>
+  pageTarget?: Exclude<MainPage, 'gallery'>
+  dirTarget?: DirRef
 }
 
 // 目录树里正在输入名字的一行（新建或改名）
@@ -99,18 +100,12 @@ export default defineComponent({
     const gallery = useGalleryStore()
 
     const num = (n: number | undefined): string => String(n ?? 0)
-    // 图库页上的视图行才会高亮（在标签管理页时只高亮“标签管理”）
-    const onGallery = (): boolean => viewStore.page === 'gallery'
-    const viewRow = (key: Exclude<GalleryView, 'dir'>, label: string, count: number | undefined, icon: string, ink: string): NavRow => ({
+    const itemRow = (
+      fields: Pick<NavRow, 'key' | 'label' | 'count' | 'icon' | 'ink'> & Partial<NavRow>
+    ): NavRow => ({
       type: 'item',
-      key,
-      label,
-      count: num(count),
-      icon,
-      ink,
       countInk: '',
       labelInk: '',
-      active: onGallery() && viewStore.view === key,
       tree: false,
       hasChildren: false,
       expanded: false,
@@ -119,8 +114,10 @@ export default defineComponent({
       ref: null,
       top: false,
       disabled: false,
-      go: () => viewStore.show(key)
+      ...fields
     })
+    const viewRow = (key: Exclude<GalleryView, 'dir'>, label: string, count: number | undefined, icon: string, ink: string): NavRow =>
+      itemRow({ key, label, count: num(count), icon, ink, viewTarget: key })
 
     // 源目录顶层行的状态：正在扫描（绿字“扫描中”）优先，其次找不到（橙字“找不到”、名字变灰）
     const sourceState = (s: SourceRootVO): Pick<NavRow, 'count' | 'ink' | 'countInk' | 'labelInk'> => {
@@ -167,23 +164,22 @@ export default defineComponent({
         if (edit?.mode === 'rename' && folderKey(edit.ref) === key) {
           out.push(editRow(`edit:${key}`, depth, guides, kind))
         } else {
-          out.push({
-            type: 'item',
-            key,
-            label,
-            ...state,
-            icon: hasChildren ? icons[1] : icons[0],
-            active: onGallery() && viewStore.view === 'dir' && sameDir(viewStore.dir, toDirRef(ref)),
-            tree: true,
-            hasChildren,
-            expanded,
-            depth,
-            guides,
-            ref,
-            top: depth === 0,
-            disabled: false,
-            go: () => viewStore.showDir(toDirRef(ref))
-          })
+          out.push(
+            itemRow({
+              key,
+              label,
+              ...state,
+              icon: hasChildren ? icons[1] : icons[0],
+              tree: true,
+              hasChildren,
+              expanded,
+              depth,
+              guides,
+              ref,
+              top: depth === 0,
+              dirTarget: toDirRef(ref)
+            })
+          )
         }
         const kids: DirNodeVO[] = expanded ? folders.childrenOf(ref) : []
         const childCont = depth >= 1 ? [...cont, !isLast] : []
@@ -204,11 +200,18 @@ export default defineComponent({
       return out
     }
 
-    const sections = computed<NavSection[]>(() => {
-      const ov = library.overview
-      const c = ov?.counts
-      const sources = treeRows(
-        (ov?.sources ?? []).map((s) => ({
+    const galleryRows = computed<NavRow[]>(() => {
+      const c = library.overview?.counts
+      return [
+        viewRow('all', '全部图片', c?.tagged, ICON.img, 'var(--a)'),
+        viewRow('untagged', '还没打标签', c?.untagged, ICON.tag, 'var(--c-b-E8964A)'),
+        viewRow('recent', '最近导入', c?.recent, ICON.clock, 'var(--a)')
+      ]
+    })
+
+    const sourceRows = computed<Array<NavRow | EditRow>>(() =>
+      treeRows(
+        (library.overview?.sources ?? []).map((s) => ({
           ref: { kind: 'source', id: s.id, sub: '' } as FolderRefDTO,
           label: s.name,
           hasChildren: s.hasChildren && !s.offline,
@@ -216,8 +219,11 @@ export default defineComponent({
         })),
         'source'
       )
-      const categories = treeRows(
-        (ov?.categories ?? []).map((d) => ({
+    )
+
+    const categoryRows = computed<Array<NavRow | EditRow>>(() =>
+      treeRows(
+        (library.overview?.categories ?? []).map((d) => ({
           ref: { kind: 'category', path: d.name } as FolderRefDTO,
           label: d.name,
           hasChildren: d.hasChildren,
@@ -225,65 +231,66 @@ export default defineComponent({
         })),
         'category'
       )
+    )
+
+    const organizeRows = computed<NavRow[]>(() => {
+      const c = library.overview?.counts
       return [
-        {
-          title: '图库',
-          dot: 'var(--a)',
-          add: null,
-          rows: [
-            viewRow('all', '全部图片', c?.tagged, ICON.img, 'var(--a)'),
-            viewRow('untagged', '还没打标签', c?.untagged, ICON.tag, 'var(--c-b-E8964A)'),
-            viewRow('recent', '最近导入', c?.recent, ICON.clock, 'var(--a)')
-          ],
-          hint: ''
-        },
-        {
-          title: '源目录',
-          dot: 'var(--c-b-3F8F7B)',
-          add: { label: '导入源目录', run: () => void picker.openImport(), disabled: false },
-          rows: sources,
-          hint: '还没有源目录'
-        },
-        {
-          title: '类目录',
-          dot: 'var(--c-b-D86F95)',
-          add: { label: '新建类目录', run: () => void folders.startCreate({ kind: 'category', path: '' }), disabled: false },
-          rows: categories,
-          hint: '还没有类目录'
-        },
-        {
-          title: '整理',
-          dot: 'var(--c-b-B8732E)',
-          add: null,
-          rows: [
-            {
-              ...viewRow('all', '标签管理', c?.tags, ICON.tag, 'var(--c-b-B8732E)'),
-              key: 'tags',
-              active: viewStore.page === 'tags',
-              go: () => viewStore.showTags()
-            },
-            viewRow('r18', 'R-18 图', c?.r18, ICON.lock, 'var(--c-b-C2335A)')
-          ],
-          hint: ''
-        },
-        {
-          title: 'AI',
-          dot: '#5B8DEF',
-          add: null,
-          rows: [
-            {
-              ...viewRow('all', '诺诺助手', 0, ICON.spark, '#5B8DEF'),
-              key: 'assistant',
-              count: '',
-              active: viewStore.page === 'assistant',
-              go: () => viewStore.showAssistant()
-            },
-            viewRow('ai', 'AI 建议', c?.aiSuggest, ICON.bulb, '#5B8DEF')
-          ],
-          hint: ''
-        }
+        itemRow({ key: 'tags', label: '标签管理', count: num(c?.tags), icon: ICON.tag, ink: 'var(--c-b-B8732E)', pageTarget: 'tags' }),
+        viewRow('r18', 'R-18 图', c?.r18, ICON.lock, 'var(--c-b-C2335A)')
       ]
     })
+
+    const aiRows = computed<NavRow[]>(() => {
+      const c = library.overview?.counts
+      return [
+        itemRow({ key: 'assistant', label: '诺诺助手', count: '', icon: ICON.spark, ink: '#5B8DEF', pageTarget: 'assistant' }),
+        viewRow('ai', 'AI 建议', c?.aiSuggest, ICON.bulb, '#5B8DEF')
+      ]
+    })
+
+    const addSource = { label: '导入源目录', run: (): void => void picker.openImport(), disabled: false }
+    const addCategory = { label: '新建类目录', run: (): void => void folders.startCreate({ kind: 'category', path: '' }), disabled: false }
+
+    const sections = computed<NavSection[]>(() => [
+      { title: '图库', dot: 'var(--a)', add: null, rows: galleryRows.value, hint: '' },
+      { title: '源目录', dot: 'var(--c-b-3F8F7B)', add: addSource, rows: sourceRows.value, hint: '还没有源目录' },
+      { title: '类目录', dot: 'var(--c-b-D86F95)', add: addCategory, rows: categoryRows.value, hint: '还没有类目录' },
+      { title: '整理', dot: 'var(--c-b-B8732E)', add: null, rows: organizeRows.value, hint: '' },
+      { title: 'AI', dot: '#5B8DEF', add: null, rows: aiRows.value, hint: '' }
+    ])
+
+    // 选中状态和点击路由统一查表，避免切换视图/拖放时重建目录树
+    const isActiveRow = (row: NavRow): boolean => {
+      if (row.pageTarget) {
+        return viewStore.page === row.pageTarget
+      }
+      if (viewStore.page !== 'gallery') {
+        return false
+      }
+      if (row.viewTarget) {
+        return viewStore.view === row.viewTarget
+      }
+      if (row.dirTarget) {
+        return viewStore.view === 'dir' && sameDir(viewStore.dir, row.dirTarget)
+      }
+      return false
+    }
+
+    const onRowClick = (row: NavRow): void => {
+      if (row.disabled) {
+        return
+      }
+      if (row.pageTarget === 'tags') {
+        viewStore.showTags()
+      } else if (row.pageTarget === 'assistant') {
+        viewStore.showAssistant()
+      } else if (row.viewTarget) {
+        viewStore.show(row.viewTarget)
+      } else if (row.dirTarget) {
+        viewStore.showDir(row.dirTarget)
+      }
+    }
 
     // 展开箭头：只展开收起，不切换视图
     const onToggle = (row: NavRow, e: MouseEvent): void => {
@@ -372,10 +379,17 @@ export default defineComponent({
 
     return {
       sections,
+      galleryRows,
+      sourceRows,
+      categoryRows,
+      organizeRows,
+      aiRows,
       folders,
       gallery,
       maxName: DIR_NAME_MAX,
       draftLen,
+      isActiveRow,
+      onRowClick,
       onToggle,
       onContextMenu,
       onDraft,

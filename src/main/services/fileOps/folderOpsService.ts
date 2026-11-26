@@ -4,6 +4,7 @@ import { DIR_NAME_MAX, type FolderRefDTO } from '@shared/api'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isValidDirName, normalizeRelDir } from '../../common/pathUtil'
+import { bumpLibraryVersion } from '../../common/readCache'
 import { retryOnWinBusy } from '../../common/winFs'
 import { getDatabase } from '../../db/client'
 import {
@@ -126,6 +127,7 @@ export async function createFolder(parent: FolderRefDTO, rawName: unknown): Prom
           const path = folder.rel ? join(folder.rel, name) : name
           await observeOrganizeTarget(path)
         }
+        bumpLibraryVersion()
         return folder.rel ? `${folder.rel}\\${name}` : name
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
@@ -168,6 +170,7 @@ export async function ensureSuggestionTarget(rawName: string, mustExist = false)
     await retryOnWinBusy(() => mkdir(join(home, name)))
     await observeOrganizeTarget(name)
     invalidateCategoryTree()
+    bumpLibraryVersion()
     return join(home, name)
   })
 }
@@ -225,6 +228,7 @@ export async function renameCategoryFolder(ref: FolderRefDTO, rawName: unknown):
       await updateBatchStatus(tx, batchId, 'APPLIED')
     })
     invalidateCategoryTree()
+    bumpLibraryVersion()
     return newRel
   })
 }
@@ -250,6 +254,7 @@ export async function deleteCategoryFolder(ref: FolderRefDTO): Promise<number> {
       }
       return id
     })
+    bumpLibraryVersion()
     const [op] = await findPendingOps(batchId)
     try {
       await trashPath(folder.abs)
@@ -262,6 +267,7 @@ export async function deleteCategoryFolder(ref: FolderRefDTO): Promise<number> {
         await updateOpStatus(tx, op.id, 'FAILED', (err as Error).message)
         await updateBatchStatus(tx, batchId, 'FAILED')
       })
+      bumpLibraryVersion()
       throw new BizError('DEPENDENCY_FAILED', `删不掉：${(err as Error).message}`)
     }
     await db.transaction(async (tx) => {
@@ -272,6 +278,7 @@ export async function deleteCategoryFolder(ref: FolderRefDTO): Promise<number> {
       await updateBatchStatus(tx, batchId, 'APPLIED')
     })
     invalidateCategoryTree()
+    bumpLibraryVersion()
     return hidden.length
   })
 }
@@ -287,4 +294,5 @@ export async function removeSource(id: unknown): Promise<void> {
     throw new BizError('NOT_FOUND', '这个源目录已经不在图库里了')
   }
   await enqueue(() => removeRootWithFiles(root.id))
+  bumpLibraryVersion()
 }

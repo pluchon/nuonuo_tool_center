@@ -4,6 +4,7 @@ import type { DeleteResultVO, FileOpDoneVO, GalleryQueryDTO } from '@shared/api'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { pathKey } from '../../common/pathUtil'
+import { bumpLibraryVersion } from '../../common/readCache'
 import { retryOnWinBusy } from '../../common/winFs'
 import { getDatabase } from '../../db/client'
 import {
@@ -113,6 +114,7 @@ export async function deleteImages(query: GalleryQueryDTO, rawIds: unknown): Pro
     )
     return id
   })
+  bumpLibraryVersion()
   pending.set(
     batchId,
     setTimeout(() => {
@@ -153,6 +155,7 @@ export async function undoDelete(batchId: unknown): Promise<void> {
       await revertPendingOps(tx, id)
       await updateBatchStatus(tx, id, 'UNDONE')
     })
+    bumpLibraryVersion()
   })
 }
 
@@ -215,6 +218,7 @@ async function applyDelete(op: FileOpEntity, fileId: number): Promise<string | n
       await updateOpStatus(tx, op.id, 'DONE')
       await retireImageFile(tx, fileId)
     })
+    bumpLibraryVersion()
     return null
   } catch (err) {
     const message = reason(err)
@@ -223,6 +227,7 @@ async function applyDelete(op: FileOpEntity, fileId: number): Promise<string | n
       await updateOpStatus(tx, op.id, 'FAILED', message)
       await restoreImageFiles(tx, [fileId], 'NORMAL')
     })
+    bumpLibraryVersion()
     return message
   }
 }

@@ -13,6 +13,8 @@ export interface ObjectSchema {
   properties: Record<string, JsonSchemaProperty>
 }
 
+export type ToolSideEffect = 'read' | 'memory' | 'proposal'
+
 export interface ToolExecutionResult {
   content: string
   outcome?: ToolOutcome
@@ -22,11 +24,33 @@ export interface RegisteredTool {
   name: string
   description: string
   parameters: ObjectSchema
+  sideEffect?: ToolSideEffect
+  formatStart?: (args: Record<string, unknown>) => string
+  formatDone?: (args: Record<string, unknown>, result: ToolExecutionResult) => string
   execute: (args: Record<string, unknown>, env: ToolEnv, state: HarnessState) => Promise<ToolExecutionResult> | ToolExecutionResult
 }
 
 export function defineTool(tool: RegisteredTool): RegisteredTool {
   return tool
+}
+
+export function parseToolJson(content: string): unknown {
+  try {
+    return content ? JSON.parse(content) : null
+  } catch {
+    return null
+  }
+}
+
+export function isToolError(parsed: unknown): boolean {
+  return Boolean(parsed && typeof parsed === 'object' && !Array.isArray(parsed) && typeof (parsed as Record<string, unknown>).error === 'string')
+}
+
+export function truncateLabel(value: unknown, maxChars = 16): string {
+  const text = typeof value === 'string' ? value.replace(/[\r\n\s]+/g, ' ').trim() : ''
+  if (!text) return ''
+  const chars = Array.from(text)
+  return chars.length <= maxChars ? text : chars.slice(0, maxChars - 1).join('') + '…'
 }
 
 function validateValue(prop: JsonSchemaProperty, val: unknown, path: string): string | null {
@@ -86,7 +110,7 @@ export function validateToolArgs(
   return { ok: true, value: obj }
 }
 
-// 序列化为发送给百炼的固定 OpenAI tools 结构（剥离内部 runtimeRequired 字段）
+// 序列化为发送给百炼的固定 OpenAI tools 结构（剥离内部 runtimeRequired、sideEffect、formatStart、formatDone 等字段）
 export function toOpenAiTools(tools: readonly RegisteredTool[]) {
   return tools.map((tool) => {
     const { runtimeRequired: _ignored, ...parameters } = tool.parameters

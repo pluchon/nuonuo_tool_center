@@ -71,6 +71,7 @@ export const IpcChannel = {
   aiRecallMessage: 'ai:recallMessage',
   aiRecalledDraft: 'ai:recalledDraft',
   aiAnswer: 'ai:answer',
+  aiAbort: 'ai:abort',
   aiCompact: 'ai:compact',
   aiPolicy: 'ai:policy',
   aiReferencePreviews: 'ai:referencePreviews',
@@ -538,11 +539,30 @@ export interface AiCompactResult {
   checkpoint: { messageId: number; usage: AiContextUsage } | null
 }
 
+export type AiTimelineBlock =
+  | { type: 'action'; id: string; tool: string; summary: string; status: 'running' | 'done' | 'failed' | 'aborted' }
+  | { type: 'narration'; text: string }
+
 export interface AiStreamEvent {
   conversationId: number
-  kind: 'status' | 'delta' | 'reset' | 'done' | 'error'
+  kind:
+    | 'status'
+    | 'delta'
+    | 'narration_commit'
+    | 'action_start'
+    | 'action_end'
+    | 'memory_notice'
+    | 'reset'
+    | 'done'
+    | 'error'
+    | 'aborted'
   text?: string
   tool?: string
+  actionId?: string
+  summary?: string
+  status?: 'running' | 'done' | 'failed' | 'aborted'
+  block?: AiTimelineBlock
+  memoryNotice?: AiMemoryNotice
 }
 
 export interface AiPolicyVO {
@@ -561,6 +581,12 @@ export interface AiReplyCacheUsage {
   cachedTokens: number
 }
 
+// 本轮记住/更新/遗忘偏好时，附带给用户看的轻量提示。
+export interface AiMemoryNotice {
+  action?: 'save' | 'update' | 'forget'
+  notices: string[]
+}
+
 // 对话里的一条消息：你说的话，或诺诺的回复
 export interface AiMessageVO {
   scope?: DirKeyDTO | null
@@ -569,6 +595,9 @@ export interface AiMessageVO {
   references?: AiImageReference[]
   categoryProposalId?: number
   proposalNote?: true
+  memoryNotice?: AiMemoryNotice
+  blocks?: AiTimelineBlock[]
+  interrupted?: boolean
   id: number
   role: 'user' | 'assistant'
   text: string

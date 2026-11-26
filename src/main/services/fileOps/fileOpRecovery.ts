@@ -2,6 +2,7 @@ import { lstat, readdir, stat } from 'node:fs/promises'
 import { basename, dirname, join, relative } from 'node:path'
 import { BizError } from '../../common/bizError'
 import { isWithin, pathKey } from '../../common/pathUtil'
+import { bumpLibraryVersion } from '../../common/readCache'
 import { getDatabase } from '../../db/client'
 import { recordCopiedFile, recordMovedFile, renameRowsUnder, retireRowsUnder, unhideRowsUnder, updateOpStatus, type FileOpEntity } from '../../repositories/fileOpRepository'
 import { findFileLocation } from '../../repositories/galleryRepository'
@@ -35,6 +36,7 @@ async function settleTransferOp(op: FileOpEntity, fileId: number): Promise<void>
       await recordCopiedFile(tx, image.id, root, to, target.mtime)
       await updateOpStatus(tx, op.id, 'DONE')
     })
+    bumpLibraryVersion()
     return
   }
   const location = await findFileLocation(fileId)
@@ -47,6 +49,7 @@ async function settleTransferOp(op: FileOpEntity, fileId: number): Promise<void>
     await recordMovedFile(tx, fileId, root, to)
     await updateOpStatus(tx, op.id, 'DONE')
   })
+  bumpLibraryVersion()
 }
 
 // 只有已确认的磁盘结果才能提交索引。无法核实时保留文件并记录原因。
@@ -79,7 +82,10 @@ async function settleFolderOp(op: FileOpEntity): Promise<string | null> {
   const acrossParents = op.opType === 'RENAME' && !!op.toPath && pathKey(dirname(op.fromPath)) !== pathKey(dirname(op.toPath))
   const entries = acrossParents ? [] : await readdir(dirname(op.fromPath), { withFileTypes: true }).catch(async (err: unknown) => {
     // 无法读取父目录时不能确认删除。恢复索引，移动硬盘重新连接后仍可浏览图片。
-    if (op.opType === 'DELETE') await unhideRowsUnder(db, root.id, rel)
+    if (op.opType === 'DELETE') {
+      await unhideRowsUnder(db, root.id, rel)
+      bumpLibraryVersion()
+    }
     throw err
   })
   const oldName = basename(op.fromPath)
@@ -90,6 +96,7 @@ async function settleFolderOp(op: FileOpEntity): Promise<string | null> {
       else await retireRowsUnder(tx, root.id, rel)
       await updateOpStatus(tx, op.id, present ? 'REVERTED' : 'DONE')
     })
+    bumpLibraryVersion()
     return present ? '目录删除中断，已保留当前目录' : null
   }
   if (op.opType !== 'RENAME' || !op.toPath || !isWithin(root.path, op.toPath)) {
@@ -110,5 +117,6 @@ async function settleFolderOp(op: FileOpEntity): Promise<string | null> {
     if (renamed) await renameRowsUnder(tx, root.id, rel, nextRel)
     await updateOpStatus(tx, op.id, renamed ? 'DONE' : 'REVERTED')
   })
+  bumpLibraryVersion()
   return null
 }

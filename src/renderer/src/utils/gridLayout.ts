@@ -75,9 +75,30 @@ export function layoutRows(items: LayoutInput[], width: number, targetHeight: nu
 export const PANEL_WIDTH = 300
 export const PANEL_GAP = 14
 export const ROW_INSET = 2
+export const ROW_HEIGHT_EXTRA = 40
+export const ROW_GAP = 10
+
+export interface FluidGalleryRow extends LayoutRow {
+  imageHeight: string
+  ratioSum: number
+  fixed: number
+  sparse: boolean
+}
+
+export interface VirtualRowGeometry<R extends FluidGalleryRow = FluidGalleryRow> {
+  row: R
+  imageHeightPx: number
+  rowHeightPx: number
+  offsetInGroup: number
+}
+
+export interface VirtualGroupLayout<R extends FluidGalleryRow = FluidGalleryRow> {
+  rows: VirtualRowGeometry<R>[]
+  canvasHeightPx: number
+}
 
 // 开合侧栏时保留行内顺序。窗口宽度和缩放档位决定换行，行高随图库的实际宽度连续变化。
-export function fluidGalleryRows(items: LayoutInput[], fullWidth: number, targetHeight: number) {
+export function fluidGalleryRows(items: LayoutInput[], fullWidth: number, targetHeight: number): FluidGalleryRow[] {
   const reference = Math.max(TILE_CHROME + 1, fullWidth - (PANEL_WIDTH + PANEL_GAP) / 2)
   const rows = layoutRows(items, reference, targetHeight * Math.sqrt(reference / fullWidth))
   return rows.map((row, i) => {
@@ -87,8 +108,104 @@ export function fluidGalleryRows(items: LayoutInput[], fullWidth: number, target
     // 末行未填满时限制行高，避免一两张图片被放大到占满整行。
     const sparse = i === rows.length - 1 && ratioSum * row.height < reference - fixed + 2 * ROW_INSET - 1
     const cap = `calc(${targetHeight / 2}px + (100% - ${ROW_INSET * 2}px) * ${targetHeight / (2 * fullWidth)})`
-    return { ...row, imageHeight: sparse ? `min(${fit}, ${cap})` : fit }
+    return { ...row, ratioSum, fixed, sparse, imageHeight: sparse ? `min(${fit}, ${cap})` : fit }
   })
+}
+
+/**
+ * Compute exact pixel height and prefix-sum Y offsets for each row in a group canvas,
+ * matching the CSS `calc((100% - fixed) / ratioSum)` and `padding-block-start: calc(var(--image-height) + 40px)` geometry.
+ */
+export function computeVirtualRows<R extends FluidGalleryRow>(
+  rows: R[],
+  gridContentWidth: number,
+  fullWidth: number,
+  targetHeight: number
+): VirtualGroupLayout<R> {
+  if (rows.length === 0 || gridContentWidth <= 0 || fullWidth <= 0 || targetHeight <= 0) {
+    return { rows: [], canvasHeightPx: 0 }
+  }
+  const out: VirtualRowGeometry<R>[] = []
+  let y = 0
+  const capSlope = targetHeight / (2 * fullWidth)
+  const capWidth = Math.max(0, gridContentWidth - ROW_INSET * 2)
+  const capPx = targetHeight / 2 + capWidth * capSlope
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    const fitPx = Math.max(0, (gridContentWidth - row.fixed) / row.ratioSum)
+    const imageHeightPx = row.sparse ? Math.min(fitPx, capPx) : fitPx
+    const rowHeightPx = imageHeightPx + ROW_HEIGHT_EXTRA
+    out.push({ row, imageHeightPx, rowHeightPx, offsetInGroup: y })
+    y += rowHeightPx + (i < rows.length - 1 ? ROW_GAP : 0)
+  }
+  return { rows: out, canvasHeightPx: y }
+}
+
+/**
+ * O(log N) binary search returning the half-open `[start, end)` range of items
+ * overlapping `[scrollTop - overscan, scrollTop + viewportHeight + overscan)`.
+ */
+export function binarySearchVisibleRows(
+  items: ReadonlyArray<{ top: number; height: number }>,
+  scrollTop: number,
+  viewportHeight: number,
+  overscan = 600
+): { start: number; end: number } {
+  const n = items.length
+  if (n === 0) {
+    return { start: 0, end: 0 }
+  }
+  const minY = scrollTop - overscan
+  const maxY = scrollTop + viewportHeight + overscan
+  if (maxY <= minY) {
+    return { start: 0, end: 0 }
+  }
+
+  let lo = 0
+  let hi = n
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (items[mid].top + items[mid].height <= minY) {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  const start = lo
+
+  lo = start
+  hi = n
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (items[mid].top < maxY) {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  return { start, end: lo }
+}
+
+/**
+ * O(log G) binary search returning the label of the active month section at `scrollTop`.
+ */
+export function findMonthAtOffset(months: ReadonlyArray<{ top: number; label: string }>, scrollTop: number): string {
+  if (months.length === 0) {
+    return ''
+  }
+  let lo = 0
+  let hi = months.length - 1
+  let ans = 0
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1
+    if (months[mid].top - 8 <= scrollTop) {
+      ans = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  return months[ans].label
 }
 
 // 分组用的月份键：YYYY-MM（本机时区）；没有时间时为 'none'

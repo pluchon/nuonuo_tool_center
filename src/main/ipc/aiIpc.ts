@@ -5,6 +5,7 @@ import { attachmentOriginal } from '../repositories/aiConversationRepository'
 import { referencePreviews } from '../repositories/aiReferenceRepository'
 import { changePreference, getAiPolicy, resetOrganizeRules, setEmbeddingLimit } from '../services/ai/aiPolicy'
 import {
+  abortAnswer,
   answer,
   ask,
   compactConversation,
@@ -86,12 +87,16 @@ export function registerAiIpc(paths: DataPaths): void {
         },
         emitStream
       )
-      emitStream({ kind: 'done' })
+      emitStream({ kind: reply.interrupted ? 'aborted' : 'done' })
       return reply
     } catch (err) {
       emitStream({ kind: 'error', text: err instanceof Error ? err.message : String(err) })
       throw err
     } finally { scheduleEmbedding() }
+  })
+  handle(IpcChannel.aiAbort, async (_event, conversationId: number) => {
+    requireDatabase()
+    return abortAnswer(conversationId)
   })
   handle(IpcChannel.aiPolicy, async () => { requireDatabase(); return getAiPolicy() })
   handle(IpcChannel.aiReferencePreviews, async (_event, ids: number[]) => { requireDatabase(); return referencePreviews(ids) })

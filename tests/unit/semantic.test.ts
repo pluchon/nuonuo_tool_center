@@ -243,13 +243,17 @@ describe('语义检索和按图找相似', () => {
     const chat = vi.mocked((await import('../../src/main/services/ai/bailianClient')).chatCall)
     chat.mockClear()
     const lookup = (args: object) => ({ tool_calls: [{ id: 's', type: 'function', function: { name: 'search_images', arguments: JSON.stringify(args) } }] })
-    script.push(lookup({ semantic: '蓝发女孩子', keywordGroups: [['蓝发'], ['女孩']] }), lookup({ keywordGroups: [['女孩']] }))
+    script.push(
+      lookup({ semantic: '蓝发女孩子', keywordGroups: [['蓝发'], ['女孩']] }),
+      lookup({ keywordGroups: [['女孩']] }),
+      { content: '目前先按文字条件找到这张啦~' }
+    )
     const q = await ask({ conversationId: null, text: '按这一句描述搜索', scope: null, includeR18: true })
     const reply = await answer(q.conversation.id)
     expect(reply.images.map((item) => item.imageId)).toEqual([4])
     expect(reply.how).not.toContain('画面「')
     expect(reply.how).toContain('目前显示 1 张，画面相似度检索暂不可用')
-    expect(chat).toHaveBeenCalledTimes(2)
+    expect(chat).toHaveBeenCalledTimes(3)
     expect(embedCalls).toEqual([])
   })
 
@@ -302,12 +306,18 @@ describe('语义检索和按图找相似', () => {
       const scope = { kind: 'category' as const, name: '插画' }
       const { chatCall } = await import('../../src/main/services/ai/bailianClient')
       vi.mocked(chatCall).mockClear()
-      for (const [word, expected] of [['猫娘', [ids[6]]], ['草地上的少女', []]] as const) {
-        const q = await ask({ conversationId: null, text: `找标签为${word}的图`, scope, includeR18: true })
-        expect((await answer(q.conversation.id)).images.map((item) => item.imageId)).toEqual(expected)
+      // 离线模式下精确标签快路径直接本地处理，不调用云端
+      process.env.DASHSCOPE_API_KEY = ' '
+      try {
+        for (const [word, expected] of [['猫娘', [ids[6]]], ['草地上的少女', []]] as const) {
+          const q = await ask({ conversationId: null, text: `找标签为${word}的图`, scope, includeR18: true })
+          expect((await answer(q.conversation.id)).images.map((item) => item.imageId)).toEqual(expected)
+        }
+        expect(chatCall).not.toHaveBeenCalled()
+        expect(embedCalls).toEqual([])
+      } finally {
+        process.env.DASHSCOPE_API_KEY = 'test-key-not-real'
       }
-      expect(chatCall).not.toHaveBeenCalled()
-      expect(embedCalls).toEqual([])
       script.push({ tool_calls: [{ id: 'ears', type: 'function', function: { name: 'search_images',
         arguments: JSON.stringify({ keywordGroups: [['猫娘','猫耳少女']], visualInclude: ['cat_ears'], semantic: '猫耳少女', contrast: ['夜景'] })
       } }] })
@@ -380,9 +390,20 @@ describe('语义检索和按图找相似', () => {
     expect(await findEmbedCandidates('qwen3-vl-embedding', 10)).toEqual([])
     await pg.exec(`update ai_job set status = 'DONE' where kind = 'LOOK' and image_id = 3`)
     expect(await findEmbedCandidates('qwen3-vl-embedding', 10)).toEqual([3])
-    const q = await ask({ conversationId: null, text: 'pics里的图', scope: null, includeR18: false })
+    script.push(
+      { tool_calls: [{ id: 'dir', type: 'function', function: { name: 'search_images', arguments: '{"browseScope":true,"contrast":[]}' } }] },
+      { content: 'pics 里的图都在这儿啦~' }
+    )
+    const q = await ask({ conversationId: null, text: 'pics里的图', scope: { kind: 'category', name: 'pics' }, includeR18: false })
     const r = await answer(q.conversation.id)
     expect(r.images).toHaveLength(3)
+    process.env.DASHSCOPE_API_KEY = ' '
+    try {
+      const offline = await ask({ conversationId: null, text: 'pics里的图', scope: null, includeR18: false })
+      expect((await answer(offline.conversation.id)).images).toHaveLength(3)
+    } finally {
+      process.env.DASHSCOPE_API_KEY = 'test-key-not-real'
+    }
   })
 
   it('文字与向量均命中超过十二张时，返回全部匹配并按并集准确计数', async () => {

@@ -1,8 +1,9 @@
-import { and, asc, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, isNull, notInArray, or, sql } from 'drizzle-orm'
 import { BizError } from '../common/bizError'
 import { getDatabase } from '../db/client'
 import { col } from '../db/sqlUtil'
-import { aiCompaction, aiConversation, aiImageExclusion, aiImageOriginal, aiMemory, aiMessage } from '../db/schema'
+import { aiCompaction, aiConversation, aiImageExclusion, aiImageOriginal, aiMemory, aiMessage, categoryProposal } from '../db/schema'
+import { invalidateProfileCache } from './aiPolicyRepository'
 
 export type AiConversationEntity = typeof aiConversation.$inferSelect
 export type AiMessageEntity = typeof aiMessage.$inferSelect
@@ -140,14 +141,67 @@ export async function reviseLastUserMessage(
     )).orderBy(desc(aiMessage.id)).limit(1)
     if (last?.id !== messageId) throw new BizError('CONFLICT', '只能修改最后一条用户消息')
     const replacement = replace?.(last)
-    await tx.update(aiMessage).set({ deleteState: 1 }).where(and(
-      eq(aiMessage.conversationId, conversationId), gte(aiMessage.id, messageId), eq(aiMessage.deleteState, 0)
-    ))
-    await tx.update(aiMemory).set({ validTo: new Date() }).where(and(eq(aiMemory.sourceMessageId, messageId), isNull(aiMemory.validTo)))
-    await tx.delete(aiImageExclusion).where(eq(aiImageExclusion.sourceMessageId, messageId))
+
+    const toDelete = await tx
+      .select({ id: aiMessage.id, role: aiMessage.role, content: aiMessage.content })
+      .from(aiMessage)
+      .where(and(eq(aiMessage.conversationId, conversationId), gte(aiMessage.id, messageId), eq(aiMessage.deleteState, 0)))
+
+    const deletedMessageIds = toDelete.map((row) => row.id)
+    const proposalIds: number[] = []
+    for (const row of toDelete) {
+      if (row.role === 'ASSISTANT' && row.content && typeof row.content === 'object') {
+        const pid = (row.content as { categoryProposalId?: unknown }).categoryProposalId
+        if (typeof pid === 'number' && Number.isSafeInteger(pid) && pid > 0) {
+          proposalIds.push(pid)
+        }
+      }
+    }
+
+    if (deletedMessageIds.length > 0) {
+      await tx.update(aiMessage).set({ deleteState: 1 }).where(inArray(aiMessage.id, deletedMessageIds))
+    }
+
+    const now = new Date()
+    const invalidated = deletedMessageIds.length > 0
+      ? await tx
+        .update(aiMemory)
+        .set({ validTo: now, updateTime: now })
+        .where(and(inArray(aiMemory.sourceMessageId, deletedMessageIds), isNull(aiMemory.validTo)))
+        .returning({ id: aiMemory.id })
+      : []
+
+    const resurrected = deletedMessageIds.length > 0
+      ? await tx
+        .update(aiMemory)
+        .set({ validTo: null, supersededByMessageId: null, updateTime: now })
+        .where(and(
+          inArray(aiMemory.supersededByMessageId, deletedMessageIds),
+          eq(aiMemory.deleteState, 0),
+          or(isNull(aiMemory.sourceMessageId), notInArray(aiMemory.sourceMessageId, deletedMessageIds))
+        ))
+        .returning({ id: aiMemory.id })
+      : []
+
+    if (invalidated.length > 0 || resurrected.length > 0) {
+      await invalidateProfileCache(tx)
+    }
+
+    if (deletedMessageIds.length > 0) {
+      await tx.delete(aiImageExclusion).where(inArray(aiImageExclusion.sourceMessageId, deletedMessageIds))
+    }
+
+    if (proposalIds.length > 0) {
+      await tx
+        .update(categoryProposal)
+        .set({ status: 'cancelled' })
+        .where(and(inArray(categoryProposal.id, proposalIds), eq(categoryProposal.status, 'pending')))
+    }
+
     await tx.update(aiCompaction).set({ deleteState: 1 }).where(and(
       eq(aiCompaction.conversationId, conversationId), gte(aiCompaction.upToMessageId, messageId), eq(aiCompaction.deleteState, 0)
     ))
+
     if (replace) {
       await tx.update(aiConversation).set({ draft: null }).where(eq(aiConversation.id, conversationId))
       const [row] = await tx.insert(aiMessage).values({ conversationId, role: 'USER', content: replacement }).returning()
@@ -237,15 +291,124 @@ export async function updateVote(messageId: number, vote: 'UP' | 'DOWN' | null):
   return row
 }
 
-// 记下一条对话里明说的偏好
-export async function insertMemory(content: string, kind: string, confidence: number, sourceMessageId: number | null): Promise<void> {
-  await getDatabase().db.transaction(async (tx) => {
-    const [known] = await tx.select({ id: aiMemory.id, confidence: aiMemory.confidence }).from(aiMemory).where(and(
-      eq(aiMemory.content, content), eq(aiMemory.kind, kind), eq(aiMemory.deleteState, 0), isNull(aiMemory.validTo)
-    )).limit(1)
-    if (!known) await tx.insert(aiMemory).values({ content, kind, confidence, sourceMessageId })
-    else if (known.confidence < confidence) {
-      await tx.update(aiMemory).set({ confidence, sourceMessageId, updateTime: new Date() }).where(eq(aiMemory.id, known.id))
+export interface UpsertMemoryParams {
+  content: string
+  kind?: string
+  confidence?: number
+  sourceMessageId: number | null
+  replaceId?: number
+}
+
+export interface UpsertMemoryResult {
+  action: 'saved' | 'updated'
+  memoryId: number
+  previousContent?: string
+}
+
+// 写入或更新一条对话记忆；传入 replaceId 时在事务内失效旧记录并记录 supersededByMessageId（支持撤回恢复）
+export async function upsertMemoryByMessage(params: UpsertMemoryParams): Promise<UpsertMemoryResult> {
+  const content = params.content.trim()
+  if (!content) {
+    throw new BizError('BAD_REQUEST', '记忆内容不能为空')
+  }
+  const kind = params.kind ?? 'preference'
+  const confidence = params.confidence ?? 0.9
+  const sourceMessageId = params.sourceMessageId ?? null
+  const replaceId = params.replaceId
+
+  return getDatabase().db.transaction(async (tx) => {
+    if (typeof replaceId === 'number' && Number.isSafeInteger(replaceId) && replaceId > 0) {
+      const [existing] = await tx
+        .select({
+          id: aiMemory.id,
+          content: aiMemory.content,
+          confidence: aiMemory.confidence
+        })
+        .from(aiMemory)
+        .where(and(eq(aiMemory.id, replaceId), eq(aiMemory.deleteState, 0), isNull(aiMemory.validTo)))
+        .limit(1)
+
+      if (existing) {
+        if (existing.content.trim() === content) {
+          if (existing.confidence < confidence) {
+            await tx
+              .update(aiMemory)
+              .set({ confidence, updateTime: new Date() })
+              .where(eq(aiMemory.id, existing.id))
+          }
+          return { action: 'updated', memoryId: existing.id, previousContent: existing.content }
+        }
+        const now = new Date()
+        await tx
+          .update(aiMemory)
+          .set({ validTo: now, supersededByMessageId: sourceMessageId, updateTime: now })
+          .where(eq(aiMemory.id, existing.id))
+        const [inserted] = await tx
+          .insert(aiMemory)
+          .values({ content, kind, confidence, sourceMessageId })
+          .returning({ id: aiMemory.id })
+        await invalidateProfileCache(tx)
+        return { action: 'updated', memoryId: inserted.id, previousContent: existing.content }
+      }
     }
+
+    const [known] = await tx
+      .select({ id: aiMemory.id, confidence: aiMemory.confidence })
+      .from(aiMemory)
+      .where(and(
+        eq(aiMemory.content, content),
+        eq(aiMemory.kind, kind),
+        eq(aiMemory.deleteState, 0),
+        isNull(aiMemory.validTo)
+      ))
+      .limit(1)
+
+    if (known) {
+      if (known.confidence < confidence) {
+        await tx
+          .update(aiMemory)
+          .set({ confidence, updateTime: new Date() })
+          .where(eq(aiMemory.id, known.id))
+      }
+      return { action: 'saved', memoryId: known.id }
+    }
+
+    const [inserted] = await tx
+      .insert(aiMemory)
+      .values({ content, kind, confidence, sourceMessageId })
+      .returning({ id: aiMemory.id })
+    return { action: 'saved', memoryId: inserted.id }
   })
+}
+
+// 遗忘一条记忆：仅置 validTo 与 supersededByMessageId（不物理删，撤回消息时可恢复）并使档案/做梦摘要失效
+export async function forgetMemoryByMessage(params: {
+  id: number
+  messageId: number | null
+}): Promise<{ deleted: boolean; content?: string }> {
+  if (!Number.isSafeInteger(params.id) || params.id <= 0) {
+    return { deleted: false }
+  }
+  return getDatabase().db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ id: aiMemory.id, content: aiMemory.content })
+      .from(aiMemory)
+      .where(and(eq(aiMemory.id, params.id), eq(aiMemory.deleteState, 0), isNull(aiMemory.validTo)))
+      .limit(1)
+    if (!existing) {
+      return { deleted: false }
+    }
+    const now = new Date()
+    await tx
+      .update(aiMemory)
+      .set({ validTo: now, supersededByMessageId: params.messageId ?? null, updateTime: now })
+      .where(eq(aiMemory.id, existing.id))
+    await invalidateProfileCache(tx)
+    return { deleted: true, content: existing.content }
+  })
+}
+
+// 记下一条对话里明说的偏好（向后兼容旧签名）
+export async function insertMemory(content: string, kind: string, confidence: number, sourceMessageId: number | null): Promise<void> {
+  await upsertMemoryByMessage({ content, kind, confidence, sourceMessageId })
 }

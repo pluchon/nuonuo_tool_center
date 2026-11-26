@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { and, eq } from 'drizzle-orm'
 import { utilityProcess, type UtilityProcess } from 'electron'
 import { getLogger } from '../../common/logger'
+import { bumpLibraryVersion } from '../../common/readCache'
 import type { RatingProgressVO } from '@shared/api'
 import { getDatabase } from '../../db/client'
 import { image } from '../../db/schema'
@@ -383,8 +384,9 @@ async function runOnce(): Promise<void> {
         const features = hit
           ? undefined
           : { revision: FEATURE_REVISION, tags: res.tags, ...(res.characters?.length ? { characters: res.characters } : {}) }
-        if ((await saveModelRating(img.id, ratingOf(res.scores), res.scores, hit, features)) && hit) {
-          r18++
+        if (await saveModelRating(img.id, ratingOf(res.scores), res.scores, hit, features)) {
+          bumpLibraryVersion()
+          if (hit) r18++
         }
       } else if (workerDegraded) {
         log.warn(`图片 ${img.id} 因本地分级工作进程降级暂停处理：${res.error}`)

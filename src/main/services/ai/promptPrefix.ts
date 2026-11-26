@@ -12,6 +12,7 @@ export type ContentPart =
 export interface PromptMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string | ContentPart[]
+  reasoning_content?: string
   tool_calls?: unknown[]
   tool_call_id?: string
 }

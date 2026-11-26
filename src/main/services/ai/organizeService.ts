@@ -14,6 +14,7 @@ import { BAILIAN_CONFIG, ORGANIZE_COST, readCloudCredentials } from '../../confi
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isValidDirName } from '../../common/pathUtil'
+import { bumpLibraryVersion } from '../../common/readCache'
 import { getDatabase } from '../../db/client'
 import { getWorkflow, upsertWorkflow } from '../../repositories/aiWorkflowRepository'
 import { findActiveSettings, readSetting, writeSettings } from '../../repositories/appSettingRepository'
@@ -337,6 +338,7 @@ async function assignWithPlan(): Promise<number> {
   const plan = availableRules(persisted?.length ? persisted : state.plan, index)
   const n = await insertOrganizeResults(assignFolders(await findOrganizeTerms(), plan), BAILIAN_CONFIG.chatModel)
   if (n > 0) {
+    bumpLibraryVersion()
     log.info(`一键整理补图：又分了 ${n} 张`)
     config?.onSuggested()
   }
@@ -498,7 +500,10 @@ async function makePlan(): Promise<void> {
     const covered = assignFolders(all, confirmed)
     if (state !== current) return
     if (covered.length) {
-      if (await insertOrganizeResults(covered, 'confirmed-rules')) config?.onSuggested()
+      if (await insertOrganizeResults(covered, 'confirmed-rules')) {
+        bumpLibraryVersion()
+        config?.onSuggested()
+      }
       if (state !== current) return
       const ids = new Set(covered.map((r) => r.imageId))
       all = all.filter((t) => !ids.has(t.imageId))
@@ -655,6 +660,7 @@ async function applyApprovedPlan(plan: OrganizeFolderVO[]): Promise<number> {
     n = await insertOrganizeResults(assignFolders(await findOrganizeTerms(), plan), BAILIAN_CONFIG.chatModel)
     log.info(`一键整理：生成 ${n} 条放进类目录的建议`)
     if (n > 0) {
+      bumpLibraryVersion()
       config?.onSuggested()
     }
   } catch (err) {

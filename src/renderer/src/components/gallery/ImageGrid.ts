@@ -1,4 +1,4 @@
-import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowReactive, watch, type VNode } from 'vue'
+import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { GalleryItemVO } from '@shared/api'
 import { thumbUrl } from '@/api/gallery'
 import { startNativeDrag } from '@/api/files'
@@ -10,7 +10,19 @@ import { useSettingsStore } from '@/stores/settings'
 import { useViewerStore } from '@/stores/viewer'
 import { useViewStore } from '@/stores/view'
 import { useSuggestStore } from '@/stores/suggest'
-import { fluidGalleryRows, groupConsecutive, TILE_CHROME, ROW_INSET, monthKey, monthLabel, TILE_GAP } from '@/utils/gridLayout'
+import {
+  binarySearchVisibleRows,
+  computeVirtualRows,
+  fluidGalleryRows,
+  groupConsecutive,
+  monthKey,
+  monthLabel,
+  ROW_INSET,
+  TILE_CHROME,
+  TILE_GAP,
+  type LayoutTile,
+  type VirtualRowGeometry
+} from '@/utils/gridLayout'
 import GridScrollbar from './GridScrollbar.vue'
 import GridRow from './GridRow.vue'
 
@@ -24,13 +36,28 @@ export interface GridGroup {
   label: string
   ids: number[]
   allOn: boolean
-  rows: ReturnType<typeof fluidGalleryRows>
+  rows: VirtualRowGeometry[]
+  canvasHeightPx: number
   // 只在“AI 建议”视图：目标类目录（null 是没有这类建议的那组）、目录还不存在
   aiDir?: { name: string | null; isNew: boolean }
 }
 
-// 网格右侧给自绘滚动条留的窄边（和 ImageGrid.scss 的 padding-right 一致）和每行左右的内边距
+export interface FlatRow {
+  flatIndex: number
+  groupIndex: number
+  rowIndex: number
+  firstId: number
+  tiles: LayoutTile[]
+  imageHeight: string
+  offsetInGroup: number
+  top: number
+  height: number
+}
+
+// 网格右侧给自绘滚动条留的窄边（和 ImageGrid.scss 的 padding-right / padding-bottom 一致）
 const GRID_PAD_RIGHT = 14
+const GRID_PAD_BOTTOM = 18
+const OVERSCAN_PX = 600
 
 // 图片网格：按月分组、等高行排版、多选、键盘移动和缩放。
 export default defineComponent({
@@ -47,6 +74,12 @@ export default defineComponent({
     const aiView = computed(() => viewStore.page === 'gallery' && viewStore.view === 'ai')
     const gridRef = ref<HTMLElement | null>(null)
     const galleryWidth = ref(0)
+    const gridContentWidth = ref(0)
+    const viewportHeight = ref(0)
+    const scrollTop = ref(0)
+    const canvasOffsets = ref<number[]>([])
+    const monthOffsets = ref<Array<{ top: number; label: string }>>([])
+    const totalLayoutHeight = ref(0)
 
     const byId = computed(() => new Map(gallery.items.map((i) => [i.imageId, i])))
     const item = (id: number): GalleryItemVO => byId.value.get(id) as GalleryItemVO
@@ -85,31 +118,136 @@ export default defineComponent({
     const groups = computed<GridGroup[]>(() => {
       const fullWidth = galleryWidth.value - GRID_PAD_RIGHT - ROW_INSET * 2
       if (fullWidth <= TILE_CHROME) return []
-      return partitions.value.map(({ items, ...group }) => ({
-        ...group, rows: fluidGalleryRows(items, fullWidth, gallery.rowHeight)
-      }))
+      const contentW = gridContentWidth.value > 0 ? gridContentWidth.value : fullWidth
+      return partitions.value.map(({ items, ...group }) => {
+        const fluid = fluidGalleryRows(items, fullWidth, gallery.rowHeight)
+        const layout = computeVirtualRows(fluid, contentW, fullWidth, gallery.rowHeight)
+        return { ...group, rows: layout.rows, canvasHeightPx: layout.canvasHeightPx }
+      })
     })
 
-    // 大图库给每行保留准确的高度，只在视口附近挂载卡片。所有行共用一个观察器。
-    const virtual = computed(() => gallery.items.length > 200)
-    const visibleRows = shallowReactive(new Set<string>())
-    let rowObserver: IntersectionObserver | undefined
-    const mountRow = ({ el }: VNode): void => {
-      rowObserver ??= new IntersectionObserver((entries) => {
-        for (const entry of entries) {
-          const row = entry.target as HTMLElement
-          if (!row.isConnected) continue
-          const key = row.dataset.rowKey!
-          if (entry.isIntersecting) visibleRows.add(key)
-          else visibleRows.delete(key)
+    const flatLayout = computed(() => {
+      const flat: FlatRow[] = []
+      const byTileId = new Map<number, FlatRow>()
+      const bounds: Array<{ start: number; end: number }> = []
+      const offsets = canvasOffsets.value
+      const gs = groups.value
+      for (let gi = 0; gi < gs.length; gi++) {
+        const g = gs[gi]
+        const canvasTop = offsets[gi] ?? 0
+        const start = flat.length
+        for (let ri = 0; ri < g.rows.length; ri++) {
+          const vr = g.rows[ri]
+          const entry: FlatRow = {
+            flatIndex: flat.length,
+            groupIndex: gi,
+            rowIndex: ri,
+            firstId: vr.row.tiles[0].id,
+            tiles: vr.row.tiles,
+            imageHeight: vr.row.imageHeight,
+            offsetInGroup: vr.offsetInGroup,
+            top: canvasTop + vr.offsetInGroup,
+            height: vr.rowHeightPx
+          }
+          flat.push(entry)
+          for (const t of vr.row.tiles) {
+            byTileId.set(t.id, entry)
+          }
         }
-      }, { root: gridRef.value, rootMargin: '600px 0px' })
-      rowObserver.observe(el as HTMLElement)
+        bounds.push({ start, end: flat.length })
+      }
+      return { flat, byTileId, bounds }
+    })
+
+    const visibleRange = computed(() =>
+      binarySearchVisibleRows(flatLayout.value.flat, scrollTop.value, viewportHeight.value, OVERSCAN_PX)
+    )
+
+    const visibleRowsByGroup = computed(() => {
+      const { flat, bounds } = flatLayout.value
+      const { start, end } = visibleRange.value
+      const result: FlatRow[][] = bounds.map(() => [])
+      if (start >= end) {
+        return result
+      }
+      for (let gi = 0; gi < bounds.length; gi++) {
+        const b = bounds[gi]
+        const lo = Math.max(b.start, start)
+        const hi = Math.min(b.end, end)
+        if (lo < hi) {
+          result[gi] = flat.slice(lo, hi)
+        }
+      }
+      return result
+    })
+
+    // 窗口宽度或缩放档位变化时锚住当前视口顶部那一行，避免虚拟绝对定位下滚偏
+    let pendingAnchor: { firstId: number; frac: number } | null = null
+    const captureAnchor = (el: HTMLElement): void => {
+      if (pendingAnchor || el.scrollTop <= 1 || flatLayout.value.flat.length === 0) {
+        return
+      }
+      const { start } = binarySearchVisibleRows(flatLayout.value.flat, el.scrollTop, 1, 0)
+      const row = flatLayout.value.flat[Math.min(start, flatLayout.value.flat.length - 1)]
+      if (!row) {
+        return
+      }
+      pendingAnchor = {
+        firstId: row.firstId,
+        frac: row.height > 0 ? Math.max(0, (el.scrollTop - row.top) / row.height) : 0
+      }
     }
-    const unmountRow = ({ el }: VNode): void => {
-      const row = el as HTMLElement
-      rowObserver?.unobserve(row)
-      visibleRows.delete(row.dataset.rowKey!)
+
+    const syncWindow = (knownScrollTop?: number): void => {
+      const el = gridRef.value
+      if (!el) return
+      scrollTop.value = knownScrollTop ?? el.scrollTop
+    }
+
+    const measureOffsets = (): void => {
+      const grid = gridRef.value
+      const gs = groups.value
+      if (!grid || gs.length === 0) {
+        canvasOffsets.value = []
+        monthOffsets.value = []
+        totalLayoutHeight.value = 0
+        pendingAnchor = null
+        return
+      }
+      const sections = grid.children
+      const nextCanvas: number[] = []
+      const nextMonths: Array<{ top: number; label: string }> = []
+      for (let i = 0; i < gs.length; i++) {
+        const section = sections[i] as HTMLElement | undefined
+        const canvas = section?.querySelector<HTMLElement>('.image-grid__canvas')
+        nextCanvas.push(canvas ? canvas.offsetTop : 0)
+        if (gs[i].timeline && section) {
+          nextMonths.push({ top: section.offsetTop, label: gs[i].label })
+        }
+      }
+      canvasOffsets.value = nextCanvas
+      monthOffsets.value = nextMonths
+      const lastIdx = gs.length - 1
+      totalLayoutHeight.value = nextCanvas[lastIdx] + gs[lastIdx].canvasHeightPx + GRID_PAD_BOTTOM
+      if (pendingAnchor) {
+        const anchor = pendingAnchor
+        pendingAnchor = null
+        const row = flatLayout.value.byTileId.get(anchor.firstId)
+        if (row) {
+          const target = Math.max(0, row.top + anchor.frac * row.height)
+          grid.scrollTop = target
+          scrollTop.value = grid.scrollTop
+        }
+      }
+    }
+
+    let scrollRaf = 0
+    const onScroll = (): void => {
+      if (scrollRaf) return
+      scrollRaf = requestAnimationFrame(() => {
+        scrollRaf = 0
+        syncWindow()
+      })
     }
 
     // 按下的时间：按住约 0.4 秒再拖是系统原生拖拽（带出原文件到别的软件），直接拖是拖到侧栏源目录
@@ -187,37 +325,49 @@ export default defineComponent({
         const tile = grid.querySelector(`[data-id="${id}"]`)
         if (tile) {
           tile.scrollIntoView({ block: 'nearest', behavior: smooth ? 'smooth' : 'auto' })
+          syncWindow()
           return
         }
-        // Home、End 和大图返回可以跨过尚未渲染的卡片，先定位它所属的行。
-        for (const group of groups.value) {
-          const row = group.rows.find((r) => r.tiles.some((t) => t.id === id))
-          if (row) {
-            grid.querySelector(`[data-first-id="${row.tiles[0].id}"]`)?.scrollIntoView({ block: 'nearest' })
-            return
-          }
+        // Home、End 和大图返回可以跨过尚未渲染的卡片，直接定位到所属行的精确坐标并立即同步窗口。
+        const row = flatLayout.value.byTileId.get(id)
+        if (!row) return
+        const viewH = grid.clientHeight
+        const curTop = grid.scrollTop
+        let nextTop = curTop
+        if (row.top < curTop) {
+          nextTop = row.top
+        } else if (row.top + row.height > curTop + viewH) {
+          nextTop = row.top + row.height - viewH
+        }
+        if (nextTop !== curTop) {
+          grid.scrollTo({ top: nextTop, behavior: 'auto' })
+          syncWindow(grid.scrollTop)
         }
       })
     }
 
     // ↑ / ↓：跳到上一行或下一行里水平位置最近的那张
     const verticalNeighbor = (id: number, dir: -1 | 1): number | null => {
-      const rows = groups.value.flatMap(g => g.rows)
-      const centers = rows.map((r) => {
+      const current = flatLayout.value.byTileId.get(id)
+      if (!current) {
+        return null
+      }
+      const target = flatLayout.value.flat[current.flatIndex + dir]
+      if (!target) {
+        return null
+      }
+      const centersOf = (tiles: LayoutTile[]) => {
         let x = 0
-        return r.tiles.map((t) => {
+        return tiles.map((t) => {
           const c = { id: t.id, x: x + t.width / 2 }
           x += t.width + TILE_GAP
           return c
         })
-      })
-      const ri = centers.findIndex((r) => r.some((c) => c.id === id))
-      const target = centers[ri + dir]
-      if (ri < 0 || !target) {
-        return null
       }
-      const x = centers[ri].find((c) => c.id === id)?.x ?? 0
-      return target.reduce((best, c) => (Math.abs(c.x - x) < Math.abs(best.x - x) ? c : best)).id
+      const curCenters = centersOf(current.tiles)
+      const targetCenters = centersOf(target.tiles)
+      const x = curCenters.find((c) => c.id === id)?.x ?? 0
+      return targetCenters.reduce((best, c) => (Math.abs(c.x - x) < Math.abs(best.x - x) ? c : best)).id
     }
 
     // 网格的键盘操作；焦点在输入框里或对话框开着时不处理
@@ -284,27 +434,59 @@ export default defineComponent({
       }
     }
 
-    let observer: ResizeObserver | null = null
+    let containerObserver: ResizeObserver | null = null
+    let gridObserver: ResizeObserver | null = null
     onMounted(() => {
-      const container = gridRef.value?.closest('.gallery--main')
+      const grid = gridRef.value
+      const container = grid?.closest('.gallery--main')
       if (container) {
         galleryWidth.value = container.clientWidth
-        observer = new ResizeObserver(() => { galleryWidth.value = container.clientWidth })
-        observer.observe(container)
+        containerObserver = new ResizeObserver(() => {
+          galleryWidth.value = container.clientWidth
+        })
+        containerObserver.observe(container)
+      }
+      if (grid) {
+        gridContentWidth.value = Math.max(0, grid.clientWidth - GRID_PAD_RIGHT)
+        viewportHeight.value = grid.clientHeight
+        scrollTop.value = grid.scrollTop
+        grid.addEventListener('scroll', onScroll, { passive: true })
+        gridObserver = new ResizeObserver(() => {
+          const nextW = Math.max(0, grid.clientWidth - GRID_PAD_RIGHT)
+          if (nextW !== gridContentWidth.value) {
+            captureAnchor(grid)
+            gridContentWidth.value = nextW
+          }
+          viewportHeight.value = grid.clientHeight
+        })
+        gridObserver.observe(grid)
       }
       window.addEventListener('keydown', onKey)
+      void nextTick(measureOffsets)
     })
     onBeforeUnmount(() => {
-      rowObserver?.disconnect()
-      observer?.disconnect()
+      gridRef.value?.removeEventListener('scroll', onScroll)
+      cancelAnimationFrame(scrollRaf)
+      containerObserver?.disconnect()
+      gridObserver?.disconnect()
       window.removeEventListener('keydown', onKey)
     })
+
+    watch(() => gallery.rowHeight, () => {
+      if (gridRef.value) {
+        captureAnchor(gridRef.value)
+      }
+    }, { flush: 'sync' })
+
+    watch(groups, measureOffsets, { flush: 'post' })
 
     // 换视图或重新查询后回到顶部
     watch(
       () => gallery.queryKey,
       () => {
+        pendingAnchor = null
         gridRef.value?.scrollTo({ top: 0 })
+        syncWindow(0)
       }
     )
 
@@ -318,6 +500,25 @@ export default defineComponent({
       }
     )
 
-    return { gallery, look, aiView, viewer, suggest, gridRef, groups, virtual, visibleRows, mountRow, unmountRow, item, masked, thumbUrl, onTileClick, onTileDown, onGridMove, onDragStart, onWheel }
+    return {
+      gallery,
+      look,
+      aiView,
+      viewer,
+      suggest,
+      gridRef,
+      groups,
+      visibleRowsByGroup,
+      monthOffsets,
+      totalLayoutHeight,
+      item,
+      masked,
+      thumbUrl,
+      onTileClick,
+      onTileDown,
+      onGridMove,
+      onDragStart,
+      onWheel
+    }
   }
 })

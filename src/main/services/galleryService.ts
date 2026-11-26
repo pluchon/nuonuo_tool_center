@@ -15,6 +15,7 @@ import {
 import { SORT_KEYS, type ScanFormat } from '@shared/settings'
 import { BizError } from '../common/bizError'
 import { normalizeRelDir } from '../common/pathUtil'
+import { bumpLibraryVersion, getCachedGallery, getLibraryVersion, setCachedGallery, stableQueryKey } from '../common/readCache'
 import type { ExifInfo } from './scan/exifInfo'
 import { formatOfFile } from './scan/formats'
 import type { AiSearchFilter } from '../repositories/aiSearchRepository'
@@ -204,6 +205,7 @@ export function invalidateRootOnlineCache(rootId?: number): void {
   } else {
     rootOnlineCache.delete(rootId)
   }
+  bumpLibraryVersion()
 }
 
 // 这些目录现在能不能访问（短 TTL 缓存仅用于只读视图；破坏性文件操作必须传 fresh: true 实查）
@@ -286,6 +288,12 @@ function sortItems(items: GalleryItemVO[], sort: GalleryQueryDTO['sort']): Galle
 
 // 网格数据：按视图和条件查出图片，同一内容只出一张，按排序排好
 export async function listGallery(query: GalleryQueryDTO): Promise<GalleryListVO> {
+  const cacheKey = stableQueryKey(query)
+  const cached = getCachedGallery(cacheKey)
+  if (cached) {
+    return cached
+  }
+  const version = getLibraryVersion()
   const now = new Date()
   const filter = await toFilter(query, now)
   const rows = await findGalleryRows(filter)
@@ -304,10 +312,14 @@ export async function listGallery(query: GalleryQueryDTO): Promise<GalleryListVO
   const items = [...byImage.values()]
     .map((list) => toItem(pickRepresentative(list, offline), offline))
     .filter((item) => matchMore(item, more, now))
-  if (query.view === 'ai') {
-    return { items: await withAiOrder(items) }
+  const result: GalleryListVO =
+    query.view === 'ai'
+      ? { items: await withAiOrder(items) }
+      : { items: query.sort === 'name' ? sortItems(items, query.sort) : items }
+  if (getLibraryVersion() === version) {
+    setCachedGallery(cacheKey, result)
   }
-  return { items: query.sort === 'name' ? sortItems(items, query.sort) : items }
+  return result
 }
 
 // “AI 建议”视图：按建议生成的先后排（后来的接在最后），带上建议放进的类目录（目录还不存在的标成新建）

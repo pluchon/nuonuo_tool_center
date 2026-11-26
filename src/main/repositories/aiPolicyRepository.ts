@@ -48,6 +48,26 @@ export async function findRuleBlocks(): Promise<Map<string, number>> {
   return new Map(rows.map((r) => [r.key, r.value]))
 }
 
+export async function invalidateProfileCache(tx: Tx): Promise<void> {
+  // 旧会话锁定了档案版本，忘记、纠正或回滚记忆后其摘要也必须立即失效。
+  await tx.execute(sql`update ai_profile set content='' where content<>''`)
+  const dreamWf = await getWorkflow<Record<string, unknown>>('DREAM', 'default', tx)
+  if (dreamWf) {
+    const nextState = { ...(dreamWf.state ?? {}) }
+    delete nextState.digest
+    delete nextState.lastSuccess
+    await upsertWorkflow(
+      'DREAM',
+      'default',
+      { status: dreamWf.status, phase: dreamWf.phase, state: nextState, error: dreamWf.error },
+      dreamWf.version,
+      tx
+    )
+  }
+  await tx.execute(sql`update app_setting set value=value-'digest'-'lastSuccess'
+    where key='ai.dream.summary' and delete_state=0`)
+}
+
 export async function replaceOrDeletePreference(
   id: number,
   replacement: string | null,
@@ -64,23 +84,7 @@ export async function replaceOrDeletePreference(
       await tx.execute(sql`insert into ai_memory(content,kind,confidence) select ${trimmed},'preference',1 where not exists
         (select 1 from ai_memory where content=${trimmed} and kind='preference' and delete_state=0 and valid_to is null)`)
     }
-    // 旧会话锁定了档案版本，忘记或纠正后其摘要也必须立即失效。
-    await tx.execute(sql`update ai_profile set content='' where content<>''`)
-    const dreamWf = await getWorkflow<Record<string, unknown>>('DREAM', 'default', tx)
-    if (dreamWf) {
-      const nextState = { ...(dreamWf.state ?? {}) }
-      delete nextState.digest
-      delete nextState.lastSuccess
-      await upsertWorkflow(
-        'DREAM',
-        'default',
-        { status: dreamWf.status, phase: dreamWf.phase, state: nextState, error: dreamWf.error },
-        dreamWf.version,
-        tx
-      )
-    }
-    await tx.execute(sql`update app_setting set value=value-'digest'-'lastSuccess'
-      where key='ai.dream.summary' and delete_state=0`)
+    await invalidateProfileCache(tx)
   })
 }
 

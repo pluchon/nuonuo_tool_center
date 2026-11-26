@@ -7,11 +7,16 @@ import { cachedSearchValue, searchCacheKey } from '../../src/main/repositories/a
 
 vi.mock('electron', () => ({ clipboard: {}, ClipboardItem: class {}, nativeImage: {}, shell: {} }))
 vi.mock('../../src/main/services/ai/bailianClient', () => ({
-  chatCall: vi.fn(async () => ({
-    message: { role: 'assistant', tool_calls: [{ type: 'function', id: 'k', function: {
-      name: 'search_images', arguments: JSON.stringify({ keywordGroups: [['河谷']], contrast: [] })
-    } }] }, finishReason: 'stop', usage: {}
-  }))
+  chatCall: vi.fn(async (input?: { messages?: Array<{ role: string }> }) => {
+    if (input?.messages?.at(-1)?.role === 'tool') {
+      return { message: { role: 'assistant', content: '河谷相关的图都在这里啦~' }, finishReason: 'stop', usage: {} }
+    }
+    return {
+      message: { role: 'assistant', tool_calls: [{ type: 'function', id: 'k', function: {
+        name: 'search_images', arguments: JSON.stringify({ keywordGroups: [['河谷']], contrast: [] })
+      } }] }, finishReason: 'stop', usage: {}
+    }
+  })
 }))
 vi.mock('../../src/main/services/ai/embeddingClient', () => ({ embed: vi.fn() }))
 vi.mock('../../src/main/services/rating/ratingService', () => ({
@@ -122,21 +127,22 @@ it('缓存达到容量上限时清理过期条目，保留新写入的结果', a
   }
 })
 
-it('重新搜索使用当天的计划，结果随当前分级和文字变化，过期后才重新调用', async () => {
+it('云端就绪时不绕过模型复放 search-plan-v2，结果随当前分级和文字变化；离线时仍可按当前分级检索', async () => {
   vi.mocked(chatCall).mockClear()
   const text = '想看山间流淌的河谷'
   expect((await search(text)).names).toEqual(['河谷'])
-  expect((await getDatabase().pg.query("SELECT key FROM ai_search_cache WHERE key LIKE 'search-plan-%'")).rows).toHaveLength(1)
+  expect(chatCall).toHaveBeenCalledTimes(2)
+  expect((await getDatabase().pg.query("SELECT key FROM ai_search_cache WHERE key LIKE 'search-plan-%'")).rows).toHaveLength(0)
   await closeDatabase()
   await start()
   await getDatabase().pg.exec("UPDATE image SET is_r18=true WHERE id=4; UPDATE image SET description='河谷' WHERE id=3")
+  // 即使历史残留旧的 search-plan 缓存，云端就绪时也绝不短路绕过模型；离线时才使用本地检索
   process.env.DASHSCOPE_API_KEY = ' '
-  expect((await search(text)).names).toEqual(['水边的少女'])
-  expect(chatCall).toHaveBeenCalledTimes(1)
-  process.env.DASHSCOPE_API_KEY = 'unit-test'
-  await getDatabase().pg.exec("UPDATE ai_search_cache SET expires_at=now()-interval '1 second'")
-  await search(text)
+  expect((await search('找河谷的图')).names).toEqual(['水边的少女'])
   expect(chatCall).toHaveBeenCalledTimes(2)
+  process.env.DASHSCOPE_API_KEY = 'unit-test'
+  expect((await search(text)).names).toEqual(['水边的少女'])
+  expect(chatCall).toHaveBeenCalledTimes(4)
 })
 
 it('缺少百炼密钥时本地文字检索不调用云端', async () => {
@@ -173,6 +179,12 @@ it('重启后即使缺少百炼密钥，仍可读取已生成的文本向量。�
 
 it('动态视觉过滤结合已有特征复用上一轮，明确限定这些图时只保留交集', async () => {
   vi.mocked(chatCall).mockClear()
+  const cirnoCall = {
+    message: { role: 'assistant', content: '', tool_calls: [{ type: 'function', id: 'c1', function: {
+      name: 'search_images', arguments: JSON.stringify({ character: '琪露诺', contrast: [] })
+    } }] }, finishReason: 'stop', usage: {}
+  } as never
+  vi.mocked(chatCall).mockResolvedValueOnce(cirnoCall)
   const a = await search('琪露诺')
   expect(a.names).toEqual(['另一张琪露诺','蓝发琪露诺'])
   vi.mocked(chatCall).mockResolvedValueOnce({
@@ -181,6 +193,7 @@ it('动态视觉过滤结合已有特征复用上一轮，明确限定这些图�
     } }] }, finishReason: 'stop', usage: {}
   } as never)
   expect((await search('蓝头发女孩子', a.id)).names).toEqual(['水边的少女','蓝发琪露诺'])
+  vi.mocked(chatCall).mockResolvedValueOnce(cirnoCall)
   const b = await search('琪露诺')
   vi.mocked(chatCall).mockResolvedValueOnce({
     message: { role: 'assistant', content: '', tool_calls: [{ type: 'function', id: 'v2', function: {

@@ -4,6 +4,7 @@ import type { CategoryDirVO, LibraryOverviewVO, LibraryRootVO } from '@shared/ap
 import { BizError } from '../common/bizError'
 import { getLogger } from '../common/logger'
 import { isSkippedDir, isWithin } from '../common/pathUtil'
+import { bumpLibraryVersion, getCachedOverview, getLibraryVersion, setCachedOverview } from '../common/readCache'
 import { toLibraryRootVO, toSidebarCountsVO, toSourceRootVO } from '../converter/libraryConverter'
 import { countImagesByChildFolder, countImagesByRoot, countOverview } from '../repositories/libraryOverviewRepository'
 import {
@@ -77,6 +78,11 @@ async function listCategoryDirs(home: string): Promise<CategoryDirVO[]> {
 
 // 侧栏和底栏需要的全部数据：计数、源目录（含是否找不到）、顶层类目录、最近扫描时间
 export async function getOverview(categoryHomeOverride: string | null): Promise<LibraryOverviewVO> {
+  const cached = getCachedOverview()
+  if (cached) {
+    return cached
+  }
+  const version = getLibraryVersion()
   const [counts, byRoot, roots, home] = await Promise.all([
     countOverview(RECENT_DAYS),
     countImagesByRoot(),
@@ -91,12 +97,16 @@ export async function getOverview(categoryHomeOverride: string | null): Promise<
     })
   )
   const lastScan = roots.reduce((latest, root) => Math.max(latest, root.lastScanAt?.getTime() ?? 0), 0)
-  return {
+  const overview: LibraryOverviewVO = {
     counts: toSidebarCountsVO(counts),
     sources: sourceVOs,
     categories: await listCategoryDirs(home),
     lastScanAt: lastScan ? new Date(lastScan).toISOString() : null
   }
+  if (getLibraryVersion() === version) {
+    setCachedOverview(overview)
+  }
+  return overview
 }
 
 // 检查一个文件夹能不能作为源目录：必须存在；不能和类目录所在的图库文件夹重叠，也不能和其它源目录重复或互相嵌套
@@ -124,6 +134,7 @@ async function checkSourcePath(rawPath: string, categoryHomeOverride: string | n
 export async function addRoot(rawPath: string, categoryHomeOverride: string | null): Promise<LibraryRootVO> {
   const path = await checkSourcePath(rawPath, categoryHomeOverride, null)
   const created = await insertRoot({ kind: 'SOURCE', name: basename(path) || path, path })
+  bumpLibraryVersion()
   startScan(created.id)
   return toLibraryRootVO(created)
 }
@@ -136,6 +147,7 @@ export async function relocateRoot(id: number, rawPath: string, categoryHomeOver
   }
   const path = await checkSourcePath(rawPath, categoryHomeOverride, id)
   const updated = await updateRootPath(id, path)
+  bumpLibraryVersion()
   startScan(id)
   return toLibraryRootVO(updated)
 }

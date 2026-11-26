@@ -212,7 +212,7 @@ it('侧栏开合时图片随行连续上下移动，中间帧没有遮挡或重�
 it('虚拟图库连续切换右栏保持当前位置，减少动画时直接完成', async () => {
   const { page } = await openGallery('gallery-panel-motion', 240)
   const grid = page.locator('.image-grid')
-  await expect.poll(() => grid.locator('.image-grid__row').count(), { timeout: 45_000 }).toBeGreaterThan(45)
+  await expect.poll(() => grid.evaluate(el => el.scrollHeight > 2800 && el.querySelectorAll('.tile').length > 0 && [...el.querySelectorAll('.image-grid__count')].reduce((s, e) => s + parseInt(e.textContent ?? '0'), 0) === 240), { timeout: 45_000 }).toBe(true)
   await grid.evaluate(el => { el.scrollTop = 2800 })
   const visible = () => grid.evaluate(el => {
     const {top, bottom} = el.getBoundingClientRect()

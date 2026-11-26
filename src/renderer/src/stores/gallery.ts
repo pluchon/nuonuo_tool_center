@@ -88,10 +88,11 @@ export const useGalleryStore = defineStore('gallery', {
       return v.view === 'untagged' || v.view === 'recent' || v.view === 'ai' || (v.view === 'dir' && v.dir?.kind === 'source')
     },
     multi: (s): boolean => s.selected.length >= 2,
-    isSelected:
-      (s) =>
-      (id: number): boolean =>
-        s.selected.includes(id),
+    selectedSet: (s): ReadonlySet<number> => new Set(s.selected),
+    isSelected(): (id: number) => boolean {
+      const set = this.selectedSet
+      return (id: number): boolean => set.has(id)
+    },
     primaryItem: (s): GalleryItemVO | undefined => s.items.find((i) => i.imageId === s.primary),
     rowHeight: (s): number => ROW_HEIGHTS[s.zoom]
   },

@@ -12,6 +12,7 @@ import { ORGANIZE_COST, readCloudCredentials } from '../../config/cloudConfig'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { publishExclusive } from '../../common/publishFile'
+import { bumpLibraryVersion } from '../../common/readCache'
 import { retryOnWinBusy } from '../../common/winFs'
 import { getDatabase } from '../../db/client'
 import { col } from '../../db/sqlUtil'
@@ -342,6 +343,7 @@ export async function resetOrganizedToSource(): Promise<ReorganizeResetResultVO>
             )
         }
       })
+      bumpLibraryVersion()
     }
 
     try {

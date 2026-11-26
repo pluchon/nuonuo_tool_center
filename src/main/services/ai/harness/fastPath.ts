@@ -55,7 +55,7 @@ export interface FastPathResult {
   refinement?: string
 }
 
-// 确定性零成本快路径：只拦截 100% 明确的指令（结果追问、引用读取、显式提案、纯以图搜图、精确标签/字典直查、空范围保护和离线降级）
+// 确定性零成本快路径：只拦截 100% 明确的指令（结果追问、引用读取、显式提案、纯以图搜图、空范围保护和离线降级）
 export async function tryFastPath(input: FastPathInput): Promise<FastPathResult> {
   const { user, history, attachments, dirs, scopeName, scopeConds, dict, cloudReady, callModel, visibleForTurn } = input
   const u = user.content as UserContent
@@ -179,7 +179,7 @@ export async function tryFastPath(input: FastPathInput): Promise<FastPathResult>
     }
   }
 
-  if (routed) {
+  if (routed && !cloudReady) {
     const spec = explicit ? explicit.spec : descriptiveSpec(routed, dict.tags)
     const routeDirs =
       dirs ??

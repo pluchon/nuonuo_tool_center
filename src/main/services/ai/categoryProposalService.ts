@@ -3,6 +3,7 @@ import { basename, dirname, join } from 'node:path'
 import { DIR_NAME_MAX, type CategoryProposalVO } from '@shared/api'
 import { BizError } from '../../common/bizError'
 import { isWithin, pathKey } from '../../common/pathUtil'
+import { bumpLibraryVersion } from '../../common/readCache'
 import {
   beginMoveTreeBatch,
   completeMoveTreeBatch,
@@ -233,6 +234,7 @@ export async function decideCategoryProposal(id: number, messageId: number, appl
         }
       }
       invalidateCategoryTree()
+      bumpLibraryVersion()
     }
     const updated = await finishProposalDecision(id, apply ? 'applied' : 'cancelled')
     return publicPlan(updated)

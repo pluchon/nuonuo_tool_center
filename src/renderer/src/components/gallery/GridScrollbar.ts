@@ -1,5 +1,5 @@
 import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch, type PropType } from 'vue'
-import { monthLabel } from '@/utils/gridLayout'
+import { findMonthAtOffset, monthLabel } from '@/utils/gridLayout'
 
 // 滑块最短多高、轨道上下各留多少
 const MIN_THUMB = 36
@@ -16,7 +16,11 @@ export default defineComponent({
     // 是否按月分组（分组时才显示月份气泡）
     timeline: { type: Boolean, default: false },
     // 内容变了（换档、增删图）时由父组件改它，触发重新量尺寸
-    revision: { type: null as unknown as PropType<unknown>, default: null }
+    revision: { type: null as unknown as PropType<unknown>, default: null },
+    // 预计算的月份分组纵坐标（提供后滚动时走 O(log G) 二分查找，不再遍历 DOM offsetTop）
+    monthOffsets: { type: Array as PropType<Array<{ top: number; label: string }>>, default: undefined },
+    // 预计算的总内容高度
+    layoutHeight: { type: Number, default: undefined }
   },
   setup(props) {
     const trackH = ref(0)
@@ -29,19 +33,26 @@ export default defineComponent({
     const dragging = ref(false)
     const scrolling = ref(false)
 
+    // 缓存滚动容器的总高度与视口高度，只在 ResizeObserver / revision / layoutHeight 变化时刷新
+    let cachedScrollHeight = 0
+    let cachedClientHeight = 0
+
     // 悬停、拖动、刚滚动过时完全显出来
     const active = computed(() => hover.value || dragging.value || scrolling.value)
     const bubbleOn = computed(() => props.timeline && (dragging.value || scrolling.value))
 
-    // 当前最上面那个月份（看滚动位置落在哪个分组里）
-    const currentMonth = (el: HTMLElement): string => {
+    // 当前最上面那个月份（优先走 O(log G) 二分查找，未传 monthOffsets 时保留 DOM 回退）
+    const currentMonth = (el: HTMLElement, curTop: number): string => {
       if (!props.timeline) {
         return ''
+      }
+      if (props.monthOffsets) {
+        return findMonthAtOffset(props.monthOffsets, curTop)
       }
       let key = ''
       for (const child of el.children) {
         const section = child as HTMLElement
-        if (section.offsetTop - 8 > el.scrollTop) {
+        if (section.offsetTop - 8 > curTop) {
           break
         }
         key = section.dataset.month ?? ''
@@ -49,45 +60,61 @@ export default defineComponent({
       return key ? monthLabel(key) : ''
     }
 
-    // 按滚动容器现在的尺寸和位置摆滑块
-    const measure = (): void => {
+    const updateThumb = (el: HTMLElement): void => {
+      const max = cachedScrollHeight - cachedClientHeight
+      visible.value = max > 1
+      trackH.value = cachedClientHeight - INSET * 2
+      thumbH.value =
+        cachedScrollHeight > 0
+          ? Math.max(MIN_THUMB, Math.round((cachedClientHeight / cachedScrollHeight) * trackH.value))
+          : MIN_THUMB
+      const curTop = el.scrollTop
+      const ratio = max > 0 ? Math.min(1, Math.max(0, curTop / max)) : 0
+      thumbY.value = INSET + ratio * (trackH.value - thumbH.value)
+      percent.value = Math.round(ratio * 100)
+      label.value = currentMonth(el, curTop)
+    }
+
+    // 仅在尺寸或内容修订时测量容器几何，滚动过程中只读 scrollTop
+    const refreshMetrics = (): void => {
       const el = props.target
       if (!el) {
+        cachedScrollHeight = 0
+        cachedClientHeight = 0
         visible.value = false
         return
       }
-      const max = el.scrollHeight - el.clientHeight
-      visible.value = max > 1
-      trackH.value = el.clientHeight - INSET * 2
-      thumbH.value = Math.max(MIN_THUMB, Math.round((el.clientHeight / el.scrollHeight) * trackH.value))
-      const ratio = max > 0 ? Math.min(1, Math.max(0, el.scrollTop / max)) : 0
-      thumbY.value = INSET + ratio * (trackH.value - thumbH.value)
-      percent.value = Math.round(ratio * 100)
-      label.value = currentMonth(el)
+      cachedClientHeight = el.clientHeight
+      cachedScrollHeight = el.scrollHeight > 0 ? el.scrollHeight : (props.layoutHeight ?? 0)
+      updateThumb(el)
     }
 
-    // 滚动时合并到下一帧再量，并在停下一会儿后收起
+    // 滚动时合并到下一帧再更新滑块，并在停下一会儿后收起
     let frame = 0
     let idle = 0
     const onScroll = (): void => {
       if (!frame) {
         frame = requestAnimationFrame(() => {
           frame = 0
-          measure()
+          const el = props.target
+          if (!el) return
+          if (cachedClientHeight === 0 || cachedScrollHeight === 0) {
+            refreshMetrics()
+          } else {
+            updateThumb(el)
+          }
         })
       }
       if (!scrolling.value) {
         scrolling.value = true
-        props.target?.classList.add('image-grid--scrolling')
       }
       clearTimeout(idle)
       idle = window.setTimeout(() => {
         scrolling.value = false
-        props.target?.classList.remove('image-grid--scrolling')
       }, IDLE_MS)
     }
 
-    // 拖到或点到最底时记下来：屏幕外的行是按估计高度占位的，滚过去渲染出来后总高度会变；到底后的一小段时间里内容变高就接着贴底，用户自己滚了就不管
+    // 拖到或点到最底时记下来：到底后的一小段时间里内容变高就接着贴底，用户自己滚了就不管
     let stickEnd = false
     let stickUntil = 0
     let smoothBusy = false
@@ -101,8 +128,8 @@ export default defineComponent({
         stickEnd = false
         return
       }
-      if (el.scrollHeight - el.clientHeight - el.scrollTop > 1) {
-        el.scrollTo({ top: el.scrollHeight })
+      if (cachedScrollHeight - cachedClientHeight - el.scrollTop > 1) {
+        el.scrollTo({ top: cachedScrollHeight })
       }
     }
     const onScrollEnd = (): void => {
@@ -123,15 +150,17 @@ export default defineComponent({
       if (!el || room <= 0) {
         return
       }
+      const max = Math.max(0, cachedScrollHeight - cachedClientHeight)
       const ratio = Math.min(1, Math.max(0, (y - INSET) / room))
       stickEnd = ratio === 1
       stickUntil = performance.now() + STICK_MS
-      smoothBusy = smooth && Math.abs(el.scrollTop - ratio * (el.scrollHeight - el.clientHeight)) > 1
-      el.scrollTo({ top: ratio * (el.scrollHeight - el.clientHeight), behavior: smooth ? 'smooth' : 'auto' })
+      smoothBusy = smooth && Math.abs(el.scrollTop - ratio * max) > 1
+      el.scrollTo({ top: ratio * max, behavior: smooth ? 'smooth' : 'auto' })
     }
 
-    // 拖滑块：记下按下时指针在滑块里的位置，跟着走
+    // 拖滑块：记下按下时指针在滑块里的位置和轨道顶边，拖动中零重排
     let grab = 0
+    let railTop = 0
     const onThumbDown = (e: PointerEvent): void => {
       if (e.button !== 0) {
         return
@@ -139,6 +168,7 @@ export default defineComponent({
       e.preventDefault()
       const thumb = e.currentTarget as HTMLElement
       grab = e.clientY - thumb.getBoundingClientRect().top
+      railTop = thumb.parentElement?.getBoundingClientRect().top ?? 0
       thumb.setPointerCapture(e.pointerId)
       dragging.value = true
     }
@@ -146,8 +176,7 @@ export default defineComponent({
       if (!dragging.value) {
         return
       }
-      const top = (e.currentTarget as HTMLElement).parentElement?.getBoundingClientRect().top ?? 0
-      scrollToThumb(e.clientY - top - grab, false)
+      scrollToThumb(e.clientY - railTop - grab, false)
     }
     const onThumbUp = (e: PointerEvent): void => {
       if (!dragging.value) {
@@ -185,11 +214,13 @@ export default defineComponent({
       old?.removeEventListener('scrollend', onScrollEnd)
       old?.removeEventListener('wheel', onUserScroll)
       old?.removeEventListener('keydown', onUserScroll)
-      old?.classList.remove('image-grid--scrolling')
       clearTimeout(idle)
       scrolling.value = false
       observer?.disconnect()
       if (!el) {
+        cachedScrollHeight = 0
+        cachedClientHeight = 0
+        visible.value = false
         return
       }
       el.addEventListener('scroll', onScroll, { passive: true })
@@ -197,13 +228,13 @@ export default defineComponent({
       el.addEventListener('wheel', onUserScroll, { passive: true })
       el.addEventListener('keydown', onUserScroll)
       observer = new ResizeObserver(() => {
-        measure()
+        refreshMetrics()
         snapEnd()
       })
       watchContent()
     }
 
-    // 盯住滚动容器和里面每个分组的尺寸：行渲染出来、换档、增删图都会让内容变高变矮
+    // 盯住滚动容器尺寸；仅在未传入预计算布局时才监听子分组节点
     const watchContent = (): void => {
       const el = props.target
       if (!el || !observer) {
@@ -211,10 +242,12 @@ export default defineComponent({
       }
       observer.disconnect()
       observer.observe(el)
-      for (const child of el.children) {
-        observer.observe(child)
+      if (props.layoutHeight === undefined) {
+        for (const child of el.children) {
+          observer.observe(child)
+        }
       }
-      measure()
+      refreshMetrics()
     }
 
     onMounted(() => bind(props.target))
@@ -222,9 +255,9 @@ export default defineComponent({
       () => props.target,
       (el, old) => bind(el, old)
     )
-    // 分组变了以后等 DOM 更新完再重新盯
+    // 分组或总高度变了以后等 DOM 更新完再刷新缓存尺寸
     watch(
-      () => props.revision,
+      [() => props.revision, () => props.layoutHeight, () => props.monthOffsets],
       () => {
         void nextTick(watchContent)
       }
@@ -234,7 +267,6 @@ export default defineComponent({
       props.target?.removeEventListener('scrollend', onScrollEnd)
       props.target?.removeEventListener('wheel', onUserScroll)
       props.target?.removeEventListener('keydown', onUserScroll)
-      props.target?.classList.remove('image-grid--scrolling')
       observer?.disconnect()
       cancelAnimationFrame(frame)
       clearTimeout(idle)

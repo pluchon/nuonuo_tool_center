@@ -2,6 +2,7 @@ import { mkdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { BizError } from '../common/bizError'
 import { isWithin } from '../common/pathUtil'
+import { bumpLibraryVersion } from '../common/readCache'
 import { getDatabase } from '../db/client'
 import { findActiveRootsByKind, registerCategoryRoot, type LibraryRootEntity } from '../repositories/libraryRootRepository'
 import { getSettings } from './settingsService'
@@ -37,5 +38,8 @@ export async function ensureCategoryRoot(override: string | null, create = false
     if (create) throw new BizError('NOT_FOUND', `类目录暂时不可用：${home}`)
     return null
   }
-  return root ?? await registerCategoryRoot(home)
+  if (root) return root
+  const created = await registerCategoryRoot(home)
+  bumpLibraryVersion()
+  return created
 }

@@ -1,4 +1,4 @@
-import type { AiStreamEvent } from '@shared/api'
+import type { AiStreamEvent, AiTimelineBlock } from '@shared/api'
 import { BAILIAN_CONFIG, EMBEDDING_CONFIG, readCloudCredentials } from '../../../config/cloudConfig'
 import { missingSearchVector } from '../../../repositories/aiSearchRepository'
 import type { AiConversationEntity, AiMessageEntity } from '../../../repositories/aiConversationRepository'
@@ -14,27 +14,13 @@ import { buildMessages, markStepCache, stableStringify, type PromptMessage } fro
 import type { MatchEvidence } from '../searchFeedback'
 import { localReply, searchByImage } from '../search/hybridSearch'
 import { buildTurnTail, microcompactTail, tailBytes } from './context'
-import { dispatchTool } from './toolRegistry'
+import { dispatchTool, isToolError, parseToolJson, type RegisteredTool, type ToolExecutionResult } from './toolRegistry'
 import { ASSISTANT_TOOL_MAP, ASSISTANT_TOOLS } from './tools'
 import { previousReceipt } from './tools/categoryTools'
-import { reduceToolOutcome, userText, type HarnessState, type ToolEnv, type UserContent } from './types'
+import { reduceToolOutcome, replyText, userText, type AssistantContent, type HarnessState, type ToolEnv, type UserContent } from './types'
 
 // 一次回答最多调几次模型（含工具往返）
-const MAX_STEPS = 4
-
-const TOOL_STATUS: Record<string, string> = {
-  search_images: '正在检索图库…',
-  get_image: '正在查看图片信息…',
-  read_referenced_images: '正在查看图片信息…',
-  list_tags: '正在查看标签词表…',
-  list_categories: '正在核对类目录…',
-  list_category_paths: '正在核对类目录…',
-  propose_category_change: '正在核对类目录…',
-  remember_preference: '正在记住偏好…',
-  remember: '正在记住偏好…',
-  explain_match: '正在核对检索结果…',
-  exclude_image: '正在核对检索结果…'
-}
+const MAX_STEPS = 7
 
 export type StreamCallback = (ev: Omit<AiStreamEvent, 'conversationId'>) => void
 
@@ -55,6 +41,120 @@ function normalizeToolCallKey(name: string, rawArgs: string): string {
   }
 }
 
+function parseArgsObject(rawArgs: string): Record<string, unknown> {
+  const parsed = parseToolJson(rawArgs)
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
+}
+
+function appendBlock(stateRef: { current: HarnessState }, block: AiTimelineBlock): void {
+  stateRef.current = {
+    ...stateRef.current,
+    blocks: [...stateRef.current.blocks, block]
+  }
+}
+
+function emitNarration(
+  rawContent: string | null | undefined,
+  stateRef: { current: HarnessState },
+  onStream?: StreamCallback
+): void {
+  const text = (rawContent ?? '').trim()
+  if (!text) return
+  appendBlock(stateRef, { type: 'narration', text })
+  onStream?.({ kind: 'narration_commit', text })
+}
+
+function startAction(
+  actionId: string,
+  toolName: string,
+  summary: string,
+  stateRef: { current: HarnessState },
+  onStream?: StreamCallback
+): void {
+  const block: AiTimelineBlock = { type: 'action', id: actionId, tool: toolName, summary, status: 'running' }
+  appendBlock(stateRef, block)
+  onStream?.({ kind: 'action_start', actionId, tool: toolName, summary, status: 'running', block })
+}
+
+function finishAction(
+  actionId: string,
+  toolName: string,
+  summary: string,
+  status: 'done' | 'failed' | 'aborted',
+  stateRef: { current: HarnessState },
+  onStream?: StreamCallback
+): void {
+  const block: AiTimelineBlock = { type: 'action', id: actionId, tool: toolName, summary, status }
+  stateRef.current = {
+    ...stateRef.current,
+    blocks: stateRef.current.blocks.map((b) => (b.type === 'action' && b.id === actionId ? block : b))
+  }
+  onStream?.({ kind: 'action_end', actionId, tool: toolName, summary, status, block })
+}
+
+function emitMemoryNoticeIfUpdated(
+  prevNotices: string[] | undefined,
+  state: HarnessState,
+  onStream?: StreamCallback
+): void {
+  const nextNotices = state.memoryNotices
+  if (!nextNotices?.length) return
+  if (prevNotices === nextNotices || prevNotices?.length === nextNotices.length) return
+  onStream?.({
+    kind: 'memory_notice',
+    memoryNotice: {
+      notices: nextNotices,
+      ...(state.memoryNoticeAction ? { action: state.memoryNoticeAction } : {})
+    }
+  })
+}
+
+function isAbortError(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true
+  return err instanceof Error && (err.name === 'AbortError' || err.name === 'APIUserAbortError')
+}
+
+function markRunningActionsAborted(stateRef: { current: HarnessState }, onStream?: StreamCallback): void {
+  const running = stateRef.current.blocks.filter(
+    (b): b is Extract<AiTimelineBlock, { type: 'action' }> => b.type === 'action' && b.status === 'running'
+  )
+  if (!running.length) return
+  stateRef.current = {
+    ...stateRef.current,
+    blocks: stateRef.current.blocks.map((b) =>
+      b.type === 'action' && b.status === 'running' ? { ...b, status: 'aborted' as const } : b
+    )
+  }
+  for (const b of running) {
+    const abortedBlock: AiTimelineBlock = { ...b, status: 'aborted' }
+    onStream?.({
+      kind: 'action_end',
+      actionId: b.id,
+      tool: b.tool,
+      summary: b.summary,
+      status: 'aborted',
+      block: abortedBlock
+    })
+  }
+}
+
+function needsStepRepair(toolName: string | null, parsed: unknown, state: HarnessState): boolean {
+  if (state.awaitingContrast) return true
+  if (isToolError(parsed)) return true
+  if (
+    toolName === 'search_images' &&
+    parsed &&
+    typeof parsed === 'object' &&
+    !Array.isArray(parsed)
+  ) {
+    const obj = parsed as Record<string, unknown>
+    if (obj.total === 0 && Array.isArray(obj.closestTags) && obj.closestTags.length > 0) {
+      return true
+    }
+  }
+  return false
+}
+
 // 图片附件直通视觉问答与按图找相似
 export async function runVisionTurn(
   turns: HistoryTurn[],
@@ -64,11 +164,17 @@ export async function runVisionTurn(
   callModel: typeof chatCall,
   image: Extract<StoredAttachment, { kind: 'image' }>,
   onStream?: StreamCallback
-): Promise<{ text: string; state: HarnessState }> {
+): Promise<{ text: string; state: HarnessState; interrupted?: boolean }> {
+  if (env.signal?.aborted) {
+    return { text: '', state: stateRef.current, interrupted: true }
+  }
   const u = user.content as UserContent
   const question = [userText(u), env.referenceNotes].filter(Boolean).join('\n\n')
   const url = await prepareRatedUpload(image.dataUrl, image.originalHash)
   const { messages: past } = await workingHistory(turns, Buffer.byteLength(question) + 4096, false, env.compactionProgress)
+  if (env.signal?.aborted) {
+    return { text: '', state: stateRef.current, interrupted: true }
+  }
   const tools =
     (u.attachments?.length ?? (u.attachment || u.image ? 1 : 0)) === 1
       ? [
@@ -88,22 +194,54 @@ export async function runVisionTurn(
     [{ role: 'user', content: [{ type: 'image_url', image_url: { url } }, { type: 'text', text: question }] }],
     tools
   )
-  const res = await callModel({
-    kind: 'chat',
-    model: BAILIAN_CONFIG.visionSearchModel,
-    messages: fitted.messages,
-    tools,
-    maxTokens: fitted.maxTokens,
-    ...(onStream ? { onDelta: (text: string) => onStream({ kind: 'delta', text }) } : {})
-  })
+  let liveText = ''
+  let res: Awaited<ReturnType<typeof chatCall>>
+  try {
+    res = await callModel({
+      kind: 'chat',
+      model: BAILIAN_CONFIG.visionSearchModel,
+      messages: fitted.messages,
+      tools,
+      maxTokens: fitted.maxTokens,
+      ...(env.signal ? { signal: env.signal } : {}),
+      ...(onStream
+        ? {
+            onDelta: (text: string) => {
+              liveText += text
+              onStream({ kind: 'delta', text })
+            }
+          }
+        : {})
+    })
+  } catch (err) {
+    if (isAbortError(err, env.signal)) {
+      markRunningActionsAborted(stateRef, onStream)
+      return { text: liveText.trim(), state: stateRef.current, interrupted: true }
+    }
+    throw err
+  }
   stateRef.current = {
     ...stateRef.current,
     contextUsage: contextUsage(res.usage, fitted.inputBound, res.message)
   }
+  if (env.signal?.aborted) {
+    return { text: (res.message.content ?? liveText).trim(), state: stateRef.current, interrupted: true }
+  }
   if (tools && res.message.tool_calls?.some((c) => c.type === 'function' && c.function.name === 'search_similar_image')) {
-    onStream?.({ kind: 'reset' })
-    onStream?.({ kind: 'status', tool: 'search_similar_image', text: '正在按图找相似…' })
-    const imageIds = await searchByImage(image, env.dirs)
+    emitNarration(res.message.content, stateRef, onStream)
+    const actionId = 'vision-search-similar'
+    startAction(actionId, 'search_similar_image', '按图找相似', stateRef, onStream)
+    let imageIds: number[]
+    try {
+      imageIds = await searchByImage(image, env.dirs)
+    } catch (err) {
+      if (isAbortError(err, env.signal)) {
+        markRunningActionsAborted(stateRef, onStream)
+        return { text: '', state: stateRef.current, interrupted: true }
+      }
+      throw err
+    }
+    finishAction(actionId, 'search_similar_image', `按图找相似 · ${imageIds.length} 张`, 'done', stateRef, onStream)
     const evidence: MatchEvidence = { methods: Object.fromEntries(imageIds.map((id) => [id, 'vector'])) }
     const incomplete = (await missingSearchVector(EMBEDDING_CONFIG.model, { dirs: env.dirs, tagGroups: [], keywordGroups: [] }))
       ? '部分图片尚无画面向量'
@@ -115,12 +253,26 @@ export async function runVisionTurn(
         conds: [['画面', '与附件相似']]
       }
     }
+    if (env.signal?.aborted) {
+      return { text: localReply(imageIds.length), state: stateRef.current, interrupted: true }
+    }
     return { text: localReply(imageIds.length), state: stateRef.current }
   }
   return { text: (res.message.content ?? '').trim(), state: stateRef.current }
 }
 
-// Claude Code 范式单主循环：固定四层前缀 + 零成本微压缩 + 声明式工具归约 + 多步缓存断点推进
+interface PreparedToolCall {
+  callId: string
+  actionId: string
+  toolName: string | null
+  tool: RegisteredTool | undefined
+  rawArgs: string
+  argsObj: Record<string, unknown>
+  startSummary: string
+  blockedResult?: { content: string; status: 'done' | 'failed'; summary: string; isDuplicate?: boolean }
+}
+
+// Claude Code 范式单主循环：固定四层前缀 + 零成本微压缩 + 声明式工具归约 + 交错叙事时间线 + 自适应思考
 export async function runAgentLoop(
   conversation: AiConversationEntity,
   turns: HistoryTurn[],
@@ -131,7 +283,7 @@ export async function runAgentLoop(
   scopeName: string | null,
   callModel: typeof chatCall,
   onStream?: StreamCallback
-): Promise<{ text: string; state: HarnessState }> {
+): Promise<{ text: string; state: HarnessState; interrupted?: boolean }> {
   const u = user.content as UserContent
   const question = [userText(u), env.referenceNotes].filter(Boolean).join('\n\n')
   const profile = await profileOfConversation(
@@ -148,6 +300,9 @@ export async function runAgentLoop(
     ...stateRef.current,
     memoryIds: memories.map((m) => m.id)
   }
+  if (turnEnv.signal?.aborted) {
+    return { text: '', state: stateRef.current, interrupted: true }
+  }
   let sessionState: string | undefined
   if (turnEnv.shownImages?.length) {
     const ordinaryRecent = turnEnv.shownImages
@@ -158,37 +313,81 @@ export async function runAgentLoop(
       : ''
     sessionState = `[会话状态] 本段对话已展示过 ${turnEnv.shownImages.length} 张图${sample}。若用户说“还有其他的吗”“换几张”“看过了”“再找别的”等想看没展示过的图，调用 search_images 时请设 excludeShown: true。`
   }
+  const assistantRows = history.filter((m) => m.role === 'ASSISTANT')
+  const recentAssistantTexts = assistantRows.slice(-2).map((m) => replyText(m.content as AssistantContent))
+  const previousInterrupted = (assistantRows.at(-1)?.content as AssistantContent | undefined)?.interrupted === true
   const tail: PromptMessage[] = buildTurnTail(
     question,
     scopeName,
     u.includeR18,
     new Date(),
     memories.map((m) => `#${m.id} ${m.content}`),
-    sessionState
+    sessionState,
+    { recentAssistantTexts, previousInterrupted }
   )
   const fixedBytes = Buffer.byteLength(ASSISTANT_RULES + profile + JSON.stringify(ASSISTANT_TOOLS)) + 1024
   const seenCallKeys = new Set<string>()
+  let previousStepNeedsRepair = false
 
   for (let step = 0; step < MAX_STEPS; step++) {
+    if (turnEnv.signal?.aborted) {
+      markRunningActionsAborted(stateRef, onStream)
+      return { text: '', state: stateRef.current, interrupted: true }
+    }
     const compactTail = microcompactTail(tail)
-    const { messages: past } = await workingHistory(turns, fixedBytes + tailBytes(compactTail), false, turnEnv.compactionProgress)
-    const [system, ...historyWithMark] = buildMessages({ rules: ASSISTANT_RULES, profile, history: past, tail: [], cache: true })
-    const fitted = fitContext([system], historyWithMark, compactTail, ASSISTANT_TOOLS)
-    const requestMessages = step > 0 ? markStepCache(fitted.messages) : fitted.messages
+    let past: PromptMessage[]
+    let stepLiveText = ''
+    let res: Awaited<ReturnType<typeof chatCall>>
+    let fitted: ReturnType<typeof fitContext>
     const afterProposal = step === 0 && turnEnv.previousProposal !== undefined && history.at(-1)?.id === turnEnv.previousProposal.messageId
     const streamed = Boolean(onStream && !afterProposal)
+    const enableThinking = step > 0 && previousStepNeedsRepair
 
-    const res = await callModel({
-      kind: 'chat',
-      model: BAILIAN_CONFIG.chatModel,
-      messages: requestMessages,
-      tools: ASSISTANT_TOOLS,
-      ...(afterProposal ? { requiredTool: 'propose_category_change' } : {}),
-      maxTokens: fitted.maxTokens,
-      ...(streamed ? { onDelta: (text: string) => onStream!({ kind: 'delta', text }) } : {})
-    })
+    try {
+      past = (await workingHistory(turns, fixedBytes + tailBytes(compactTail), false, turnEnv.compactionProgress)).messages
+      const [system, ...historyWithMark] = buildMessages({ rules: ASSISTANT_RULES, profile, history: past, tail: [], cache: true })
+      fitted = fitContext([system], historyWithMark, compactTail, ASSISTANT_TOOLS)
+      const requestMessages = step > 0 ? markStepCache(fitted.messages) : fitted.messages
+      if (turnEnv.signal?.aborted) {
+        markRunningActionsAborted(stateRef, onStream)
+        return { text: '', state: stateRef.current, interrupted: true }
+      }
+      res = await callModel({
+        kind: 'chat',
+        model: BAILIAN_CONFIG.chatModel,
+        messages: requestMessages,
+        tools: ASSISTANT_TOOLS,
+        ...(afterProposal ? { requiredTool: 'propose_category_change' } : {}),
+        ...(enableThinking ? { enableThinking: true, thinkingBudget: 512 } : { enableThinking: false }),
+        maxTokens: fitted.maxTokens,
+        ...(turnEnv.signal ? { signal: turnEnv.signal } : {}),
+        ...(streamed
+          ? {
+              onDelta: (text: string) => {
+                stepLiveText += text
+                onStream!({ kind: 'delta', text })
+              }
+            }
+          : {})
+      })
+    } catch (err) {
+      if (isAbortError(err, turnEnv.signal)) {
+        markRunningActionsAborted(stateRef, onStream)
+        return { text: stepLiveText.trim(), state: stateRef.current, interrupted: true }
+      }
+      throw err
+    }
+
     stateRef.current = { ...stateRef.current, contextUsage: contextUsage(res.usage, fitted.inputBound, res.message) }
     const calls = res.message.tool_calls ?? []
+
+    if (turnEnv.signal?.aborted) {
+      if (calls.length > 0) {
+        emitNarration(res.message.content ?? stepLiveText, stateRef, onStream)
+        return { text: '', state: stateRef.current, interrupted: true }
+      }
+      return { text: (res.message.content ?? stepLiveText).trim(), state: stateRef.current, interrupted: true }
+    }
 
     // 目录操作的执行结果由本地回执提供。服务异常返回自由文本时也不能把它作为磁盘操作结果展示。
     if (afterProposal && (calls.length !== 1 || calls[0].type !== 'function' || calls[0].function.name !== 'propose_category_change')) {
@@ -198,19 +397,45 @@ export async function runAgentLoop(
     if (calls.length === 0) {
       const response = (res.message.content ?? '').trim()
       if (stateRef.current.awaitingContrast) {
-        if (streamed) onStream?.({ kind: 'reset' })
-        onStream?.({ kind: 'status', tool: 'search_images', text: TOOL_STATUS.search_images })
+        emitNarration(res.message.content, stateRef, onStream)
+        const actionId = `s${step}-awaiting-contrast`
+        const searchTool = ASSISTANT_TOOL_MAP.get('search_images')
+        const startSummary = searchTool?.formatStart?.({}) ?? '检索图库'
+        startAction(actionId, 'search_images', startSummary, stateRef, onStream)
         const fallback = await dispatchTool(ASSISTANT_TOOL_MAP, 'search_images', '{}', turnEnv, stateRef.current)
+        const doneSummary = searchTool?.formatDone?.({}, fallback) ?? startSummary
+        finishAction(
+          actionId,
+          'search_images',
+          doneSummary,
+          isToolError(parseToolJson(fallback.content)) ? 'failed' : 'done',
+          stateRef,
+          onStream
+        )
         stateRef.current = reduceToolOutcome(stateRef.current, 'search_images', fallback.outcome)
         return { text: localReply(stateRef.current.lastSearch?.outcome.imageIds.length ?? 0), state: stateRef.current }
       }
       // 通用幻觉拦截：无附件时如果模型未调用 search_images 就编造“找到 N 张 / 给用户看了 N 张”，强制按原文语义核对一次
       if (!turnEnv.hasInputContext && !stateRef.current.lastSearch && /(?:给用户看了\s*\d+\s*张|找到\s*\d+\s*张)/u.test(response)) {
         if (streamed) onStream?.({ kind: 'reset' })
-        onStream?.({ kind: 'status', tool: 'search_images', text: TOOL_STATUS.search_images })
-        const check = await dispatchTool(ASSISTANT_TOOL_MAP, 'search_images', JSON.stringify({ semantic: turnEnv.query }), turnEnv, stateRef.current)
+        const actionId = `s${step}-hallucination-check`
+        const checkArgs = { semantic: turnEnv.query }
+        const searchTool = ASSISTANT_TOOL_MAP.get('search_images')
+        const startSummary = searchTool?.formatStart?.(checkArgs) ?? '检索图库'
+        startAction(actionId, 'search_images', startSummary, stateRef, onStream)
+        const check = await dispatchTool(ASSISTANT_TOOL_MAP, 'search_images', JSON.stringify(checkArgs), turnEnv, stateRef.current)
+        const doneSummary = searchTool?.formatDone?.(checkArgs, check) ?? startSummary
+        finishAction(
+          actionId,
+          'search_images',
+          doneSummary,
+          isToolError(parseToolJson(check.content)) ? 'failed' : 'done',
+          stateRef,
+          onStream
+        )
         stateRef.current = reduceToolOutcome(stateRef.current, 'search_images', check.outcome)
         if (stateRef.current.awaitingContrast) {
+          previousStepNeedsRepair = true
           tail.push({ role: 'user', content: check.content })
           continue
         }
@@ -218,40 +443,103 @@ export async function runAgentLoop(
       return { text: response, state: stateRef.current }
     }
 
-    if (streamed) onStream?.({ kind: 'reset' })
-    tail.push({ role: 'assistant', content: res.message.content ?? '', tool_calls: calls })
-    let hasDuplicateCall = false
-    for (const call of calls) {
+    // 交错叙事：绝不在 tool_calls 前发送 reset 擦除已输出的过渡念白，而是固化为 narration_commit
+    emitNarration(res.message.content, stateRef, onStream)
+    tail.push({
+      role: 'assistant',
+      content: res.message.content ?? '',
+      ...(res.reasoningContent ? { reasoning_content: res.reasoningContent } : {}),
+      tool_calls: calls
+    })
+
+    const prepared: PreparedToolCall[] = calls.map((call, idx) => {
       const fn = call.type === 'function' ? call.function : null
-      if (fn?.name === 'reply_with_followup' && (calls.length !== 1 || stateRef.current.lastSearch || stateRef.current.awaitingContrast)) {
-        tail.push({ role: 'tool', tool_call_id: call.id, content: '请先完成当前操作，再根据实际结果直接回答。' })
-        continue
+      const toolName = fn?.name ?? null
+      const tool = toolName ? ASSISTANT_TOOL_MAP.get(toolName) : undefined
+      const rawArgs = fn?.arguments ?? '{}'
+      const argsObj = fn ? parseArgsObject(rawArgs) : {}
+      const startSummary = tool?.formatStart?.(argsObj) ?? (toolName ? `执行 ${toolName}` : '执行工具')
+      const actionId = `s${step}-${idx}-${call.id || 'call'}`
+
+      if (!fn) {
+        return {
+          callId: call.id,
+          actionId,
+          toolName: null,
+          tool: undefined,
+          rawArgs,
+          argsObj,
+          startSummary,
+          blockedResult: {
+            content: JSON.stringify({ error: '不支持的调用' }),
+            status: 'failed',
+            summary: `${startSummary} · 不支持的调用`
+          }
+        }
       }
-      if (fn) {
-        const callKey = normalizeToolCallKey(fn.name, fn.arguments)
-        if (seenCallKeys.has(callKey)) {
-          hasDuplicateCall = true
-          tail.push({
-            role: 'tool',
-            tool_call_id: call.id,
+      if (fn.name === 'reply_with_followup' && (calls.length !== 1 || stateRef.current.lastSearch || stateRef.current.awaitingContrast)) {
+        return {
+          callId: call.id,
+          actionId,
+          toolName,
+          tool,
+          rawArgs,
+          argsObj,
+          startSummary,
+          blockedResult: {
+            content: '请先完成当前操作，再根据实际结果直接回答。',
+            status: 'failed',
+            summary: `${startSummary} · 需先完成前置操作`
+          }
+        }
+      }
+      const callKey = normalizeToolCallKey(fn.name, rawArgs)
+      if (seenCallKeys.has(callKey)) {
+        return {
+          callId: call.id,
+          actionId,
+          toolName,
+          tool,
+          rawArgs,
+          argsObj,
+          startSummary,
+          blockedResult: {
             content: JSON.stringify({
               warning: '本轮已经用完全相同的参数调用过该工具，请直接根据已有工具结果回复用户，或换用不同参数。'
-            })
-          })
-          continue
+            }),
+            status: 'failed',
+            summary: `${startSummary} · 重复跳过`,
+            isDuplicate: true
+          }
         }
-        seenCallKeys.add(callKey)
       }
-      if (fn && onStream) {
-        const statusText = TOOL_STATUS[fn.name]
-        if (statusText) onStream({ kind: 'status', tool: fn.name, text: statusText })
+      seenCallKeys.add(callKey)
+      return { callId: call.id, actionId, toolName, tool, rawArgs, argsObj, startSummary }
+    })
+
+    let stepNeedsRepair = false
+    const finalizeItem = (
+      item: PreparedToolCall,
+      executed: ToolExecutionResult
+    ): { text: string; state: HarnessState; interrupted?: boolean } | null => {
+      const parsed = parseToolJson(executed.content)
+      const isErr = item.blockedResult ? item.blockedResult.status === 'failed' : !item.tool || isToolError(parsed)
+      const status: 'done' | 'failed' = isErr ? 'failed' : 'done'
+      const summary = item.blockedResult
+        ? item.blockedResult.summary
+        : item.tool?.formatDone?.(item.argsObj, executed) ?? item.startSummary
+      finishAction(item.actionId, item.toolName ?? 'unknown', summary, status, stateRef, onStream)
+
+      if (item.toolName && !item.blockedResult) {
+        const prevNotices = stateRef.current.memoryNotices
+        stateRef.current = reduceToolOutcome(stateRef.current, item.toolName, executed.outcome)
+        emitMemoryNoticeIfUpdated(prevNotices, stateRef.current, onStream)
       }
-      const executed = fn
-        ? await dispatchTool(ASSISTANT_TOOL_MAP, fn.name, fn.arguments, turnEnv, stateRef.current)
-        : { content: JSON.stringify({ error: '不支持的调用' }) }
-      if (fn) {
-        stateRef.current = reduceToolOutcome(stateRef.current, fn.name, executed.outcome)
+      if (item.blockedResult?.isDuplicate || needsStepRepair(item.toolName, parsed, stateRef.current)) {
+        stepNeedsRepair = true
       }
+      tail.push({ role: 'tool', tool_call_id: item.callId, content: executed.content })
+
       if (stateRef.current.discussionReply) {
         return { text: stateRef.current.discussionReply.text, state: stateRef.current }
       }
@@ -261,27 +549,96 @@ export async function runAgentLoop(
       if (stateRef.current.exclusionReply) {
         return { text: stateRef.current.exclusionReply.text, state: stateRef.current }
       }
-      tail.push({ role: 'tool', tool_call_id: call.id, content: executed.content })
+      return null
     }
 
-    const canShortCircuit =
-      !hasDuplicateCall &&
-      !stateRef.current.needsDetails &&
-      stateRef.current.lastSearch &&
-      (!isConversationalSearch(turnEnv.userText) || Boolean(stateRef.current.lastSearch.caption)) &&
-      calls.every((call) => call.type === 'function' && call.function.name === 'search_images')
-    if (canShortCircuit) {
-      return { text: localReply(stateRef.current.lastSearch!.outcome.imageIds.length), state: stateRef.current }
+    const allReadOnly =
+      prepared.length > 1 && prepared.every((item) => item.tool?.sideEffect === 'read')
+    if (allReadOnly) {
+      for (const item of prepared) {
+        startAction(item.actionId, item.toolName ?? 'unknown', item.startSummary, stateRef, onStream)
+      }
+      const snapshotState = stateRef.current
+      let results: ToolExecutionResult[]
+      try {
+        results = await Promise.all(
+          prepared.map(async (item) =>
+            item.blockedResult
+              ? { content: item.blockedResult.content }
+              : dispatchTool(ASSISTANT_TOOL_MAP, item.toolName!, item.rawArgs, turnEnv, snapshotState)
+          )
+        )
+      } catch (err) {
+        if (isAbortError(err, turnEnv.signal)) {
+          markRunningActionsAborted(stateRef, onStream)
+          return { text: '', state: stateRef.current, interrupted: true }
+        }
+        throw err
+      }
+      for (let i = 0; i < prepared.length; i++) {
+        const earlyReturn = finalizeItem(prepared[i], results[i])
+        if (earlyReturn) {
+          return turnEnv.signal?.aborted ? { ...earlyReturn, interrupted: true } : earlyReturn
+        }
+      }
+      if (turnEnv.signal?.aborted) {
+        markRunningActionsAborted(stateRef, onStream)
+        return { text: '', state: stateRef.current, interrupted: true }
+      }
+    } else {
+      for (const item of prepared) {
+        if (turnEnv.signal?.aborted) {
+          markRunningActionsAborted(stateRef, onStream)
+          return { text: '', state: stateRef.current, interrupted: true }
+        }
+        startAction(item.actionId, item.toolName ?? 'unknown', item.startSummary, stateRef, onStream)
+        let executed: ToolExecutionResult
+        try {
+          executed = item.blockedResult
+            ? { content: item.blockedResult.content }
+            : await dispatchTool(ASSISTANT_TOOL_MAP, item.toolName!, item.rawArgs, turnEnv, stateRef.current)
+        } catch (err) {
+          if (isAbortError(err, turnEnv.signal)) {
+            markRunningActionsAborted(stateRef, onStream)
+            return { text: '', state: stateRef.current, interrupted: true }
+          }
+          throw err
+        }
+        const earlyReturn = finalizeItem(item, executed)
+        if (earlyReturn) {
+          return turnEnv.signal?.aborted ? { ...earlyReturn, interrupted: true } : earlyReturn
+        }
+        if (turnEnv.signal?.aborted) {
+          markRunningActionsAborted(stateRef, onStream)
+          return { text: '', state: stateRef.current, interrupted: true }
+        }
+      }
     }
+
+    previousStepNeedsRepair = stepNeedsRepair
   }
 
   // 步数用完还在调工具：按最后一次检索给个模板回复
-  if (stateRef.current.awaitingContrast) {
+  if (stateRef.current.awaitingContrast && !turnEnv.signal?.aborted) {
+    const actionId = 'final-awaiting-contrast'
+    const searchTool = ASSISTANT_TOOL_MAP.get('search_images')
+    const startSummary = searchTool?.formatStart?.({}) ?? '检索图库'
+    startAction(actionId, 'search_images', startSummary, stateRef, onStream)
     const fallback = await dispatchTool(ASSISTANT_TOOL_MAP, 'search_images', '{}', turnEnv, stateRef.current)
+    const doneSummary = searchTool?.formatDone?.({}, fallback) ?? startSummary
+    finishAction(
+      actionId,
+      'search_images',
+      doneSummary,
+      isToolError(parseToolJson(fallback.content)) ? 'failed' : 'done',
+      stateRef,
+      onStream
+    )
     stateRef.current = reduceToolOutcome(stateRef.current, 'search_images', fallback.outcome)
   }
   return {
     text: stateRef.current.lastSearch ? localReply(stateRef.current.lastSearch.outcome.imageIds.length) : '这次查询还没有完成。',
-    state: stateRef.current
+    state: stateRef.current,
+    ...(turnEnv.signal?.aborted ? { interrupted: true } : {})
   }
 }

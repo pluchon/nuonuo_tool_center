@@ -12,6 +12,78 @@ const THUMB_NAME = /^[0-9a-f]{64}\.webp$/
 // 原图只认图库里的文件 id，不接受路径
 const FILE_ID = /^[1-9][0-9]{0,15}$/
 
+// 缩略图内存 LRU 缓存上限：单文件不超过 256 KiB，总容量 16 MiB，最多 400 条
+export const THUMB_CACHE_MAX_BYTES = 16 * 1024 * 1024
+export const THUMB_CACHE_MAX_ENTRIES = 400
+export const THUMB_CACHE_MAX_SINGLE_BYTES = 256 * 1024
+
+const THUMB_RESPONSE_HEADERS = {
+  'Content-Type': 'image/webp',
+  'Cache-Control': 'public, max-age=31536000, immutable'
+} as const
+
+export type ThumbReader = (filePath: string) => Promise<Uint8Array>
+
+const thumbCache = new Map<string, Uint8Array>()
+let thumbCacheBytes = 0
+
+function createCachedThumbResponse(buf: Uint8Array): Response {
+  return new Response(new Uint8Array(buf), {
+    status: 200,
+    headers: THUMB_RESPONSE_HEADERS
+  })
+}
+
+function setThumbCache(name: string, bytes: Uint8Array): void {
+  if (bytes.byteLength > THUMB_CACHE_MAX_SINGLE_BYTES) {
+    return
+  }
+  const existing = thumbCache.get(name)
+  if (existing) {
+    thumbCacheBytes -= existing.byteLength
+    thumbCache.delete(name)
+  }
+  const copy = new Uint8Array(bytes)
+  thumbCache.set(name, copy)
+  thumbCacheBytes += copy.byteLength
+  while (thumbCacheBytes > THUMB_CACHE_MAX_BYTES || thumbCache.size > THUMB_CACHE_MAX_ENTRIES) {
+    const oldest = thumbCache.keys().next()
+    if (oldest.done) break
+    const evicted = thumbCache.get(oldest.value)
+    thumbCache.delete(oldest.value)
+    if (evicted) thumbCacheBytes -= evicted.byteLength
+  }
+}
+
+export function clearThumbProtocolCache(): void {
+  thumbCache.clear()
+  thumbCacheBytes = 0
+}
+
+export async function handleThumbRequest(
+  thumbsDir: string,
+  name: string,
+  reader: ThumbReader = (filePath) => readFile(filePath)
+): Promise<Response> {
+  if (!THUMB_NAME.test(name)) {
+    return new Response('Not Found', { status: 404 })
+  }
+  const hit = thumbCache.get(name)
+  if (hit) {
+    thumbCache.delete(name)
+    thumbCache.set(name, hit)
+    return createCachedThumbResponse(hit)
+  }
+  let bytes: Uint8Array
+  try {
+    bytes = await reader(join(thumbsDir, name))
+  } catch {
+    return new Response('Not Found', { status: 404 })
+  }
+  setThumbCache(name, bytes)
+  return createCachedThumbResponse(bytes)
+}
+
 // 按文件 id 找原图的绝对路径（不在图库里返回 null）
 export type OriginalResolver = (fileId: number) => Promise<string | null>
 
@@ -41,16 +113,9 @@ export function handleLtmProtocol(thumbsDir: string, backgroundsDir: string, res
   protocol.handle(LTM_SCHEME, async (request) => {
     const url = new URL(request.url)
     const name = url.pathname.replace(/^\//, '')
-    // 缩略图：先确认文件在（被手动删掉时 net.fetch 会一直挂着），在就照常流式给并带强缓存，不在马上回 404
-    if (url.host === 'thumb' && THUMB_NAME.test(name)) {
-      const file = join(thumbsDir, name)
-      const isFile = await stat(file).then((s) => s.isFile(), () => false)
-      if (isFile) {
-        return net
-          .fetch(pathToFileURL(file).toString())
-          .then((res) => (res.ok ? buildThumbResponse(res) : res))
-          .catch(() => new Response('Not Found', { status: 404 }))
-      }
+    // 缩略图：优先命中内存 LRU，未命中时单次 readFile 读取并回填缓存，缺失立即返回 404
+    if (url.host === 'thumb') {
+      return handleThumbRequest(thumbsDir, name)
     }
     // 自定义背景图：只认应用自己生成的文件名；整张读进内存再给（不留文件句柄，换图时旧图马上能删）
     if (url.host === 'bg' && CUSTOM_BACKGROUND_NAME.test(name)) {

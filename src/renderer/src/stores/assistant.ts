@@ -1,6 +1,18 @@
+import { toRaw } from 'vue'
 import { defineStore } from 'pinia'
-import type { AiAttachment, AiConversationVO, AiImageReference, AiMessageVO, AiRecalledDraft, AiSearchScope, AiStreamEvent } from '@shared/api'
+import type {
+  AiAttachment,
+  AiConversationVO,
+  AiImageReference,
+  AiMemoryNotice,
+  AiMessageVO,
+  AiRecalledDraft,
+  AiSearchScope,
+  AiStreamEvent,
+  AiTimelineBlock
+} from '@shared/api'
 import {
+  abortAnswer,
   askNono,
   compactConversation,
   editMessage,
@@ -25,8 +37,45 @@ function errText(err: unknown): string {
 }
 
 let messagesVersion = 0
+let queueSeq = 0
 
 type ComposerDraft = Omit<AiRecalledDraft, 'messageId'> & { messageId: number | null }
+
+export interface QueuedPrompt {
+  id: string
+  text: string
+  attachments: AiAttachment[]
+  references: AiImageReference[]
+  scope: AiSearchScope | null
+  includeR18: boolean
+}
+
+export interface SendPayload {
+  text: string
+  attachments: AiAttachment[]
+  references: AiImageReference[]
+  scope: AiSearchScope | null
+  includeR18: boolean
+  recalledMessageId?: number | null
+  clearComposerOnSuccess?: boolean
+}
+
+interface StoreFlightState {
+  fetchPromise: Promise<void> | null
+  suppressAutoDequeue: boolean
+}
+
+const flightByStore = new WeakMap<object, StoreFlightState>()
+
+function flightOf(store: { queuesByChat: Map<number | null, QueuedPrompt[]> }): StoreFlightState {
+  const key = toRaw(store.queuesByChat)
+  let entry = flightByStore.get(key)
+  if (!entry) {
+    entry = { fetchPromise: null, suppressAutoDequeue: false }
+    flightByStore.set(key, entry)
+  }
+  return entry
+}
 
 // 诺诺助手：对话记录、当前对话的消息、输入框里的范围和 R-18 开关、等待回复和出错的状态
 export const useAssistantStore = defineStore('assistant', {
@@ -50,9 +99,13 @@ export const useAssistantStore = defineStore('assistant', {
     includeR18: false,
     // 正在等回复
     waiting: false,
+    aborting: false,
     compacting: false,
     streamingText: '',
     streamingStatus: null as string | null,
+    streamingBlocks: [] as AiTimelineBlock[],
+    streamingMemoryNotice: null as AiMemoryNotice | null,
+    queuesByChat: new Map<number | null, QueuedPrompt[]>(),
     // 最后一句没回复成功：横幅显示的原因（如“网络异常”），点“重试”再取一次回复
     failure: null as string | null,
     loadingMessages: false
@@ -62,7 +115,10 @@ export const useAssistantStore = defineStore('assistant', {
       return s.conversations.find((c) => c.id === s.currentId) ?? null
     },
     canSend(s): boolean {
-      return (s.draft.trim() !== '' || s.attachments.length > 0 || s.references.length > 0) && !s.waiting && !s.loadingMessages && !s.changingTurn
+      return (s.draft.trim() !== '' || s.attachments.length > 0 || s.references.length > 0) && !s.loadingMessages && !s.changingTurn
+    },
+    queue(s): QueuedPrompt[] {
+      return s.queuesByChat.get(s.currentId) ?? []
     }
   },
   actions: {
@@ -122,6 +178,8 @@ export const useAssistantStore = defineStore('assistant', {
       this.failure = null
       this.streamingText = ''
       this.streamingStatus = null
+      this.streamingBlocks = []
+      this.streamingMemoryNotice = null
       this.draft = ''
       this.attachments = []
       this.recalledMessageId = null
@@ -175,6 +233,8 @@ export const useAssistantStore = defineStore('assistant', {
       this.failure = null
       this.streamingText = ''
       this.streamingStatus = null
+      this.streamingBlocks = []
+      this.streamingMemoryNotice = null
       this.loadingMessages = true
       try {
         const [msgs, recalled] = await Promise.all([fetchMessages(id), switched ? fetchRecalledDraft(id) : null])
@@ -222,28 +282,41 @@ export const useAssistantStore = defineStore('assistant', {
       }
     },
     // 发送：先存下这句话（新对话会出现在对话记录里），再等诺诺的回复
-    async send(text?: string): Promise<void> {
-      const q = (text ?? this.draft).trim()
+    async sendItem(item: SendPayload): Promise<void> {
+      const q = item.text.trim()
       if (q === '/compact') return this.compact()
-      const attachments = text === undefined ? this.attachments : []
-      const references = [...this.references]
-      if ((!q && !attachments.length && !references.length) || this.waiting || this.loadingMessages || this.changingTurn) {
+      if ((!q && !item.attachments.length && !item.references.length) || this.waiting || this.loadingMessages || this.changingTurn) {
         return
       }
+      const prevId = this.currentId
       this.waiting = true
       this.failure = null
       try {
         const res = await askNono({
-          conversationId: this.currentId, text: q, scope: this.scope ? { ...this.scope } : null,
-          ...(this.recalledMessageId !== null ? { recalledMessageId: this.recalledMessageId } : {}),
-          includeR18: this.includeR18, attachments: attachments.map((file) => ({ ...file })), references: references.map((r) => ({ ...r }))
+          conversationId: this.currentId,
+          text: q,
+          scope: item.scope ? { ...item.scope } : null,
+          ...(item.recalledMessageId !== null && item.recalledMessageId !== undefined ? { recalledMessageId: item.recalledMessageId } : {}),
+          includeR18: item.includeR18,
+          attachments: item.attachments.map((file) => ({ ...file })),
+          references: item.references.map((r) => ({ ...r }))
         })
-        if (text === undefined && this.draft.trim() === q) this.draft = ''
-        this.attachments = this.attachments.filter((file) => !attachments.includes(file))
-        const sent = new Set(references.map((r) => r.imageId))
-        this.references = this.references.filter((r) => !sent.has(r.imageId))
+        if (item.clearComposerOnSuccess) {
+          if (this.draft.trim() === q) this.draft = ''
+          this.attachments = this.attachments.filter((file) => !item.attachments.includes(file))
+          const sent = new Set(item.references.map((r) => r.imageId))
+          this.references = this.references.filter((r) => !sent.has(r.imageId))
+          this.recalledMessageId = null
+        }
+        if (prevId === null && res.conversation.id !== null) {
+          const pendingQueue = this.queuesByChat.get(null)
+          if (pendingQueue?.length) {
+            const targetQueue = this.queuesByChat.get(res.conversation.id) ?? []
+            this.queuesByChat.set(res.conversation.id, [...targetQueue, ...pendingQueue])
+            this.queuesByChat.delete(null)
+          }
+        }
         this.currentId = res.conversation.id
-        this.recalledMessageId = null
         if (!this.conversations.some((c) => c.id === res.conversation.id)) {
           this.conversations = [res.conversation, ...this.conversations]
           this.messages = []
@@ -256,6 +329,121 @@ export const useAssistantStore = defineStore('assistant', {
         return
       }
       await this.fetchReply()
+    },
+    async send(text?: string): Promise<void> {
+      const q = (text ?? this.draft).trim()
+      if (q === '/compact') return this.compact()
+      const attachments = text === undefined ? this.attachments : []
+      const references = [...this.references]
+      if ((!q && !attachments.length && !references.length) || this.waiting || this.loadingMessages || this.changingTurn) {
+        return
+      }
+      await this.sendItem({
+        text: q,
+        attachments,
+        references,
+        scope: this.scope ? { ...this.scope } : null,
+        includeR18: this.includeR18,
+        recalledMessageId: this.recalledMessageId,
+        clearComposerOnSuccess: text === undefined
+      })
+    },
+    enqueueCurrent(): QueuedPrompt | null {
+      const text = this.draft.trim()
+      if ((!text && !this.attachments.length && !this.references.length) || this.loadingMessages || this.changingTurn) {
+        return null
+      }
+      const item: QueuedPrompt = {
+        id: `q-${Date.now()}-${++queueSeq}`,
+        text,
+        attachments: this.attachments.map((file) => ({ ...file })),
+        references: this.references.map((r) => ({ ...r })),
+        scope: this.scope ? { ...this.scope } : null,
+        includeR18: this.includeR18
+      }
+      const currentQueue = this.queuesByChat.get(this.currentId) ?? []
+      this.queuesByChat.set(this.currentId, [...currentQueue, item])
+      this.draft = ''
+      this.attachments = []
+      this.references = []
+      this.recalledMessageId = null
+      return item
+    },
+    removeQueued(queueId: string): boolean {
+      const currentQueue = this.queuesByChat.get(this.currentId)
+      if (!currentQueue?.length) return false
+      const next = currentQueue.filter((q) => q.id !== queueId)
+      if (next.length === currentQueue.length) return false
+      if (next.length) this.queuesByChat.set(this.currentId, next)
+      else this.queuesByChat.delete(this.currentId)
+      return true
+    },
+    editQueued(queueId: string): boolean {
+      const currentQueue = this.queuesByChat.get(this.currentId)
+      const item = currentQueue?.find((q) => q.id === queueId)
+      if (!item) return false
+      this.removeQueued(queueId)
+      this.draft = item.text
+      this.attachments = item.attachments.map((file) => ({ ...file }))
+      this.references = item.references.map((r) => ({ ...r }))
+      if (this.references.length) this.usingGalleryReferences = true
+      this.scope = item.scope ? { ...item.scope } : null
+      this.includeR18 = item.includeR18
+      this.recalledMessageId = null
+      return true
+    },
+    async abortCurrent(): Promise<boolean> {
+      if (!this.waiting || this.aborting || this.currentId === null) {
+        return false
+      }
+      const targetId = this.currentId
+      const flight = flightOf(this)
+      this.aborting = true
+      flight.suppressAutoDequeue = true
+      let aborted = false
+      try {
+        aborted = await abortAnswer(targetId)
+      } catch (err) {
+        useToastStore().show(errText(err), 'error')
+      }
+      try {
+        if (flight.fetchPromise) {
+          await flight.fetchPromise
+        }
+      } finally {
+        flight.suppressAutoDequeue = false
+        this.aborting = false
+      }
+      return aborted
+    },
+    async interruptAndSend(): Promise<void> {
+      const q = this.draft.trim()
+      if ((!q && !this.attachments.length && !this.references.length) || this.aborting || this.loadingMessages || this.changingTurn) {
+        return
+      }
+      const captured: SendPayload = {
+        text: q,
+        attachments: this.attachments.map((file) => ({ ...file })),
+        references: this.references.map((r) => ({ ...r })),
+        scope: this.scope ? { ...this.scope } : null,
+        includeR18: this.includeR18,
+        recalledMessageId: this.recalledMessageId
+      }
+      this.draft = ''
+      this.attachments = []
+      this.references = []
+      this.recalledMessageId = null
+      await this.abortCurrent()
+      await this.sendItem(captured)
+    },
+    async sendQueuedNow(queueId: string): Promise<void> {
+      if (this.aborting || this.loadingMessages || this.changingTurn) return
+      const currentQueue = this.queuesByChat.get(this.currentId)
+      const item = currentQueue?.find((q) => q.id === queueId)
+      if (!item) return
+      this.removeQueued(queueId)
+      await this.abortCurrent()
+      await this.sendItem(item)
     },
     keepDraft(): void {
       if (this.draft || this.attachments.length || this.references.length || this.recalledMessageId !== null) {
@@ -292,6 +480,8 @@ export const useAssistantStore = defineStore('assistant', {
       this.changingTurn = true
       this.streamingText = ''
       this.streamingStatus = null
+      this.streamingBlocks = []
+      this.streamingMemoryNotice = null
       try {
         if (replacement === undefined) {
           const draft = await recallMessage(id, messageId)
@@ -321,10 +511,33 @@ export const useAssistantStore = defineStore('assistant', {
         }
       } else if (ev.kind === 'status') {
         this.streamingStatus = ev.text ?? null
+      } else if (ev.kind === 'narration_commit') {
+        this.streamingBlocks = [...this.streamingBlocks, { type: 'narration', text: ev.text ?? '' }]
+        this.streamingText = ''
+      } else if (ev.kind === 'action_start') {
+        this.streamingBlocks = [
+          ...this.streamingBlocks,
+          { type: 'action', id: ev.actionId ?? '', tool: ev.tool ?? '', summary: ev.summary ?? ev.text ?? '', status: 'running' }
+        ]
+        this.streamingStatus = ev.summary ?? ev.text ?? null
+      } else if (ev.kind === 'action_end') {
+        const targetId = ev.actionId ?? ''
+        this.streamingBlocks = this.streamingBlocks.map((b) =>
+          b.type === 'action' && b.id === targetId
+            ? { ...b, status: ev.status ?? 'done', summary: ev.summary ?? b.summary }
+            : b
+        )
+        if (!this.streamingBlocks.some((b) => b.type === 'action' && b.status === 'running')) {
+          this.streamingStatus = null
+        }
+      } else if (ev.kind === 'memory_notice') {
+        this.streamingMemoryNotice = ev.memoryNotice ?? null
       } else if (ev.kind === 'reset') {
         this.streamingText = ''
         this.streamingStatus = null
-      } else if (ev.kind === 'done' || ev.kind === 'error') {
+        this.streamingBlocks = []
+        this.streamingMemoryNotice = null
+      } else if (ev.kind === 'aborted' || ev.kind === 'done' || ev.kind === 'error') {
         this.streamingStatus = null
       }
     },
@@ -334,26 +547,54 @@ export const useAssistantStore = defineStore('assistant', {
       if (id === null) {
         return
       }
-      this.waiting = true
-      this.failure = null
-      this.streamingText = ''
-      this.streamingStatus = null
-      try {
-        const reply = await fetchAnswer(id)
-        if (this.currentId === id) {
-          this.messages = [...this.messages, reply]
-        }
-        this.touch(id, reply.createdAt)
-      } catch (err) {
-        if (this.currentId === id) {
-          this.failure = errText(err)
-        }
-      } finally {
-        this.waiting = false
-        this.compacting = false
+      const flight = flightOf(this)
+      let run!: Promise<void>
+      run = (async () => {
+        this.waiting = true
+        this.failure = null
         this.streamingText = ''
         this.streamingStatus = null
-      }
+        this.streamingBlocks = []
+        this.streamingMemoryNotice = null
+        let reply: AiMessageVO | null = null
+        let failed = false
+        try {
+          const answerReply = await fetchAnswer(id)
+          reply = answerReply
+          if (this.currentId === id) {
+            this.messages = [...this.messages, answerReply]
+          }
+          this.touch(id, answerReply.createdAt)
+        } catch (err) {
+          failed = true
+          if (this.currentId === id) {
+            this.failure = errText(err)
+          }
+        } finally {
+          const suppressed = flight.suppressAutoDequeue
+          flight.suppressAutoDequeue = false
+          if (flight.fetchPromise === run) {
+            flight.fetchPromise = null
+          }
+          this.waiting = false
+          this.compacting = false
+          this.streamingText = ''
+          this.streamingStatus = null
+          this.streamingBlocks = []
+          this.streamingMemoryNotice = null
+          if (!suppressed && !failed && !reply?.interrupted && this.currentId === id) {
+            const list = this.queuesByChat.get(id)
+            if (list?.length) {
+              const [head, ...rest] = list
+              if (rest.length) this.queuesByChat.set(id, rest)
+              else this.queuesByChat.delete(id)
+              void this.sendItem(head)
+            }
+          }
+        }
+      })()
+      flight.fetchPromise = run
+      return run
     },
     // 对话有了新消息：更新时间并排到置顶的后面第一个
     touch(id: number, at: string): void {
@@ -404,6 +645,7 @@ export const useAssistantStore = defineStore('assistant', {
         await this.newChat()
       }
       this.draftsByChat.delete(id)
+      this.queuesByChat.delete(id)
       useToastStore().show(`已删除对话「${c.title}」`, 'ok', async () => {
         try {
           await undoRemoveConversation(id)

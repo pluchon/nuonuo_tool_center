@@ -1,0 +1,3 @@
+ALTER TABLE "ai_memory" ADD COLUMN "superseded_by_message_id" bigint;--> statement-breakpoint
+ALTER TABLE "ai_memory" ADD CONSTRAINT "ai_memory_superseded_by_message_id_ai_message_id_fk" FOREIGN KEY ("superseded_by_message_id") REFERENCES "public"."ai_message"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "idx_ai_memory_superseded" ON "ai_memory" USING btree ("superseded_by_message_id");

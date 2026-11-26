@@ -41,6 +41,11 @@ export function fetchAnswer(conversationId: number): Promise<AiMessageVO> {
   return unwrap(window.api.ai.answer(conversationId))
 }
 
+// 中断这段对话正在生成的回复
+export function abortAnswer(conversationId: number): Promise<boolean> {
+  return unwrap(window.api.ai.abort(conversationId))
+}
+
 export function editMessage(id: number, messageId: number, text: string): Promise<AiMessageVO> {
   return unwrap(window.api.ai.editMessage(id, messageId, text))
 }

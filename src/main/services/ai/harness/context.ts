@@ -1,7 +1,7 @@
-import type { AiContextUsage } from '@shared/api'
+import type { AiContextUsage, AiTimelineBlock } from '@shared/api'
 import { findVocabulary } from '../../../repositories/aiSearchRepository'
 import { findCompactionMap, type AiConversationEntity, type AiMessageEntity } from '../../../repositories/aiConversationRepository'
-import { ASSISTANT_RULES, cardCaption } from '../assistantPrompt'
+import { ASSISTANT_RULES } from '../assistantPrompt'
 import { proposalStatesInHistory } from '../categoryProposalService'
 import { fitContext, messageBound } from '../contextWindow'
 import { summaryMessages, type HistoryTurn } from '../conversationCompaction'
@@ -11,6 +11,17 @@ import { ASSISTANT_TOOLS } from './tools'
 import { replyText, userText, type AssistantContent, type PreviousSearchState, type UserContent } from './types'
 
 const MICROCOMPACT_TOOL_BYTES = 2048
+const HAS_KAOMOJI_RE = /(?:ฅ[^\s]{1,8}ฅ|[（(][^\u4e00-\u9fa5a-zA-Z0-9\n]{2,12}[）)]|[≧≦ωﻌ•ᴥ▽ﾉ]{2,}|\^•ﻌ•\^)/u
+
+function hasMiaoOrKaomoji(text: string): boolean {
+  const trimmed = text.trim()
+  return /喵/u.test(trimmed) || HAS_KAOMOJI_RE.test(trimmed)
+}
+
+export interface TurnTailCues {
+  recentAssistantTexts?: string[]
+  previousInterrupted?: boolean
+}
 
 // Claude Code 式零成本微压缩：多步工具往返中保留最近一组工具原始返回，把更早步骤里过长的 tool 结果就地折叠为简短摘要
 export function microcompactTail(tail: PromptMessage[], maxToolBytes = MICROCOMPACT_TOOL_BYTES): PromptMessage[] {
@@ -40,7 +51,7 @@ export function microcompactTail(tail: PromptMessage[], maxToolBytes = MICROCOMP
   return changed ? next : tail
 }
 
-export async function historyTurns(history: AiMessageEntity[]): Promise<{
+export async function historyTurns(history: AiMessageEntity[], currentIncludeR18 = false): Promise<{
   turns: HistoryTurn[]
   previousResults?: PreviousSearchState
 }> {
@@ -76,40 +87,63 @@ export async function historyTurns(history: AiMessageEntity[]): Promise<{
           incomplete: c.incomplete
         }
       }
-      // 图片详情可能已改分级。仅保留用户的问题及安全的卡片文案，避免把内部占位符当成诺诺的话。
-      let text = c.how || c.readLibraryMetadata ? (c.how && c.imageIds?.length ? cardCaption(c.imageIds.length, undefined, 'search') : '') : replyText(c)
-      if (!text || /^已查询图库[。.!！]?$/u.test(text.trim())) {
-        // 保留用户原话。会随分级变化的图片详情只在本轮重新读取，不写入摘要。
-        const messages: PromptMessage[] = question
-          ? [question, { role: 'assistant', content: c.readLibraryMetadata ? '（本轮围绕图库图片作了回答。）' : '（本轮查询了图库。）' }]
-          : []
-        turns.push({ id: m.id, messages, summary })
-        question = undefined
-        continue
+      // 保留诺诺的真实口吻；仅当上轮在开启 R-18 时读取了单图元数据而本轮关闭 R-18 时做安全脱敏。
+      const redactSensitive = Boolean(c.readLibraryMetadata && previousIncludeR18 && !currentIncludeR18)
+      let text = redactSensitive ? '（本轮围绕图库图片作了回答。）' : replyText(c)
+      if (!text.trim() || /^已查询图库[。.!！]?$/u.test(text.trim())) {
+        text = c.readLibraryMetadata ? '（本轮围绕图库图片作了回答。）' : c.imageIds?.length ? '（本轮展示了图库图片。）' : ''
+      }
+      if (c.interrupted && c.blocks?.length) {
+        const actionSummaries = redactSensitive
+          ? '已执行图库操作'
+          : c.blocks
+              .filter((b): b is Extract<AiTimelineBlock, { type: 'action' }> => b.type === 'action')
+              .map((b) => b.summary)
+              .filter(Boolean)
+              .join('；')
+        if (actionSummaries) {
+          text = text
+            ? `${text}\n[软件记录] 上轮对话被主人半途打断；已执行：${actionSummaries}`
+            : `[软件记录] 上轮对话被主人半途打断；已执行：${actionSummaries}`
+        }
       }
       if (c.categoryProposalId) text += `\n[软件记录] 目录提案当前状态：${proposalStates.get(c.categoryProposalId) ?? '未知'}。`
-      if (question) turns.push({ id: m.id, messages: [question, { role: 'assistant', content: text }], summary })
+      if (question && text.trim()) {
+        turns.push({ id: m.id, messages: [question, { role: 'assistant', content: text }], summary })
+      } else if (!text.trim()) {
+        turns.push({ id: m.id, messages: [], summary })
+      }
       question = undefined
     }
   }
   return { turns, previousResults }
 }
 
-// 第④层：当前时间、范围、是否包含 R-18、检索到的记忆，加上这句话
+// 第④层：当前时间、范围、是否包含 R-18、检索到的记忆、动态情景提示，加上这句话
 export function buildTurnTail(
   text: string,
   scope: string | null,
   includeR18: boolean,
   now: Date,
   memories: string[],
-  sessionState?: string
+  sessionState?: string,
+  cues?: TurnTailCues
 ): PromptMessage[] {
   const pad = (n: number): string => String(n).padStart(2, '0')
   const time = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
   const memo = memories.length ? `\n[软件附注] 记得的偏好：\n${memories.map((m) => `- ${m}`).join('\n')}` : ''
   const session = sessionState ? `\n${sessionState}` : ''
+  const situational: string[] = []
+  const recent = cues?.recentAssistantTexts?.slice(-2) ?? []
+  if (recent.length === 2 && recent.every(hasMiaoOrKaomoji)) {
+    situational.push('[情景] 最近两轮刚用过“喵”或类似颜文字，这轮换个更自然的收尾。')
+  }
+  if (cues?.previousInterrupted) {
+    situational.push('[情景] 上一轮在半途被主人打断，直接顺着新指示接上，不道歉，不重复刚才已经试过的同参数查询。')
+  }
+  const cueText = situational.length ? `\n${situational.join('\n')}` : ''
   return [
-    { role: 'system', content: `当前时间 ${time}。图库工具范围为${scope ? `「${scope}」` : '全部类目录'}，${includeR18 ? '包含' : '不包含'} R-18。${memo}${session}` },
+    { role: 'system', content: `当前时间 ${time}。图库工具范围为${scope ? `「${scope}」` : '全部类目录'}，${includeR18 ? '包含' : '不包含'} R-18。${memo}${session}${cueText}` },
     { role: 'user', content: text }
   ]
 }

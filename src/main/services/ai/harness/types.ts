@@ -2,7 +2,9 @@ import type {
   AiAttachment,
   AiContextUsage,
   AiImageReference,
+  AiMemoryNotice,
   AiReplyCacheUsage,
+  AiTimelineBlock,
   DirKeyDTO
 } from '@shared/api'
 import { BizError } from '../../../common/bizError'
@@ -48,6 +50,9 @@ export interface AssistantContent {
   focusSignature?: string
   // 这次回答带上的记忆（赞、踩时调整它们的可信度）
   memoryIds?: number[]
+  memoryNotice?: AiMemoryNotice
+  blocks?: AiTimelineBlock[]
+  interrupted?: boolean
 }
 
 export function attachmentsOf(content: UserContent): StoredAttachment[] {
@@ -114,6 +119,7 @@ export interface ToolEnv {
   referenceNotes?: string
   preferenceIds?: number[]
   shownImages?: Array<{ id: number; name: string | null }>
+  signal?: AbortSignal
   readReferences: () => Promise<Array<{ imageId: number; name: string; tags: string[] }>>
 }
 
@@ -138,6 +144,7 @@ export type ToolOutcome =
       evidence?: MatchEvidence
       incomplete?: string
     }
+  | { type: 'memory'; action: 'save' | 'update' | 'forget'; notice: string }
   | { type: 'metadata' }
   | { type: 'none' }
 
@@ -159,6 +166,9 @@ export interface HarnessState {
   }
   contextUsage?: AiContextUsage
   memoryIds?: number[]
+  memoryNotices?: string[]
+  memoryNoticeAction?: 'save' | 'update' | 'forget'
+  blocks: AiTimelineBlock[]
 }
 
 export function createInitialHarnessState(hasInputContext: boolean, hasReferenceNote: boolean): HarnessState {
@@ -166,7 +176,8 @@ export function createInitialHarnessState(hasInputContext: boolean, hasReference
     lastSearch: null,
     needsDetails: hasInputContext,
     otherToolUsed: false,
-    readLibraryMetadata: hasReferenceNote
+    readLibraryMetadata: hasReferenceNote,
+    blocks: []
   }
 }
 
@@ -177,6 +188,19 @@ export function reduceToolOutcome(state: HarnessState, toolName: string, outcome
   }
   if (!outcome || outcome.type === 'none') {
     return next
+  }
+  if (outcome.type === 'memory') {
+    const notice = outcome.notice.trim()
+    if (!notice) return next
+    const prev = state.memoryNotices ?? []
+    if (prev.includes(notice) || prev.length >= 2) {
+      return { ...next, memoryNoticeAction: state.memoryNoticeAction ?? outcome.action }
+    }
+    return {
+      ...next,
+      memoryNotices: [...prev, notice],
+      memoryNoticeAction: outcome.action
+    }
   }
   if (outcome.type === 'metadata') {
     return { ...next, readLibraryMetadata: true }

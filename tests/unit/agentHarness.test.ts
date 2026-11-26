@@ -5,21 +5,46 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
 import { microcompactTail } from '../../src/main/services/ai/harness/context'
 import { defineTool, dispatchTool, validateToolArgs } from '../../src/main/services/ai/harness/toolRegistry'
-import { createInitialHarnessState } from '../../src/main/services/ai/harness/types'
+import { createInitialHarnessState, reduceToolOutcome } from '../../src/main/services/ai/harness/types'
 import { evaluateVisualTags, normalizeVisualTags } from '../../src/main/services/ai/search/visualMatcher'
 
-const calls: Array<{ messages: unknown[]; tools: unknown[] }> = []
-const script: Array<{ content?: string; tool_calls?: unknown[] }> = []
+const calls: Array<{ messages: unknown[]; tools: unknown[]; enableThinking?: boolean; thinkingBudget?: number }> = []
+type ScriptedTurn = {
+  content?: string
+  tool_calls?: unknown[]
+  reasoningContent?: string
+  onCall?: (input: { signal?: AbortSignal; onDelta?: (delta: string) => void }) => Promise<{
+    content?: string
+    tool_calls?: unknown[]
+    reasoningContent?: string
+  }>
+}
+const script: ScriptedTurn[] = []
 vi.mock('../../src/main/services/ai/embeddingClient', () => ({
   embed: vi.fn(async () => {
     throw new Error('测试向量服务不可用')
   })
 }))
 vi.mock('../../src/main/services/ai/bailianClient', () => ({
-  chatCall: vi.fn(async (input?: { messages?: unknown[]; tools?: unknown[]; onDelta?: (delta: string) => void }) => {
-    calls.push({ messages: JSON.parse(JSON.stringify(input?.messages ?? [])), tools: input?.tools ?? [] })
-    const next = script.shift() ?? { content: '好的' }
-    if (input?.onDelta && next.content) {
+  chatCall: vi.fn(async (input?: {
+    messages?: unknown[]
+    tools?: unknown[]
+    enableThinking?: boolean
+    thinkingBudget?: number
+    signal?: AbortSignal
+    onDelta?: (delta: string) => void
+  }) => {
+    calls.push({
+      messages: JSON.parse(JSON.stringify(input?.messages ?? [])),
+      tools: input?.tools ?? [],
+      enableThinking: input?.enableThinking,
+      thinkingBudget: input?.thinkingBudget
+    })
+    const entry = script.shift()
+    const next = entry?.onCall
+      ? await entry.onCall({ signal: input?.signal, onDelta: input?.onDelta })
+      : entry ?? { content: '收到啦' }
+    if (!entry?.onCall && input?.onDelta && next.content) {
       const mid = Math.ceil(next.content.length / 2)
       for (const part of [next.content.slice(0, mid), next.content.slice(mid)]) {
         if (part) input.onDelta(part)
@@ -28,7 +53,8 @@ vi.mock('../../src/main/services/ai/bailianClient', () => ({
     return {
       message: { role: 'assistant', content: next.content ?? '', tool_calls: next.tool_calls },
       finishReason: 'stop',
-      usage: {}
+      usage: {},
+      ...(next.reasoningContent ? { reasoningContent: next.reasoningContent } : {})
     }
   })
 }))
@@ -38,7 +64,9 @@ vi.mock('../../src/main/services/rating/ratingService', () => ({
   rateFileNow: vi.fn(async () => null)
 }))
 
-const { ask, answer } = await import('../../src/main/services/ai/assistantService')
+const { abortAnswer, ask, answer, isAnswering, listMessages, recallMessage } = await import(
+  '../../src/main/services/ai/assistantService'
+)
 
 describe('ToolRegistry 单源校验与 Microcompaction', () => {
   it('按同一份 Schema 校验合法参数、坏 JSON、缺必填项、类型不符和未知工具', async () => {
@@ -220,8 +248,8 @@ describe('AgentHarness 集成动态工具与通用视觉过滤', () => {
     await getDatabase().pg.query('DELETE FROM ai_image_exclusion WHERE image_id = $1', [secondId])
   })
 
-  it('工具循环期间按顺序推送 delta、reset 与工具状态，并在最终回复时流式输出', async () => {
-    const events: Array<{ kind: string; text?: string; tool?: string }> = []
+  it('工具循环期间按顺序推送交错叙事与动作块事件（不触发 reset），并持久化时间线 blocks', async () => {
+    const events: Array<{ kind: string; text?: string; tool?: string; actionId?: string; summary?: string; status?: string }> = []
     script.push(
       {
         content: '先查一下',
@@ -232,14 +260,36 @@ describe('AgentHarness 集成动态工具与通用视觉过滤', () => {
     const q = await ask({ conversationId: null, text: '图库里有哪些标签？', scope: null, includeR18: false })
     const reply = await answer(q.conversation.id, undefined, (ev) => events.push(ev))
     expect(reply.text).toBe('标签都在这里了。')
+    expect(events.some((e) => e.kind === 'reset')).toBe(false)
     expect(events).toEqual([
       { kind: 'delta', text: '先查' },
       { kind: 'delta', text: '一下' },
-      { kind: 'reset' },
-      { kind: 'status', tool: 'list_tags', text: '正在查看标签词表…' },
+      { kind: 'narration_commit', text: '先查一下' },
+      {
+        kind: 'action_start',
+        actionId: 's0-0-t1',
+        tool: 'list_tags',
+        summary: '查看标签词表',
+        status: 'running',
+        block: { type: 'action', id: 's0-0-t1', tool: 'list_tags', summary: '查看标签词表', status: 'running' }
+      },
+      {
+        kind: 'action_end',
+        actionId: 's0-0-t1',
+        tool: 'list_tags',
+        summary: '查看标签词表 · 1 个',
+        status: 'done',
+        block: { type: 'action', id: 's0-0-t1', tool: 'list_tags', summary: '查看标签词表 · 1 个', status: 'done' }
+      },
       { kind: 'delta', text: '标签都在' },
       { kind: 'delta', text: '这里了。' }
     ])
+    expect(reply.blocks).toEqual([
+      { type: 'narration', text: '先查一下' },
+      { type: 'action', id: 's0-0-t1', tool: 'list_tags', summary: '查看标签词表 · 1 个', status: 'done' }
+    ])
+    const saved = (await listMessages(q.conversation.id)).at(-1)
+    expect(saved?.blocks).toEqual(reply.blocks)
   })
 
   it('无画面向量时，keywordGroups + visualInclude + semantic 仍通过本地视觉特征命中', async () => {
@@ -313,18 +363,21 @@ describe('AgentHarness 集成动态工具与通用视觉过滤', () => {
     await pg.query("INSERT INTO image_file (image_id, root_id, rel_path, mtime) VALUES ($1, 1, '二次元/g-r18.png', now())", [r18.id])
     await pg.query("INSERT INTO image_tag (image_id, tag_id, source, status) VALUES ($1, 1, 'MANUAL', 'ACCEPTED')", [r18.id])
     try {
-      script.push({
-        tool_calls: [
-          {
-            id: 'a1',
-            type: 'function',
-            function: {
-              name: 'search_images',
-              arguments: JSON.stringify({ tags: ['插画'], visualInclude: ['glasses'], contrast: [] })
+      script.push(
+        {
+          tool_calls: [
+            {
+              id: 'a1',
+              type: 'function',
+              function: {
+                name: 'search_images',
+                arguments: JSON.stringify({ tags: ['插画'], visualInclude: ['glasses'], contrast: [] })
+              }
             }
-          }
-        ]
-      })
+          ]
+        },
+        { content: '找到三张戴眼镜的插画啦～' }
+      )
       const q = await ask({ conversationId: null, text: '找插画里戴眼镜的图', scope: null, includeR18: true })
       const first = await answer(q.conversation.id)
       expect(first.images.map((i) => i.name).sort()).toEqual(['眼镜学妹', '眼镜狐娘', '绝对机密R18图'])
@@ -353,14 +406,14 @@ describe('AgentHarness 集成动态工具与通用视觉过滤', () => {
       expect(reply.text).not.toBe('没找到符合条件的图片。')
       expect(events.some((e) => e.kind === 'delta')).toBe(true)
 
-      const step1Tail = String((calls[1].messages.at(-2) as { content?: unknown })?.content ?? '')
-      expect(step1Tail).toContain('[会话状态]')
-      expect(step1Tail).toContain('本段对话已展示过 3 张图')
-      expect(step1Tail).toContain('眼镜学妹')
-      expect(step1Tail).not.toContain('绝对机密R18图')
-      expect(JSON.stringify(calls[1].messages[0])).toBe(JSON.stringify(calls[0].messages[0]))
+      const step0OfTurn2 = String((calls[2].messages.at(-2) as { content?: unknown })?.content ?? '')
+      expect(step0OfTurn2).toContain('[会话状态]')
+      expect(step0OfTurn2).toContain('本段对话已展示过 3 张图')
+      expect(step0OfTurn2).toContain('眼镜学妹')
+      expect(step0OfTurn2).not.toContain('绝对机密R18图')
+      expect(JSON.stringify(calls[2].messages[0])).toBe(JSON.stringify(calls[0].messages[0]))
 
-      const toolMsg = (calls[2].messages as Array<{ role: string; content: string }>).find((m) => m.role === 'tool')
+      const toolMsg = (calls[3].messages as Array<{ role: string; content: string }>).find((m) => m.role === 'tool')
       expect(JSON.parse(toolMsg!.content)).toMatchObject({ total: 0, alreadyShownCount: 3, allAlreadyShown: true })
     } finally {
       await pg.query('UPDATE image SET delete_state = 1 WHERE id = $1', [r18.id])
@@ -383,5 +436,306 @@ describe('AgentHarness 集成动态工具与通用视觉过滤', () => {
     const toolMsgs = (calls[1].messages as Array<{ role: string; content: string }>).filter((m) => m.role === 'tool')
     expect(toolMsgs).toHaveLength(2)
     expect(toolMsgs[1].content).toContain('本轮已经用完全相同的参数调用过该工具')
+  })
+
+  it('reduceToolOutcome 对 memoryNotices 去重并限制最多 2 条', () => {
+    let s = createInitialHarnessState(false, false)
+    s = reduceToolOutcome(s, 'remember', { type: 'memory', action: 'save', notice: '诺诺记住第一条啦' })
+    s = reduceToolOutcome(s, 'remember', { type: 'memory', action: 'save', notice: '诺诺记住第一条啦' })
+    s = reduceToolOutcome(s, 'remember', { type: 'memory', action: 'update', notice: '诺诺改好第二条啦' })
+    s = reduceToolOutcome(s, 'remember', { type: 'memory', action: 'forget', notice: '第三条应被截断' })
+    expect(s.memoryNotices).toEqual(['诺诺记住第一条啦', '诺诺改好第二条啦'])
+  })
+
+  it('remember 支持跨轮更新/遗忘、无 evidence 限制、notice 兜底及 recall_memories 与撤回恢复', async () => {
+    const { pg } = getDatabase()
+    try {
+      // 1. 保存偏好（省略 notice 时用自然人味兜底）
+      script.push(
+        {
+          tool_calls: [
+            {
+              id: 'm1',
+              type: 'function',
+              function: { name: 'remember', arguments: JSON.stringify({ content: '喜欢吃冬瓜' }) }
+            }
+          ]
+        },
+        { content: '好的，诺诺记住啦！' }
+      )
+      const q1 = await ask({ conversationId: null, text: '其实我对吃的有点讲究', scope: null, includeR18: false })
+      const r1 = await answer(q1.conversation.id)
+      expect(r1.memoryNotice).toEqual({ action: 'save', notices: ['诺诺记住啦：喜欢吃冬瓜'] })
+
+      // 2. 跨轮纠正：省略 replaceId 与 evidence，自动匹配并替换旧记忆
+      script.push(
+        {
+          tool_calls: [
+            {
+              id: 'm2',
+              type: 'function',
+              function: {
+                name: 'remember',
+                arguments: JSON.stringify({
+                  action: 'update',
+                  content: '喜欢吃南瓜',
+                  notice: '诺诺知道主人喜欢吃南瓜而不是冬瓜 ฅ^•ﻌ•^ฅ'
+                })
+              }
+            }
+          ]
+        },
+        { content: '收到，已经换成南瓜啦～' }
+      )
+      const q2 = await ask({ conversationId: q1.conversation.id, text: '我更喜欢 B 啦，不吃那个了', scope: null, includeR18: false })
+      const r2 = await answer(q2.conversation.id)
+      expect(r2.memoryNotice).toEqual({ action: 'update', notices: ['诺诺知道主人喜欢吃南瓜而不是冬瓜 ฅ^•ﻌ•^ฅ'] })
+      const historyMsgs = await listMessages(q1.conversation.id)
+      expect(historyMsgs.at(-1)?.memoryNotice).toEqual(r2.memoryNotice)
+
+      // 3. recall_memories 只读查询当前有效记忆
+      script.push(
+        {
+          tool_calls: [{ id: 'rc1', type: 'function', function: { name: 'recall_memories', arguments: '{}' } }]
+        },
+        { content: '诺诺记得你喜欢吃南瓜喵。' }
+      )
+      await ask({ conversationId: q1.conversation.id, text: '你记得我什么呀', scope: null, includeR18: false })
+      const r3 = await answer(q1.conversation.id)
+      expect(r3.text).toContain('南瓜')
+      const recallToolMsg = (calls.at(-1)?.messages as Array<{ role: string; content: string }>).find((m) => m.role === 'tool')
+      const recalled = JSON.parse(recallToolMsg!.content) as { memories: Array<{ id: number; content: string }> }
+      expect(recalled.memories.map((m) => m.content)).toEqual(['喜欢吃南瓜'])
+
+      // 4. forget 遗忘，且撤回用户消息后被遗忘的记忆可恢复
+      const targetId = recalled.memories[0].id
+      script.push(
+        {
+          tool_calls: [
+            {
+              id: 'mf1',
+              type: 'function',
+              function: {
+                name: 'remember',
+                arguments: JSON.stringify({
+                  action: 'forget',
+                  replaceId: targetId,
+                  notice: '诺诺把吃南瓜的偏好忘掉啦'
+                })
+              }
+            }
+          ]
+        },
+        { content: '好哒，这件事诺诺已经忘掉啦。' }
+      )
+      const q4 = await ask({ conversationId: q1.conversation.id, text: '别记这个了', scope: null, includeR18: false })
+      const r4 = await answer(q4.conversation.id)
+      expect(r4.memoryNotice).toEqual({ action: 'forget', notices: ['诺诺把吃南瓜的偏好忘掉啦'] })
+      const afterForget = await pg.query<{ id: number }>('SELECT id FROM ai_memory WHERE delete_state = 0 AND valid_to IS NULL')
+      expect(afterForget.rows).toHaveLength(0)
+
+      await recallMessage(q1.conversation.id, q4.message.id)
+      const afterRecall = await pg.query<{ content: string }>('SELECT content FROM ai_memory WHERE delete_state = 0 AND valid_to IS NULL')
+      expect(afterRecall.rows.map((r) => r.content)).toEqual(['喜欢吃南瓜'])
+    } finally {
+      await pg.query('DELETE FROM ai_memory')
+    }
+  })
+
+  it('0 命中返回 closestTags 后自动开启自适应思考（512 budget）、保留 reasoning_content 并自愈重试；并发只读工具同步执行', async () => {
+    const events: Array<{ kind: string; memoryNotice?: unknown }> = []
+    script.push(
+      {
+        content: '先搜一下看看',
+        tool_calls: [
+          {
+            id: 'c1',
+            type: 'function',
+            function: { name: 'search_images', arguments: JSON.stringify({ tags: ['插画画'], contrast: [] }) }
+          },
+          {
+            id: 'c2',
+            type: 'function',
+            function: { name: 'list_tags', arguments: '{}' }
+          }
+        ]
+      },
+      {
+        content: '没直接找到，换相近的「插画」试试…',
+        reasoningContent: '刚才搜插画画返回了 closestTags: 插画，换用精确标签重试。',
+        tool_calls: [
+          {
+            id: 'c3',
+            type: 'function',
+            function: { name: 'search_images', arguments: JSON.stringify({ tags: ['插画'], visualInclude: ['glasses'], contrast: [] }) }
+          }
+        ]
+      },
+      {
+        content: '找到了这两张戴眼镜的插画！'
+      }
+    )
+    const q = await ask({ conversationId: null, text: '找插画画里戴眼镜的图', scope: null, includeR18: false })
+    const reply = await answer(q.conversation.id, undefined, (ev) => events.push(ev))
+
+    expect(reply.text).toBe('找到了这两张戴眼镜的插画！')
+    expect(reply.images.map((i) => i.name).sort()).toEqual(['眼镜学妹', '眼镜狐娘'])
+    expect(calls).toHaveLength(3)
+    expect(calls[0].enableThinking).toBe(false)
+    expect(calls[1].enableThinking).toBe(true)
+    expect(calls[1].thinkingBudget).toBe(512)
+    expect(calls[2].enableThinking).toBe(false)
+
+    // 第 1 步返回的 closestTags 供模型决策，第 2 步产出的 reasoning_content 保留在历史 assistant 消息中
+    const step1Tool = (calls[1].messages as Array<{ role: string; content: string }>).find((m) => m.role === 'tool')
+    expect(JSON.parse(step1Tool!.content)).toMatchObject({ total: 0, closestTags: ['插画'] })
+    const step2Assistant = (calls[2].messages as Array<{ role: string; reasoning_content?: string }>).findLast(
+      (m) => m.role === 'assistant' && m.reasoning_content
+    )
+    expect(step2Assistant?.reasoning_content).toContain('closestTags')
+
+    expect(reply.blocks).toEqual([
+      { type: 'narration', text: '先搜一下看看' },
+      { type: 'action', id: 's0-0-c1', tool: 'search_images', summary: '检索图库：插画画 · 0 张', status: 'done' },
+      { type: 'action', id: 's0-1-c2', tool: 'list_tags', summary: '查看标签词表 · 1 个', status: 'done' },
+      { type: 'narration', text: '没直接找到，换相近的「插画」试试…' },
+      { type: 'action', id: 's1-0-c3', tool: 'search_images', summary: '检索图库：插画、glasses · 2 张', status: 'done' }
+    ])
+  })
+
+  it('保留诺诺自然口吻历史并注入第④层动态 [情景] 提示（防重复喵与中断衔接），同时保持前缀完全一致', async () => {
+    const { pg } = getDatabase()
+    script.push(
+      { tool_calls: [{ id: 'v1', type: 'function', function: { name: 'search_images', arguments: JSON.stringify({ tags: ['插画'], contrast: [] }) } }] },
+      { content: '这几张插画好温柔喵~' }
+    )
+    const q1 = await ask({ conversationId: null, text: '找插画图', scope: null, includeR18: false })
+    await answer(q1.conversation.id)
+
+    script.push({ content: '我也很喜欢这个色调 ฅ^•ﻌ•^ฅ' })
+    await ask({ conversationId: q1.conversation.id, text: '好好看呀', scope: null, includeR18: false })
+    await answer(q1.conversation.id)
+
+    // 人为写入一条 interrupted 助手记录模拟上轮被打断
+    await pg.query(
+      "INSERT INTO ai_message (conversation_id, role, content) VALUES ($1, 'USER', $2)",
+      [q1.conversation.id, JSON.stringify({ text: '再找找别的', scope: null, includeR18: false })]
+    )
+    await pg.query(
+      "INSERT INTO ai_message (conversation_id, role, content) VALUES ($1, 'ASSISTANT', $2)",
+      [
+        q1.conversation.id,
+        JSON.stringify({
+          text: '刚准备看看喵…',
+          how: null,
+          imageIds: [],
+          interrupted: true,
+          blocks: [{ type: 'action', id: 'a1', tool: 'search_images', summary: '检索图库：猫 · 0 张', status: 'aborted' }]
+        })
+      ]
+    )
+
+    script.push({ content: '明白，直接按新条件接着看！' })
+    await ask({ conversationId: q1.conversation.id, text: '换看运动少女', scope: null, includeR18: false })
+    await answer(q1.conversation.id)
+
+    const latestMsgs = calls.at(-1)!.messages as Array<{ role: string; content: unknown }>
+    // 历史保留第 1 轮自然口吻（不替换成“本轮查询了图库”）以及中断记录
+    const historyStr = JSON.stringify(latestMsgs.slice(1, -2))
+    expect(historyStr).toContain('这几张插画好温柔喵~')
+    expect(historyStr).not.toContain('（本轮查询了图库。）')
+    expect(historyStr).toContain('[软件记录] 上轮对话被主人半途打断；已执行：检索图库：猫 · 0 张')
+
+    // 第④层注入两条动态 [情景] 提示，且第①②层系统前缀保持字节一致
+    const tailSystem = String((latestMsgs.at(-2) as { content?: unknown })?.content ?? '')
+    expect(tailSystem).toContain('[情景] 最近两轮刚用过“喵”或类似颜文字')
+    expect(tailSystem).toContain('[情景] 上一轮在半途被主人打断')
+    expect(JSON.stringify(latestMsgs[0])).toBe(JSON.stringify(calls[0].messages[0]))
+  })
+
+  it('支持在工具循环中实时打断：保存部分 blocks/memoryNotice/结果图与 interrupted，释放锁并在下一轮注入动作摘要', async () => {
+    const { pg } = getDatabase()
+    try {
+      let releaseStep1!: () => void
+      const enteredStep1 = new Promise<void>((resolve) => {
+        releaseStep1 = resolve
+      })
+      script.push(
+        {
+          content: '先找一下戴眼镜的图并记下你的偏好…',
+          tool_calls: [
+            {
+              id: 's1',
+              type: 'function',
+              function: { name: 'search_images', arguments: JSON.stringify({ visualInclude: ['glasses'], contrast: [] }) }
+            },
+            {
+              id: 'm1',
+              type: 'function',
+              function: {
+                name: 'remember',
+                arguments: JSON.stringify({ content: '喜欢眼镜少女', notice: '诺诺记住你喜欢眼镜少女啦' })
+              }
+            }
+          ]
+        },
+        {
+          onCall: async ({ signal, onDelta }) => {
+            onDelta?.('我先帮你找到了这几张，')
+            releaseStep1()
+            return await new Promise((_, reject) => {
+              const onAbort = () => reject(Object.assign(new Error('Request was aborted.'), { name: 'AbortError' }))
+              if (signal?.aborted) onAbort()
+              else signal?.addEventListener('abort', onAbort, { once: true })
+            })
+          }
+        }
+      )
+
+      expect(await abortAnswer(999999)).toBe(false)
+      const q = await ask({ conversationId: null, text: '找眼镜图，以后记住我喜欢眼镜少女', scope: null, includeR18: false })
+      const events: Array<{ kind: string; text?: string }> = []
+      const pendingReply = answer(q.conversation.id, undefined, (ev) => events.push(ev))
+      await enteredStep1
+      expect(isAnswering()).toBe(true)
+
+      const aborted = await abortAnswer(q.conversation.id)
+      expect(aborted).toBe(true)
+      expect(isAnswering()).toBe(false)
+      expect(await abortAnswer(q.conversation.id)).toBe(false)
+
+      const partialReply = await pendingReply
+      expect(partialReply.interrupted).toBe(true)
+      expect(partialReply.text).toBe('我先帮你找到了这几张，')
+      expect(partialReply.images.map((i) => i.name).sort()).toEqual(['眼镜学妹', '眼镜狐娘'])
+      expect(partialReply.memoryNotice).toEqual({ action: 'save', notices: ['诺诺记住你喜欢眼镜少女啦'] })
+      expect(partialReply.blocks).toEqual([
+        { type: 'narration', text: '先找一下戴眼镜的图并记下你的偏好…' },
+        { type: 'action', id: 's0-0-s1', tool: 'search_images', summary: '检索图库：glasses · 2 张', status: 'done' },
+        { type: 'action', id: 's0-1-m1', tool: 'remember', summary: '记住一条偏好 · 已保存', status: 'done' }
+      ])
+      expect(events.some((e) => e.kind === 'error')).toBe(false)
+
+      const saved = (await listMessages(q.conversation.id)).at(-1)!
+      expect(saved).toMatchObject({
+        interrupted: true,
+        text: '我先帮你找到了这几张，',
+        memoryNotice: partialReply.memoryNotice,
+        blocks: partialReply.blocks
+      })
+
+      // 下一轮紧接着插嘴提问不报 CONFLICT，且模型上下文能看到上轮被中断时已执行的动作摘要与 [情景] 提示
+      script.push({ content: '好嘞，那我接着按刚才的结果给你挑一张~' })
+      await ask({ conversationId: q.conversation.id, text: '不用全看了，只挑第一张就行', scope: null, includeR18: false })
+      const followReply = await answer(q.conversation.id)
+      expect(followReply.text).toBe('好嘞，那我接着按刚才的结果给你挑一张~')
+
+      const followMsgs = calls.at(-1)!.messages as Array<{ role: string; content: unknown }>
+      const prevAssistantStr = JSON.stringify(followMsgs.find((m) => m.role === 'assistant'))
+      expect(prevAssistantStr).toContain('[软件记录] 上轮对话被主人半途打断；已执行：检索图库：glasses · 2 张；记住一条偏好 · 已保存')
+      expect(String((followMsgs.at(-2) as { content?: unknown })?.content ?? '')).toContain('[情景] 上一轮在半途被主人打断')
+    } finally {
+      await pg.query('DELETE FROM ai_memory')
+    }
   })
 })

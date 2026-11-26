@@ -54,12 +54,16 @@ export async function launchWithMockBailian(dirs: CaseDirs, rejectedImages = 0) 
         const role = 'assistant'
         let message: { role: string; content: string | null; tool_calls?: unknown[] }
         if (body.tools?.length && last?.role !== 'tool') {
+          const userPrompt = typeof last?.content === 'string' ? last.content : ''
+          const args = userPrompt.includes('猫')
+            ? { tags: ['猫'], contrast: [] }
+            : { tags: ['风景'], orientation: 'landscape', contrast: [] }
           message = {
             role,
             content: null,
             tool_calls: [{
               id: 'fixture-search', type: 'function',
-              function: { name: 'search_images', arguments: JSON.stringify({ tags: ['风景'], orientation: 'landscape' }) }
+              function: { name: 'search_images', arguments: JSON.stringify(args) }
             }]
           }
         } else if (Array.isArray(last?.content) && last.content.some(part => part.type === 'text' && part.text?.includes('用蓝调夜景做标签'))) {

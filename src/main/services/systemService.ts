@@ -8,6 +8,7 @@ import { getLogger } from '../common/logger'
 import { publishExclusive } from '../common/publishFile'
 import { atomicWriteFile, retryOnWinBusy } from '../common/winFs'
 import { getDatabase } from '../db/client'
+import { clearThumbProtocolCache } from '../protocol/ltmProtocol'
 import { findAllContentHashes } from '../repositories/imageRepository'
 import { updateSettings } from './settingsService'
 import { openBmp } from './scan/bmpDecoder'
@@ -57,6 +58,7 @@ export async function cleanThumbCache(thumbsDir: string): Promise<{ removed: num
       log.warn(`删除缩略图失败：${name}`, err)
     }
   }
+  clearThumbProtocolCache()
   log.info(`清理缩略图缓存：删除 ${removed} 个，${freedBytes} 字节`)
   return { removed, freedBytes }
 }

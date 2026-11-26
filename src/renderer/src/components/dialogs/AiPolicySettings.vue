@@ -40,27 +40,6 @@
         <div class="set-dlg__ctl"><strong class="policy-number">{{ data.cloudCachedTokens.toLocaleString() }} token</strong></div>
       </div>
     </section>
-    <section class="set-dlg__group" aria-label="长期记忆">
-      <h3 class="set-dlg__group-title">长期记忆</h3>
-      <div v-if="data.confirmedFolders" class="set-dlg__row">
-        <span class="set-dlg__label">已确认的分类规则</span>
-        <div class="set-dlg__ctl"><button class="set-dlg__btn" :disabled="busy" @click="resetRules">下次重新规划</button></div>
-      </div>
-      <div v-if="!data.preferences.length" class="set-dlg__row"><span class="set-dlg__value">暂无记忆</span></div>
-      <div v-for="(p, i) in data.preferences" :key="p.id" class="set-dlg__row policy-pref" :class="{ 'set-dlg__row--sep': i || data.confirmedFolders }">
-        <span class="policy-origin">{{ p.explicit ? '用户明说' : '诺诺推断' }}</span>
-        <template v-if="editing === p.id">
-          <input v-model="draft" class="set-dlg__credential" maxlength="300" aria-label="偏好内容" @keydown.enter="confirmPreference($event, p.id)" />
-          <button class="set-dlg__btn" :disabled="busy || !draft.trim()" @click="change(p.id,draft)">确认</button>
-          <button class="set-dlg__btn" :disabled="busy" @click="editing = null">取消</button>
-        </template>
-        <template v-else>
-          <span class="set-dlg__label">{{ p.content }}</span>
-          <button class="set-dlg__btn" :disabled="busy" @click="editing = p.id; draft = p.content">纠正</button>
-          <button class="set-dlg__btn" :disabled="busy" @click="change(p.id,null)">忘记</button>
-        </template>
-      </div>
-    </section>
   </template>
   <p v-if="error" role="alert">{{ error }}</p>
 </template>
@@ -69,8 +48,6 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import type { AiPolicyVO, ApiResponse } from '@shared/api'
 const data = ref<AiPolicyVO | null>(null)
 const busy = ref(false)
-const editing = ref<number | null>(null)
-const draft = ref('')
 const error = ref('')
 const modes = [{ id: 'paused', label: '暂停' }, { id: 'limited', label: '每日限量' }, { id: 'all', label: '不限量' }] as const
 type Mode = (typeof modes)[number]['id']
@@ -87,7 +64,6 @@ async function save(operation: () => Promise<ApiResponse<void>>) {
   try {
     const response = await operation()
     if (!response.ok) throw new Error(response.message)
-    editing.value = null
     await refresh()
     error.value = ''
   } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
@@ -115,19 +91,9 @@ async function limit(event: Event) {
   choosingLimit.value = false
   if (data.value) input.value = String(data.value.dailyLimit)
 }
-const change = (id: number, text: string | null) => save(() => window.api.ai.changePreference(id, text))
-function confirmPreference(event: KeyboardEvent, id: number) {
-  if (event.isComposing || event.keyCode === 229) return
-  event.preventDefault()
-  if (draft.value.trim()) void change(id, draft.value)
-}
-const resetRules = () => save(() => window.api.ai.resetRules())
 onMounted(() => refresh().catch((e: Error) => { error.value = e.message }))
 </script>
 <style scoped>
 .policy-number { color:var(--a-ink); font-size:13px; font-variant-numeric:tabular-nums; }
 .policy-limit { width:6em; }
-.policy-pref { flex-wrap:wrap; gap:6px; }
-.policy-pref .set-dlg__label,.policy-pref input { flex:1; min-width:4em; overflow-wrap:anywhere; }
-.policy-origin { border-radius:6px; padding:3px 6px; background:var(--a-soft); color:var(--a-ink); font-size:11px; }
 </style>

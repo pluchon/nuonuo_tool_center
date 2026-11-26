@@ -7,6 +7,7 @@ import type { AppSettings } from '@shared/settings'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isWithin, pathKey } from '../../common/pathUtil'
+import { bumpLibraryVersion } from '../../common/readCache'
 import {
   findScanRowsByRoot,
   insertImageFile,
@@ -353,6 +354,9 @@ async function runJob(job: ScanJob): Promise<Omit<ScanResultVO, 'auto'>> {
       await reconcileMissing(outcome.rows, outcome.present, outcome.plan.walk.unreadableDirs)
       await updateRootLastScan(outcome.plan.root.id, new Date())
     }
+    if (outcomes.length > 0) {
+      bumpLibraryVersion()
+    }
   }
   if (quitting && stopRequested) {
     done = Math.max(done, progress.done)
@@ -406,11 +410,13 @@ async function scanRoot(plan: RootPlan, saveProgress: () => Promise<void>, start
             if (row.relPath !== file.relPath) {
               // Windows 文件名可以只改大小写，更新显示路径并保留已有图片和标签。
               await updateImageFileContent(row.id, { imageId: row.imageId, relPath: file.relPath, mtime: file.mtime })
+              bumpLibraryVersion()
             } else if (row.status !== 'NORMAL') {
               reappeared.push(row.id)
             }
           } else {
             await registerFile(root, file, row)
+            bumpLibraryVersion()
           }
           if (!row || row.id > startFileId) added++
           progress!.found += 1
@@ -428,7 +434,10 @@ async function scanRoot(plan: RootPlan, saveProgress: () => Promise<void>, start
     }
   }
   await Promise.all(Array.from({ length: WORKERS }, worker))
-  await chunked(reappeared, (ids) => updateImageFileStatus(ids, 'NORMAL'))
+  if (reappeared.length > 0) {
+    await chunked(reappeared, (ids) => updateImageFileStatus(ids, 'NORMAL'))
+    bumpLibraryVersion()
+  }
   return { plan, rows, present, failed, added }
 }
 
@@ -482,6 +491,7 @@ async function reconcileMissing(rows: ScanFileRow[], present: Set<string>, unrea
     gone.map((r) => r.id),
     softDeleteImageFiles
   )
+  bumpLibraryVersion()
   log.info(`对账：${gone.length} 个文件已经不在磁盘上，从图库里去掉`)
 }
 

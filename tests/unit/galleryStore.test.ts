@@ -91,11 +91,17 @@ type GalleryStoreModule = {
     tagIds: number[]
     items: GalleryItemVO[]
     selected: number[]
+    selectedSet: ReadonlySet<number>
+    isSelected: (id: number) => boolean
     primary: number | null
     primaryItem: GalleryItemVO | undefined
     detail: ImageDetailVO | null
     load: () => Promise<void>
     selectOne: (id: number | null) => void
+    toggle: (id: number) => void
+    selectRange: (id: number) => void
+    setMany: (ids: number[], primary?: number) => void
+    collapse: () => void
     patchItemsLocally: (ids: number[], patcher: (item: GalleryItemVO) => GalleryItemVO) => void
     removeItemsLocally: (ids: number[]) => void
     rename: (name: string) => Promise<boolean>
@@ -403,5 +409,43 @@ describe('useGalleryStore (shallowRef & incremental edits)', () => {
     await useToastStore().undo()
     expect(mockApi.undoDelete).toHaveBeenCalledWith(42)
     expect(mockApi.fetchGallery).toHaveBeenCalledTimes(1)
+  })
+
+  it('selectedSet derives an O(1) ReadonlySet matching selected and powers isSelected', async () => {
+    const items = [makeItem(1), makeItem(2), makeItem(3), makeItem(4)]
+    mockApi.fetchGallery.mockResolvedValue({ items })
+    mockApi.fetchImageDetail.mockImplementation(async (id: number) =>
+      makeDetail(items.find((i) => i.imageId === id) ?? items[0])
+    )
+
+    const gallery = useGalleryStore()
+    expect(gallery.selectedSet.size).toBe(0)
+    expect(gallery.isSelected(1)).toBe(false)
+
+    await gallery.load()
+    expect([...gallery.selectedSet]).toEqual([1])
+    expect(gallery.isSelected(1)).toBe(true)
+    expect(gallery.isSelected(2)).toBe(false)
+
+    gallery.toggle(3)
+    expect(gallery.selectedSet).toBeInstanceOf(Set)
+    expect([...gallery.selectedSet]).toEqual([1, 3])
+    expect(gallery.isSelected(3)).toBe(true)
+    expect(gallery.isSelected(2)).toBe(false)
+
+    gallery.selectRange(4)
+    expect([...gallery.selectedSet]).toEqual([3, 4])
+    expect(gallery.isSelected(1)).toBe(false)
+    expect(gallery.isSelected(3)).toBe(true)
+    expect(gallery.isSelected(4)).toBe(true)
+
+    gallery.setMany([1, 2, 4], 2)
+    expect([...gallery.selectedSet]).toEqual([1, 2, 4])
+    expect(gallery.isSelected(2)).toBe(true)
+
+    gallery.collapse()
+    expect([...gallery.selectedSet]).toEqual([2])
+    expect(gallery.isSelected(1)).toBe(false)
+    expect(gallery.isSelected(2)).toBe(true)
   })
 })

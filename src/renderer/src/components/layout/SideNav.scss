@@ -20,6 +20,7 @@
     backdrop-filter: var(--look-blur);
     border: 1px solid var(--look-edge);
     box-shadow: var(--look-shadow);
+    contain: layout style;
   }
 
   &__head {
@@ -65,6 +66,8 @@
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: var(--a-line) transparent;
+    contain: layout style;
+    will-change: scroll-position;
   }
 
   &__row {

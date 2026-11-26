@@ -121,7 +121,12 @@ export const image = pgTable(
     exif: jsonb('exif'),
     thumbReady: smallint('thumb_ready').notNull().default(0)
   },
-  (t) => [uniqueIndex('uk_image_content_hash').on(t.contentHash), index('idx_image_rating').on(t.rating)]
+  (t) => [
+    uniqueIndex('uk_image_content_hash').on(t.contentHash),
+    index('idx_image_rating').on(t.rating),
+    index('idx_image_active_create').on(t.createTime, t.id).where(sql`${t.deleteState} = 0`),
+    index('idx_image_active_r18').on(t.isR18).where(sql`${t.deleteState} = 0`)
+  ]
 )
 
 // 提案在用户确认前只保存在数据库中；按图片内容编号记录分析进度。
@@ -154,7 +159,8 @@ export const imageFile = pgTable(
   },
   (t) => [
     uniqueIndex('uk_image_file_location').on(t.rootId, t.relPath).where(sql`${t.deleteState} = 0`),
-    index('idx_image_file_image').on(t.imageId)
+    index('idx_image_file_image').on(t.imageId),
+    index('idx_image_file_root_status').on(t.rootId, t.status).where(sql`${t.deleteState} = 0`)
   ]
 )
 
@@ -217,7 +223,11 @@ export const imageTag = pgTable(
     status: tagStatusEnum('status').notNull(),
     score: real('score')
   },
-  (t) => [uniqueIndex('uk_image_tag').on(t.imageId, t.tagId).where(sql`${t.deleteState} = 0`)]
+  (t) => [
+    uniqueIndex('uk_image_tag').on(t.imageId, t.tagId).where(sql`${t.deleteState} = 0`),
+    index('idx_image_tag_image_status').on(t.imageId, t.status).where(sql`${t.deleteState} = 0`),
+    index('idx_image_tag_tag_status').on(t.tagId, t.status).where(sql`${t.deleteState} = 0`)
+  ]
 )
 
 // 每次云端分析的完整结果（出处、角色、描述、建议名等）
@@ -398,9 +408,14 @@ export const aiMemory = pgTable(
     confidence: real('confidence').notNull().default(0.5),
     validFrom: timestamp('valid_from', { withTimezone: true }).notNull().defaultNow(),
     // 失效时间：被取代或判定不再成立时写入，为空表示仍然有效
-    validTo: timestamp('valid_to', { withTimezone: true })
+    validTo: timestamp('valid_to', { withTimezone: true }),
+    // 被哪条用户消息的记忆更新/遗忘所取代（撤回该消息时可恢复原记忆）
+    supersededByMessageId: bigint('superseded_by_message_id', { mode: 'number' }).references(() => aiMessage.id)
   },
-  (t) => [index('idx_ai_memory_valid').on(t.validTo)]
+  (t) => [
+    index('idx_ai_memory_valid').on(t.validTo),
+    index('idx_ai_memory_superseded').on(t.supersededByMessageId)
+  ]
 )
 
 // 核心档案：500 字以内的偏好摘要和标签词表快照，每次更新新增一个版本

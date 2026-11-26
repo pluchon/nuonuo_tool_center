@@ -7,6 +7,7 @@ import {
   type TagCategoryVO
 } from '@shared/api'
 import { BizError } from '../common/bizError'
+import { bumpLibraryVersion } from '../common/readCache'
 import { getDatabase } from '../db/client'
 import {
   countTagsInCategory,
@@ -108,13 +109,15 @@ export async function createTag(dto: CreateTagDTO): Promise<number> {
   const name = normalizeTagWord(dto?.name, '标签名')
   const aliases = normalizeAliases(dto.aliases ?? [], name)
   const { db } = getDatabase()
-  return db.transaction(async (tx) => {
+  const id = await db.transaction(async (tx) => {
     const categoryId = await assertCategory(tx, dto.categoryId)
     await assertNoClash(tx, name, aliases, [])
     const created = await insertTag(tx, name, categoryId)
     await insertAliases(tx, created.id, aliases)
     return created.id
   })
+  bumpLibraryVersion()
+  return id
 }
 
 // 保存标签：改名、换分类、别名整组替换；可同时合并。返回保存后要选中的标签 id
@@ -138,7 +141,7 @@ export async function saveTag(dto: SaveTagDTO): Promise<number> {
   const name = normalizeTagWord(dto.name, '标签名')
   const aliases = normalizeAliases(dto.aliases ?? [], name)
   const { db } = getDatabase()
-  return db.transaction(async (tx) => {
+  const resultId = await db.transaction(async (tx) => {
     const self = await findTagById(tx, dto.id)
     if (!self) {
       throw new BizError('NOT_FOUND', '这个标签已经不在了')
@@ -174,6 +177,8 @@ export async function saveTag(dto: SaveTagDTO): Promise<number> {
     await replaceAliases(tx, self.id, mergeWords(aliases, inherited, name))
     return self.id
   })
+  bumpLibraryVersion()
+  return resultId
 }
 
 // 合并时继承过来的名字和别名：和别的标签撞上的不要
@@ -201,12 +206,14 @@ export async function deleteTag(id: unknown): Promise<number> {
     throw new BizError('BAD_REQUEST', '标签 id 不对')
   }
   const { db } = getDatabase()
-  return db.transaction(async (tx) => {
+  const affected = await db.transaction(async (tx) => {
     if (!(await findTagById(tx, id as number))) {
       throw new BizError('NOT_FOUND', '这个标签已经不在了')
     }
     return deleteTagsCascade(tx, [id as number])
   })
+  bumpLibraryVersion()
+  return affected
 }
 
 // 分类名规整：去首尾空格，不能空、不能超长
@@ -227,7 +234,7 @@ function normalizeCategoryName(raw: unknown): string {
 // 新增分类：名字“新分类”（重名加编号），颜色随机取一个还没被占用的，排在最后
 export async function createCategory(): Promise<TagCategoryVO> {
   const { db } = getDatabase()
-  return db.transaction(async (tx) => {
+  const created = await db.transaction(async (tx) => {
     const all = await findCategories(tx)
     const names = new Set(all.map((c) => c.name.toLowerCase()))
     let name = NEW_CATEGORY_NAME
@@ -242,13 +249,15 @@ export async function createCategory(): Promise<TagCategoryVO> {
     const row = await insertCategory(tx, name, colorIndex, sortOrder)
     return { id: row.id, name: row.name, colorIndex: row.colorIndex, sortOrder: row.sortOrder }
   })
+  bumpLibraryVersion()
+  return created
 }
 
 // 分类改名：不区分大小写不能重名
 export async function renameCategory(id: unknown, raw: unknown): Promise<string> {
   const name = normalizeCategoryName(raw)
   const { db } = getDatabase()
-  return db.transaction(async (tx) => {
+  const renamed = await db.transaction(async (tx) => {
     const categoryId = await assertCategory(tx, id)
     const all = await findCategories(tx)
     if (all.some((c) => c.id !== categoryId && c.name.toLowerCase() === name.toLowerCase())) {
@@ -257,6 +266,8 @@ export async function renameCategory(id: unknown, raw: unknown): Promise<string>
     await updateCategory(tx, categoryId, { name })
     return name
   })
+  bumpLibraryVersion()
+  return renamed
 }
 
 // 换分类颜色（允许和别的分类撞色）
@@ -269,6 +280,7 @@ export async function setCategoryColor(id: unknown, colorIndex: unknown): Promis
     const categoryId = await assertCategory(tx, id)
     await updateCategory(tx, categoryId, { colorIndex: colorIndex as number })
   })
+  bumpLibraryVersion()
 }
 
 // 删除分类：还有标签在用、或者只剩这一个分类时不能删
@@ -284,4 +296,5 @@ export async function removeCategory(id: unknown): Promise<void> {
     }
     await deleteCategory(tx, categoryId)
   })
+  bumpLibraryVersion()
 }

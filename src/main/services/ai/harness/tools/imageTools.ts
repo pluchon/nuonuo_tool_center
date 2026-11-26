@@ -2,7 +2,7 @@ import { addImageExclusion } from '../../../../repositories/aiMemoryRepository'
 import { findImageBrief, findTagNamesOf, findVocabulary, visibleResultIds } from '../../../../repositories/aiSearchRepository'
 import { findCategories } from '../../../../repositories/tagRepository'
 import { scopeDirs } from '../../assistantReferences'
-import { defineTool } from '../toolRegistry'
+import { defineTool, isToolError, parseToolJson, truncateLabel } from '../toolRegistry'
 import type { HarnessState, ToolEnv } from '../types'
 
 const METHOD_EXPLANATION: Record<string, string> = {
@@ -45,9 +45,37 @@ async function resolveResultImage(
   return { id: targetId, sourceIds, evidence, incomplete }
 }
 
+function formatGetImageStart(args: Record<string, unknown>): string {
+  if (args.position !== undefined) return `查看第 ${args.position} 张图`
+  if (args.id !== undefined) return `查看图片 #${args.id}`
+  return '查看图片详情'
+}
+
+function formatListTagsStart(args: Record<string, unknown>): string {
+  const category = truncateLabel(args.category, 14)
+  return category ? `查看${category}标签` : '查看标签词表'
+}
+
+function formatExplainMatchStart(args: Record<string, unknown>): string {
+  if (args.position !== undefined) return `核对第 ${args.position} 张命中原因`
+  if (args.id !== undefined) return `核对图片 #${args.id} 命中原因`
+  return '核对命中原因'
+}
+
+function formatExcludeImageStart(args: Record<string, unknown>): string {
+  const target = args.position !== undefined ? `第 ${args.position} 张` : args.id !== undefined ? `#${args.id}` : '结果图'
+  return args.permanent === true ? `永久排除${target}` : `本轮排除${target}`
+}
+
 export const readReferencedImagesTool = defineTool({
   name: 'read_referenced_images',
   description: '按当前或最近引用的图片编号读取名称和已确认标签，保持引用顺序。',
+  sideEffect: 'read',
+  formatStart: () => '读取引用图片',
+  formatDone(_args, result) {
+    const parsed = parseToolJson(result.content)
+    return Array.isArray(parsed) ? `读取引用图片 · ${parsed.length} 张` : '读取引用图片'
+  },
   parameters: { type: 'object', properties: {} },
   async execute(_args, env) {
     return { content: JSON.stringify(await env.readReferences()), outcome: { type: 'metadata' } }
@@ -57,6 +85,15 @@ export const readReferencedImagesTool = defineTool({
 export const getImageTool = defineTool({
   name: 'get_image',
   description: '查一张图的名字、文件名、尺寸、标签和描述。',
+  sideEffect: 'read',
+  formatStart: formatGetImageStart,
+  formatDone(args, result) {
+    const start = formatGetImageStart(args)
+    const parsed = parseToolJson(result.content) as Record<string, unknown> | null
+    if (isToolError(parsed)) return `${start} · 未找到`
+    const name = truncateLabel(parsed?.name, 16)
+    return name ? `查看图片：${name}` : start
+  },
   parameters: {
     type: 'object',
     properties: {
@@ -106,6 +143,13 @@ export const getImageTool = defineTool({
 export const listTagsTool = defineTool({
   name: 'list_tags',
   description: '列出图库里的标签和别名，可以只看一个分类。',
+  sideEffect: 'read',
+  formatStart: formatListTagsStart,
+  formatDone(args, result) {
+    const start = formatListTagsStart(args)
+    const parsed = parseToolJson(result.content)
+    return Array.isArray(parsed) ? `${start} · ${parsed.length} 个` : start
+  },
   parameters: {
     type: 'object',
     properties: {
@@ -138,6 +182,13 @@ export const listTagsTool = defineTool({
 export const explainMatchTool = defineTool({
   name: 'explain_match',
   description: '解释检索结果中某一张图片为什么会命中当前或上一轮搜索条件。',
+  sideEffect: 'read',
+  formatStart: formatExplainMatchStart,
+  formatDone(args, result) {
+    const start = formatExplainMatchStart(args)
+    const parsed = parseToolJson(result.content)
+    return isToolError(parsed) ? `${start} · 无记录` : `${start} · 已核对`
+  },
   parameters: {
     type: 'object',
     properties: {
@@ -166,6 +217,14 @@ export const explainMatchTool = defineTool({
 export const excludeImageTool = defineTool({
   name: 'exclude_image',
   description: '从当前或上一轮检索结果中排除某张图片；用户明确表示以后也不再展示时设置 permanent=true。',
+  sideEffect: 'memory',
+  formatStart: formatExcludeImageStart,
+  formatDone(args, result) {
+    const start = formatExcludeImageStart(args)
+    const parsed = parseToolJson(result.content) as Record<string, unknown> | null
+    if (isToolError(parsed)) return `${start} · 未执行`
+    return typeof parsed?.remaining === 'number' ? `${start} · 剩余 ${parsed.remaining} 张` : `${start} · 已排除`
+  },
   parameters: {
     type: 'object',
     properties: {

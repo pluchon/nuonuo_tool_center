@@ -37,12 +37,6 @@
   padding: 0 14px 18px 0;
   outline: none;
 
-  // 滚动中避免为每张经过视口的卡片重复计算背景模糊，停下后恢复。
-  &--scrolling .tile,
-  &--scrolling .tile__badge {
-    backdrop-filter: none;
-  }
-
   &__group {
     display: flex;
     flex-direction: column;
@@ -174,15 +168,17 @@
   }
 
   &__canvas {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    position: relative;
   }
 
   &__row {
-    position: relative;
-    // 百分比内边距随可用宽度变化；空行与已挂载卡片的行保持相同高度。
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    // 百分比内边距随可用宽度变化，保持精确行高。
     padding-block-start: calc(var(--image-height) + 40px);
+    contain: layout style;
   }
 }
 
@@ -201,7 +197,7 @@
   border-radius: 16px;
   background: var(--look-tile-bg);
   border: 2px solid rgba(var(--w), 0.55);
-  backdrop-filter: var(--look-blur);
+  contain: layout style;
   cursor: pointer;
   text-align: left;
   font: inherit;
@@ -394,7 +390,6 @@
     padding: 0 6px;
     border-radius: 5px;
     background: rgba(30, 24, 40, 0.42);
-    backdrop-filter: blur(4px);
     color: rgba(255, 255, 255, 0.95);
     font-size: 10px;
     font-weight: 700;

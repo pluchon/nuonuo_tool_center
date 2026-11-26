@@ -37,7 +37,8 @@ const {
   insertMemory,
   insertMessage,
   reviseLastUserMessage,
-  saveCompactionForMessage
+  saveCompactionForMessage,
+  upsertMemoryByMessage
 } = await import('../../src/main/repositories/aiConversationRepository')
 const {
   cachedSearchValue,
@@ -167,5 +168,72 @@ describe('Phase B Part 2: exclusion, draft, compaction, pgvector memory, search 
     await pg.exec("INSERT INTO ai_search_cache (key, value, expires_at) VALUES ('flush-expired', '\"old2\"'::jsonb, now() - interval '1 minute')")
     expect(await flushExpiredSearchCache()).toBeGreaterThanOrEqual(1)
     expect((await pg.query("SELECT 1 FROM ai_search_cache WHERE key = 'flush-expired'")).rows).toHaveLength(0)
+  })
+
+  it('撤回用户消息时：恢复被 update 取代的旧记忆、失效档案与做梦摘要，仅取消 pending 提案而不改动 applied 提案', async () => {
+    const { pg } = getDatabase()
+    try {
+      const conv = await insertConversation('回滚与提案保护测试', null)
+      const u1 = await insertMessage(conv.id, 'USER', { text: '喜欢冬瓜' })
+      const m1 = await upsertMemoryByMessage({ content: '喜欢冬瓜', sourceMessageId: u1.id })
+
+      // 准备待失效的档案快照与做梦摘要
+      await pg.exec(`
+        INSERT INTO ai_profile (version, content, tag_vocab) VALUES (1, '旧档案摘要', '{}'::jsonb);
+        INSERT INTO ai_workflow (kind, key, status, phase, state, version)
+        VALUES ('DREAM', 'default', 'IDLE', 'DONE', '{"digest":"旧做梦摘要","lastSuccess":123}'::jsonb, 1)
+        ON CONFLICT (kind, key) WHERE delete_state = 0
+        DO UPDATE SET state = '{"digest":"旧做梦摘要","lastSuccess":123}'::jsonb;
+      `)
+
+      const { rows: [appliedProp] } = await pg.query<{ id: number }>(
+        "INSERT INTO category_proposal (status, home, payload) VALUES ('applied', 'C:\\cat', '{}'::jsonb) RETURNING id"
+      )
+      const { rows: [pendingProp] } = await pg.query<{ id: number }>(
+        "INSERT INTO category_proposal (status, home, payload) VALUES ('pending', 'C:\\cat', '{}'::jsonb) RETURNING id"
+      )
+
+      const u2 = await insertMessage(conv.id, 'USER', { text: '不对，改喜欢南瓜，并调整目录' })
+      const m2 = await upsertMemoryByMessage({ content: '喜欢南瓜', sourceMessageId: u2.id, replaceId: m1.memoryId })
+      expect(m2.action).toBe('updated')
+
+      // 第一条助手消息关联已执行的 applied 提案，第二条关联未执行的 pending 提案
+      await insertMessage(conv.id, 'ASSISTANT', { text: '已执行', categoryProposalId: appliedProp.id })
+      await insertMessage(conv.id, 'ASSISTANT', { text: '待确认', categoryProposalId: pendingProp.id })
+
+      // 恢复做梦摘要以验证撤回触发记忆变更时也会清掉缓存
+      await pg.exec(`
+        UPDATE ai_profile SET content = '更新后档案摘要';
+        UPDATE ai_workflow SET state = '{"digest":"新做梦摘要","lastSuccess":456}'::jsonb WHERE kind = 'DREAM' AND key = 'default' AND delete_state = 0;
+      `)
+
+      await reviseLastUserMessage(conv.id, u2.id)
+
+      const memRows = await pg.query<{ id: number; content: string; valid_to: Date | null; superseded_by_message_id: number | null }>(
+        'SELECT id, content, valid_to, superseded_by_message_id FROM ai_memory WHERE id = ANY($1) ORDER BY id',
+        [[m1.memoryId, m2.memoryId]]
+      )
+      expect(memRows.rows).toHaveLength(2)
+      expect(memRows.rows[0]).toMatchObject({ id: m1.memoryId, content: '喜欢冬瓜', valid_to: null, superseded_by_message_id: null })
+      expect(memRows.rows[1].id).toBe(m2.memoryId)
+      expect(memRows.rows[1].valid_to).not.toBeNull()
+
+      const prof = await pg.query<{ content: string }>('SELECT content FROM ai_profile')
+      expect(prof.rows.every((r) => r.content === '')).toBe(true)
+      const dream = await pg.query<{ state: Record<string, unknown> }>("SELECT state FROM ai_workflow WHERE kind = 'DREAM' AND key = 'default' AND delete_state = 0")
+      expect(dream.rows[0]?.state.digest).toBeUndefined()
+      expect(dream.rows[0]?.state.lastSuccess).toBeUndefined()
+
+      const props = await pg.query<{ id: number; status: string }>(
+        'SELECT id, status FROM category_proposal WHERE id = ANY($1) ORDER BY id',
+        [[appliedProp.id, pendingProp.id]]
+      )
+      expect(props.rows).toEqual([
+        { id: appliedProp.id, status: 'applied' },
+        { id: pendingProp.id, status: 'cancelled' }
+      ])
+    } finally {
+      await pg.exec("DELETE FROM ai_memory; DELETE FROM ai_profile; DELETE FROM category_proposal; DELETE FROM ai_workflow WHERE kind = 'DREAM';")
+    }
   })
 })

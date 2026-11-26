@@ -85,6 +85,20 @@
       "when": 1795592753412,
       "tag": "0011_curvy_kabuki",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795675557719,
+      "tag": "0012_aspiring_shaman",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795680074364,
+      "tag": "0013_outstanding_loa",
+      "breakpoints": true
     }
   ]
 }

@@ -20,6 +20,7 @@ import type { AiImageReference, AiReferencePreview } from '@shared/api'
 import MarkdownBody from './MarkdownBody.vue'
 import BubbleEditor from './BubbleEditor.vue'
 import CategoryProposal from './CategoryProposal.vue'
+import { hasInteractiveModal } from '@/components/dialogs/modal'
 import { hasMarkdown, insideCodeFence } from './markdown'
 import { isMarkdownFile, readAttachment, readClipboardImage } from './readAttachment'
 
@@ -130,6 +131,7 @@ export default defineComponent({
 
     const title = computed(() => (store.ready === false ? '诺诺助手' : (store.current?.title ?? '新对话')))
     const isEmpty = computed(() => store.messages.length === 0 && !store.waiting && !store.loadingMessages)
+    const hasRunningAction = computed(() => store.streamingBlocks.some((b) => b.type === 'action' && b.status === 'running'))
     const ctxPinned = computed(() => store.conversations.find((c) => c.id === ctx.value?.id)?.pinned ?? false)
 
     // 范围下拉：全部类目录及可单独选择的类目录
@@ -317,20 +319,60 @@ export default defineComponent({
 
     function submitComposer() {
       if (reading.value) return
+      if (store.waiting) {
+        store.enqueueCurrent()
+        return
+      }
       if (hasCompactSuggestion.value) selectCompact()
       else void store.send()
     }
 
-    // 输入框：回车发送，Shift + 回车换行；输入法选字时的回车不算
+    const editQueuedItem = async (queueId: string): Promise<void> => {
+      if (store.editQueued(queueId)) {
+        await nextTick()
+        inputRef.value?.focus()
+      }
+    }
+
+    const queuePreview = (q: { text: string; attachments: AiAttachment[]; references: AiImageReference[] }): string => {
+      if (q.text) return q.text
+      const first = q.attachments[0]
+      if (first) return first.kind === 'markdown' ? (first.name || 'Markdown 附件') : '图片附件'
+      if (q.references.length) return '引用图库图片'
+      return ''
+    }
+
+    // 输入框：回车发送或入队，Ctrl/Cmd + 回车打断并立即发送，Shift + 回车换行；输入法选字时的回车不算
     const onInputKey = (e: KeyboardEvent): void => {
       if (e.isComposing || composing.value || e.keyCode === 229 || onPredictionKey(e)) return
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         const field = inputRef.value
         if (field && !e.ctrlKey && !e.metaKey && insideCodeFence(field.value.slice(0, field.selectionStart))) return
         e.preventDefault()
-        if (!e.repeat) submitComposer()
+        if (e.repeat) return
+        if (e.ctrlKey || e.metaKey) {
+          if (reading.value) return
+          if (store.waiting) void store.interruptAndSend()
+          else submitComposer()
+        } else {
+          submitComposer()
+        }
       } else if (e.key === 'Escape') {
-        closeMenus()
+        if (menu.value !== null || ctx.value !== null) {
+          e.stopPropagation()
+          closeMenus()
+        } else if (
+          store.waiting &&
+          editingId.value === null &&
+          renaming.value === null &&
+          pendingRecall.value === null &&
+          !viewer.open &&
+          !hasInteractiveModal()
+        ) {
+          e.preventDefault()
+          e.stopPropagation()
+          void store.abortCurrent()
+        }
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'u') {
         e.preventDefault()
         pickFile()
@@ -395,14 +437,23 @@ export default defineComponent({
       const [mid, iid] = picked.value.split(':').map(Number)
       return store.messages.find((m) => m.id === mid)?.images.find((i) => i.imageId === iid) ?? null
     }
-    // Ctrl + C 复制选中的结果图（输入框里有选中文字时不抢）
+    // Ctrl + C 复制选中的结果图（输入框里有选中文字时不抢）；Esc 优先关菜单/弹窗，否则打断等待中的回答
     const onKey = (e: KeyboardEvent): void => {
-      if (viewer.open || document.querySelector('[aria-modal="true"]')) {
+      if (viewer.open || hasInteractiveModal()) {
         return
       }
       if (e.key === 'Escape') {
-        closeMenus()
-        renaming.value = null
+        if (e.isComposing || composing.value || e.keyCode === 229) return
+        if (menu.value !== null || ctx.value !== null || renaming.value !== null || editingId.value !== null || pendingRecall.value !== null) {
+          closeMenus()
+          renaming.value = null
+          editingId.value = null
+          return
+        }
+        if (store.waiting) {
+          e.preventDefault()
+          void store.abortCurrent()
+        }
         return
       }
       const inField = (e.target as HTMLElement)?.closest('input, textarea, [contenteditable]')
@@ -467,7 +518,7 @@ export default defineComponent({
       }
     }
     watch(() => [store.messages.length, store.waiting, store.failure, store.currentId], scrollToEnd)
-    watch(() => [store.streamingText, store.streamingStatus], scrollIfNearBottom)
+    watch(() => [store.streamingText, store.streamingStatus, store.streamingBlocks.length], scrollIfNearBottom)
 
     onMounted(() => {
       document.addEventListener('mousedown', onDocDown)
@@ -519,6 +570,7 @@ export default defineComponent({
       copied,
       title,
       isEmpty,
+      hasRunningAction,
       dirOptions,
       scopeLabel,
       titleMax: AI_TITLE_MAX,
@@ -541,7 +593,7 @@ export default defineComponent({
       saveRename,
       ctxPin,
       ctxDelete,
-      onInputKey, submitComposer,
+      onInputKey, submitComposer, editQueuedItem, queuePreview,
       prediction,
       composing,
       picWidth,

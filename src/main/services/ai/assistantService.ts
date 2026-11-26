@@ -71,8 +71,13 @@ import { emptyScopeText, howText, loadDictionary, runSearch } from './search/hyb
 // 给模型看的结果最多几张
 const BRIEF_MAX = 8
 
-// 正在回答的对话（同一段对话不并发回答）
-const answering = new Set<number>()
+// 正在回答 / 正在修改的对话（同一段对话不并发处理）
+const activeAnswers = new Map<number, { controller: AbortController; done: Promise<void> }>()
+const changingConversations = new Set<number>()
+
+function isConversationBusy(id: number): boolean {
+  return activeAnswers.has(id) || changingConversations.has(id)
+}
 
 export function getAiStatus(): AiStatusVO {
   return { ready: !!readCloudCredentials().dashscopeApiKey }
@@ -117,6 +122,9 @@ function toMessageVO(m: AiMessageEntity, images: GalleryItemVO[] = []): AiMessag
     images,
     image: null,
     ...(c.categoryProposalId ? { categoryProposalId: c.categoryProposalId, proposalNote: c.proposalNote } : {}),
+    ...(c.memoryNotice?.notices?.length ? { memoryNotice: c.memoryNotice } : {}),
+    ...(c.blocks?.length ? { blocks: c.blocks } : {}),
+    ...(c.interrupted ? { interrupted: true } : {}),
     ...(c.contextUsage ? { contextUsage: c.contextUsage } : {}),
     ...(c.nextPrediction ? { canPredict: true } : {}),
     ...(c.cacheUsage ? { cacheUsage: c.cacheUsage } : {}),
@@ -208,14 +216,14 @@ function checkScope(scope: unknown): DirKeyDTO | null {
 
 async function changeConversation<T>(id: number, change: (conversation: CurrentConversation) => Promise<T>): Promise<T> {
   checkId(id)
-  if (answering.has(id)) throw new BizError('CONFLICT', '诺诺正在处理这段对话')
-  answering.add(id)
+  if (isConversationBusy(id)) throw new BizError('CONFLICT', '诺诺正在处理这段对话')
+  changingConversations.add(id)
   try {
     const conversation = await findConversation(id)
     if (!conversation) throw new BizError('NOT_FOUND', '这段对话已经不在了')
     return await change(conversation)
   } finally {
-    answering.delete(id)
+    changingConversations.delete(id)
   }
 }
 
@@ -357,6 +365,19 @@ export async function compactConversation(id: number): Promise<AiCompactResult> 
   })
 }
 
+export async function abortAnswer(conversationId: number): Promise<boolean> {
+  checkId(conversationId)
+  const entry = activeAnswers.get(conversationId)
+  if (!entry) return false
+  entry.controller.abort()
+  try {
+    await entry.done
+  } catch {
+    // 等待部分回复落盘和锁释放即可
+  }
+  return true
+}
+
 // 回答这段对话里最后一句还没回复的话：确定性快路径直出，其余进入 Harness 单主循环
 export async function answer(
   conversationId: number,
@@ -364,10 +385,15 @@ export async function answer(
   onStream?: (ev: Omit<AiStreamEvent, 'conversationId'>) => void
 ): Promise<AiMessageVO> {
   checkId(conversationId)
-  if (answering.has(conversationId)) {
+  if (isConversationBusy(conversationId)) {
     throw new BizError('CONFLICT', '诺诺还在回上一句')
   }
-  answering.add(conversationId)
+  const controller = new AbortController()
+  let resolveDone!: () => void
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve
+  })
+  activeAnswers.set(conversationId, { controller, done })
   try {
     const conversation = await findConversation(conversationId)
     if (!conversation) {
@@ -393,7 +419,7 @@ export async function answer(
 
     const modelUsage: Array<AiReplyCacheUsage | undefined> = []
     const callModel: typeof chatCall = async (request) => {
-      const result = await chatCall(request)
+      const result = await chatCall({ ...request, signal: request.signal ?? controller.signal })
       modelUsage.push(result.cacheUsage)
       return result
     }
@@ -414,11 +440,14 @@ export async function answer(
 
     let content: AssistantContent
     let allAlreadyShown = false
+    let interrupted = controller.signal.aborted
     if (fast.content) {
-      content = fast.content
+      content = interrupted ? { ...fast.content, interrupted: true } : fast.content
+    } else if (interrupted) {
+      content = { text: '', how: null, imageIds: [], interrupted: true }
     } else {
       const image = attachments.find((a) => a.kind === 'image')
-      const { turns, previousResults } = await historyTurns(history)
+      const { turns, previousResults } = await historyTurns(history, u.includeR18)
       const focus = !fast.hasInputContext && !fast.refinement ? conversationFocus(history.slice(-8)) : []
       const ordinaryFocus = await ordinaryReferenceDetails(focus.slice(0, BRIEF_MAX), visibleForTurn, !!u.scope, u.includeR18)
       const focusSignature = ordinaryFocus.length ? searchCacheKey('focus', ordinaryFocus) : undefined
@@ -470,6 +499,7 @@ export async function answer(
         candidateIds: fast.candidateIds,
         previousResults,
         shownImages,
+        signal: controller.signal,
         previousProposal: latestPlan
           ? { id: (latestPlan.content as AssistantContent).categoryProposalId!, messageId: latestPlan.id }
           : undefined,
@@ -486,9 +516,19 @@ export async function answer(
       const stateRef = { current: createInitialHarnessState(fast.hasInputContext, !!fast.reference?.modelNote) }
       let text = ''
       let answered = false
-      const key = !fast.refinement && !fast.hasInputContext && (await standalonePlanKey(fast.query, u, history, dict.tags, conversation.profileVersion))
+      const cloudReady = isCloudReady()
+      const key =
+        !cloudReady &&
+        !fast.refinement &&
+        !fast.hasInputContext &&
+        (await standalonePlanKey(fast.query, u, history, dict.tags, conversation.profileVersion))
 
       const generate = async () => {
+        if (controller.signal.aborted) {
+          interrupted = true
+          answered = true
+          return undefined
+        }
         if (image) {
           // 上传图像在本地完成分级闸门校验后再检查云端密钥，避免受限图片在离线时被误放行。
           const vision = await runVisionTurn(turns, user, env, stateRef, async (req) => {
@@ -496,6 +536,7 @@ export async function answer(
             return callModel(req)
           }, image, onStream)
           text = vision.text
+          if (vision.interrupted) interrupted = true
           answered = true
           return undefined
         }
@@ -521,33 +562,51 @@ export async function answer(
         }
         const loop = await runAgentLoop(conversation, turns, history, user, env, stateRef, scopeName, callModel, onStream)
         text = loop.text
+        if (loop.interrupted) interrupted = true
         answered = true
-        return !stateRef.current.needsDetails && !stateRef.current.otherToolUsed ? stateRef.current.cacheablePlan : undefined
+        return !loop.interrupted && !stateRef.current.needsDetails && !stateRef.current.otherToolUsed
+          ? stateRef.current.cacheablePlan
+          : undefined
       }
 
       try {
-        const cached = key
-          ? await cachedSearchValue(
-              key,
-              (value): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value),
-              generate
-            )
-          : undefined
-        if (cached && !answered) {
-          const replayed = await dispatchTool(ASSISTANT_TOOL_MAP, 'search_images', JSON.stringify(cached), env, stateRef.current)
-          stateRef.current = reduceToolOutcome(stateRef.current, 'search_images', replayed.outcome)
+        if (!controller.signal.aborted) {
+          const cached = key
+            ? await cachedSearchValue(
+                key,
+                (value): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value),
+                generate
+              )
+            : undefined
+          if (cached && !answered) {
+            const replayed = await dispatchTool(ASSISTANT_TOOL_MAP, 'search_images', JSON.stringify(cached), env, stateRef.current)
+            stateRef.current = reduceToolOutcome(stateRef.current, 'search_images', replayed.outcome)
+          }
+          if (!answered && !stateRef.current.lastSearch) await generate()
+        } else {
+          interrupted = true
         }
-        if (!answered && !stateRef.current.lastSearch) await generate()
       } catch (err) {
-        if (!stateRef.current.lastSearch && stateRef.current.awaitingContrast) {
-          const fallback = await dispatchTool(ASSISTANT_TOOL_MAP, 'search_images', '{}', env, stateRef.current)
-          stateRef.current = reduceToolOutcome(stateRef.current, 'search_images', fallback.outcome)
+        if (controller.signal.aborted || (err instanceof Error && (err.name === 'AbortError' || err.name === 'APIUserAbortError'))) {
+          interrupted = true
+        } else {
+          if (!stateRef.current.lastSearch && stateRef.current.awaitingContrast) {
+            const fallback = await dispatchTool(ASSISTANT_TOOL_MAP, 'search_images', '{}', env, stateRef.current)
+            stateRef.current = reduceToolOutcome(stateRef.current, 'search_images', fallback.outcome)
+          }
+          if (!stateRef.current.lastSearch) throw classifyCloudError(err)
+          stateRef.current.lastSearch.outcome.incomplete ??= '后续的云端核对暂未完成'
         }
-        if (!stateRef.current.lastSearch) throw classifyCloudError(err)
-        stateRef.current.lastSearch.outcome.incomplete ??= '后续的云端核对暂未完成'
       }
 
       const state = stateRef.current
+      const blocks = state.blocks.length
+        ? state.blocks.map((b) =>
+            b.type === 'action' && b.status === 'running'
+              ? { ...b, status: (interrupted ? 'aborted' : 'done') as 'aborted' | 'done' }
+              : b
+          )
+        : undefined
 
       if (state.exclusionReply) {
         content = {
@@ -557,6 +616,8 @@ export async function answer(
           evidence: state.exclusionReply.evidence,
           incomplete: state.exclusionReply.incomplete,
           readLibraryMetadata: true,
+          ...(blocks ? { blocks } : {}),
+          ...(interrupted ? { interrupted: true } : {}),
           ...(state.contextUsage ? { contextUsage: state.contextUsage } : {}),
           memoryIds: state.memoryIds ?? []
         }
@@ -568,10 +629,10 @@ export async function answer(
         content = {
           text:
             state.directoryProposal?.text ??
-            (outcome && !state.needsDetails
-              ? state.lastSearch?.caption ?? (text || localReplyText(found))
-              : text || '诺诺没想好怎么回答，换个说法再问一次吧。'),
-          ...(state.lastSearch?.caption && !state.needsDetails ? { cardCaption: true } : {}),
+            (outcome
+              ? text || state.lastSearch?.caption || (interrupted ? '' : localReplyText(found))
+              : text || (interrupted ? '' : '诺诺没想好怎么回答，换个说法再问一次吧。')),
+          ...(!text && state.lastSearch?.caption && !state.needsDetails ? { cardCaption: true } : {}),
           ...(state.directoryProposal?.categoryProposalId
             ? { categoryProposalId: state.directoryProposal.categoryProposalId, proposalNote: state.directoryProposal.proposalNote }
             : {}),
@@ -579,6 +640,8 @@ export async function answer(
           imageIds,
           evidence: outcome?.evidence,
           incomplete: outcome?.incomplete,
+          ...(blocks ? { blocks } : {}),
+          ...(interrupted ? { interrupted: true } : {}),
           ...(fast.reference?.focusReferences?.length ? { focusReferences: fast.reference.focusReferences } : {}),
           ...(state.readLibraryMetadata || focusSignature ? { readLibraryMetadata: true } : {}),
           ...(focusSignature && !state.readLibraryMetadata && !outcome && !state.directoryProposal ? { focusSignature } : {}),
@@ -594,6 +657,12 @@ export async function answer(
           content.incomplete = undefined
         }
       }
+      if (state.memoryNotices?.length) {
+        content.memoryNotice = {
+          notices: state.memoryNotices,
+          ...(state.memoryNoticeAction ? { action: state.memoryNoticeAction } : {})
+        }
+      }
     }
 
     // 各请求按输入量加权。纯本地回复或任何一次缺少统计时，都没有完整的模型命中率。
@@ -603,8 +672,10 @@ export async function answer(
         cachedTokens: a.cachedTokens + b.cachedTokens
       }))
     }
-    if (content.incomplete && !content.imageIds.length && !allAlreadyShown) content.text = '目前只完成了部分检索。'
-    if (content.imageIds.length && !content.text) {
+    if (!interrupted && content.incomplete && !content.imageIds.length && !allAlreadyShown && (!content.text || content.text === localReplyText(0))) {
+      content.text = '目前只完成了部分检索。'
+    }
+    if (!interrupted && content.imageIds.length && !content.text) {
       const previous = history.findLast((row) => row.role === 'ASSISTANT')?.content as AssistantContent | undefined
       content.text = cardCaption(
         content.imageIds.length,
@@ -616,7 +687,8 @@ export async function answer(
     const saved = await insertMessage(conversationId, 'ASSISTANT', content)
     return toMessageVO(saved, await itemsOfImages(content.imageIds, u.includeR18, dirs))
   } finally {
-    answering.delete(conversationId)
+    activeAnswers.delete(conversationId)
+    resolveDone()
   }
 }
 
@@ -658,7 +730,7 @@ export async function voteMessage(messageId: number, vote: 'UP' | 'DOWN' | null)
 }
 
 export function isAnswering(): boolean {
-  return answering.size > 0
+  return activeAnswers.size > 0
 }
 
 export async function suggestIdeas(random: () => number = Math.random): Promise<string[]> {

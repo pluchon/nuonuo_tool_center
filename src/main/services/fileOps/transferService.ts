@@ -6,6 +6,7 @@ import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isWithin } from '../../common/pathUtil'
 import { publishExclusive } from '../../common/publishFile'
+import { bumpLibraryVersion } from '../../common/readCache'
 import { retryOnWinBusy } from '../../common/winFs'
 import { getDatabase } from '../../db/client'
 import {
@@ -199,6 +200,7 @@ export async function moveImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
         await recordMovedFile(tx, op.imageFileId!, target.root, to)
         await updateOpStatus(tx, op.id, 'DONE')
       })
+      bumpLibraryVersion()
       done += 1
     }
     await finish(batchId, done, failed)
@@ -296,6 +298,7 @@ export async function copyImagesInQueue(query: GalleryQueryDTO, rawIds: unknown,
       await recordCopiedFile(tx, row.imageId, target.root, to, mtime)
       await updateOpStatus(tx, op.id, 'DONE')
     })
+    bumpLibraryVersion()
     done += 1
   }
   await finish(batchId, done, failed)
@@ -353,6 +356,7 @@ export async function undoTransfer(rawId: unknown): Promise<TransferResultVO> {
             await recordMovedFile(tx, op.imageFileId!, back.root, op.fromPath)
             await updateOpStatus(tx, op.id, 'REVERTED')
           })
+          bumpLibraryVersion()
         } else {
           const at = locate(op.toPath)
           await trashPath(op.toPath)
@@ -362,6 +366,7 @@ export async function undoTransfer(rawId: unknown): Promise<TransferResultVO> {
             }
             await updateOpStatus(tx, op.id, 'REVERTED')
           })
+          bumpLibraryVersion()
         }
         done += 1
       } catch (err) {

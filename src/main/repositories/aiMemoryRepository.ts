@@ -74,6 +74,59 @@ export async function findValidMemories(limit = 200, db: Pick<AppDatabase, 'sele
     .limit(limit)
 }
 
+function memoryBigrams(s: string): Set<string> {
+  const chars = Array.from(s.toLowerCase().replace(/\s+/g, ''))
+  const out = new Set<string>()
+  for (let i = 0; i < chars.length - 1; i++) {
+    out.add(chars[i] + chars[i + 1])
+  }
+  return out
+}
+
+// 列出当前有效记忆（供对话内回忆与更新匹配）
+export async function listActiveMemories(limit = 50): Promise<AiMemoryEntity[]> {
+  return findValidMemories(limit)
+}
+
+// 按查询文本在有效记忆中做字面与二元组模糊匹配（未提供 replaceId 时兜底查找待替换/遗忘的条目）
+export async function findActiveMemoryMatches(
+  query: string,
+  limit = 10
+): Promise<Array<AiMemoryEntity & { score: number }>> {
+  const normalized = query.trim().toLowerCase().replace(/\s+/g, '')
+  if (!normalized || limit <= 0) return []
+  const active = await findValidMemories(200)
+  const qBigrams = memoryBigrams(normalized)
+  const scored: Array<AiMemoryEntity & { score: number }> = []
+  for (const row of active) {
+    const cNorm = row.content.trim().toLowerCase().replace(/\s+/g, '')
+    if (!cNorm) continue
+    let score = 0
+    if (cNorm === normalized) {
+      score = 1
+    } else if (cNorm.includes(normalized) || normalized.includes(cNorm)) {
+      const ratio = Math.min(cNorm.length, normalized.length) / Math.max(cNorm.length, normalized.length)
+      score = 0.75 + 0.25 * ratio
+    } else if (qBigrams.size > 0) {
+      const mBigrams = memoryBigrams(cNorm)
+      if (mBigrams.size > 0) {
+        let hit = 0
+        for (const g of qBigrams) {
+          if (mBigrams.has(g)) hit++
+        }
+        if (hit > 0) {
+          score = (2 * hit) / (qBigrams.size + mBigrams.size)
+        }
+      }
+    }
+    if (score > 0) {
+      scored.push({ ...row, score })
+    }
+  }
+  scored.sort((a, b) => b.score - a.score || b.confidence - a.confidence || b.id - a.id)
+  return scored.slice(0, limit)
+}
+
 // 按内容找一条还有效的记忆
 export async function findValidMemoryByContent(content: string): Promise<AiMemoryEntity | undefined> {
   const { db } = getDatabase()

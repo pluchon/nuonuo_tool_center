@@ -1,7 +1,7 @@
 import { toOpenAiTools, type RegisteredTool } from '../toolRegistry'
 import { listCategoryPathsTool, proposeCategoryChangeTool } from './categoryTools'
 import { excludeImageTool, explainMatchTool, getImageTool, listTagsTool, readReferencedImagesTool } from './imageTools'
-import { rememberTool, replyWithFollowupTool } from './memoryTools'
+import { recallMemoriesTool, rememberTool, replyWithFollowupTool } from './memoryTools'
 import { searchImagesTool } from './searchImagesTool'
 
 // 固定的一整套工具，顺序固定，用不用都带上（工具定义算在缓存前缀里）
@@ -14,6 +14,7 @@ export const ASSISTANT_TOOL_REGISTRY: readonly RegisteredTool[] = [
   getImageTool,
   listTagsTool,
   rememberTool,
+  recallMemoriesTool,
   explainMatchTool,
   excludeImageTool
 ]

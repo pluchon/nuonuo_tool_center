@@ -250,6 +250,7 @@ const api = {
       return () => ipcRenderer.removeListener(IpcEvent.aiStream, handler)
     },
     answer: (conversationId: number): Promise<ApiResponse<AiMessageVO>> => ipcRenderer.invoke(IpcChannel.aiAnswer, conversationId),
+    abort: (conversationId: number): Promise<ApiResponse<boolean>> => ipcRenderer.invoke(IpcChannel.aiAbort, conversationId),
     rename: (id: number, title: string): Promise<ApiResponse<AiConversationVO>> => ipcRenderer.invoke(IpcChannel.aiRename, id, title),
     pin: (id: number, pinned: boolean): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.aiPin, id, pinned),
     remove: (id: number): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.aiDelete, id),

@@ -7,6 +7,7 @@ import { prepareImage } from './imagePrep'
 import type { ContentPart } from './promptPrefix'
 import { BizError } from '../../common/bizError'
 import { isSkippedDir, normalizeRelDir } from '../../common/pathUtil'
+import { bumpLibraryVersion } from '../../common/readCache'
 import { categoryPaths, ensureSuggestionTarget } from '../fileOps/folderOpsService'
 import { categoryPathIndex } from '../fileOps/categoryPaths'
 import { copyImages } from '../fileOps/transferService'
@@ -152,6 +153,7 @@ export async function decideSuggestion(imageId: number, key: string, accept: boo
   }
   if (item.kind === 'r18Review') {
     if (!(await updateR18([imageId], accept, true))) throw new BizError('NOT_FOUND', '这条建议已经处理过了')
+    bumpLibraryVersion()
     return listSuggestions(imageId)
   }
   const finalValue = accept && typeof customValue === 'string' ? validateOverride(item.kind, customValue) : item.value
@@ -160,6 +162,7 @@ export async function decideSuggestion(imageId: number, key: string, accept: boo
     await apply(imageId, item.kind, finalValue, mustExist)
   }
   await mark(imageId, key, accept ? 'ACCEPTED' : 'REJECTED')
+  bumpLibraryVersion()
   await recordEvent(accept ? 'suggestion.accept' : 'suggestion.reject', imageId, {
     kind: item.kind,
     value: accept ? finalValue : item.value,
@@ -182,6 +185,7 @@ export async function acceptAllSuggestions(imageId: number, overrides?: Record<s
       }
     }
   }
+  let appliedAny = false
   let firstError: unknown = null
   for (const item of items) {
     if (item.kind === 'r18Review') continue
@@ -190,6 +194,7 @@ export async function acceptAllSuggestions(imageId: number, overrides?: Record<s
     try {
       await apply(imageId, item.kind, finalValue, mustExist)
       await mark(imageId, item.key, 'ACCEPTED')
+      appliedAny = true
       await recordEvent('suggestion.accept', imageId, {
         kind: item.kind,
         value: finalValue,
@@ -199,6 +204,9 @@ export async function acceptAllSuggestions(imageId: number, overrides?: Record<s
     } catch (err) {
       firstError ??= err
     }
+  }
+  if (appliedAny) {
+    bumpLibraryVersion()
   }
   if (firstError) {
     throw firstError
@@ -256,6 +264,7 @@ export async function decideMany(rawIds: unknown, accept: unknown): Promise<Sugg
       error ??= err instanceof Error ? err.message : String(err)
     }
   }
+  bumpLibraryVersion()
   return { done: ids.length - bad.size - reviewOnly, failed: bad.size, error }
 }
 
@@ -328,6 +337,7 @@ export async function importAssist(imageId: number, raw: unknown, thumbsDir?: st
   if (!await saveExternalResult({ imageId, kind: 'IDENTIFY', origin: 'EXTERNAL', model: 'external', result: fields, fieldStatus: status }, fields.description)) {
     throw new BizError('BAD_REQUEST', '没整理出能用的内容')
   }
+  bumpLibraryVersion()
   await recordEvent('assist.import', imageId, { fields: n })
   return n
 }

@@ -1,5 +1,5 @@
 import { describeProposal, getCategoryProposal, listCategoryPaths, prepareCategoryAction } from '../../categoryProposalService'
-import { defineTool } from '../toolRegistry'
+import { defineTool, isToolError, parseToolJson, truncateLabel } from '../toolRegistry'
 import { directoryFeedback, type ToolEnv } from '../types'
 
 export async function previousReceipt(env: Pick<ToolEnv, 'previousProposal'>): Promise<string> {
@@ -7,9 +7,44 @@ export async function previousReceipt(env: Pick<ToolEnv, 'previousProposal'>): P
   return p ? describeProposal(await getCategoryProposal(p.id, p.messageId)) : '当前没有可以核对的目录提案。'
 }
 
+function formatCategoryPathsStart(args: Record<string, unknown>): string {
+  const prefix = truncateLabel(args.prefix, 16)
+  return prefix ? `核对类目录：${prefix}` : '核对类目录'
+}
+
+function formatProposeStart(args: Record<string, unknown>): string {
+  const path = truncateLabel(args.path, 14)
+  const scope = truncateLabel(args.scope, 14)
+  switch (args.kind) {
+    case 'analyze':
+      return scope ? `规划类目录：${scope}` : '规划类目录'
+    case 'create':
+      return path ? `准备创建目录：${path}` : '准备创建目录'
+    case 'move':
+      return path ? `准备迁移目录：${path}` : '准备迁移目录'
+    case 'file':
+      return path ? `准备归档到：${path}` : '准备图片归档提案'
+    case 'status':
+      return '核对目录提案状态'
+    case 'continue_chat':
+      return '继续对话'
+    default:
+      return '处理类目录操作'
+  }
+}
+
 export const listCategoryPathsTool = defineTool({
   name: 'list_category_paths',
   description: '读取图库已有类目录的相对路径，包括子目录，可用 prefix 限定父目录。',
+  sideEffect: 'read',
+  formatStart: formatCategoryPathsStart,
+  formatDone(args, result) {
+    const start = formatCategoryPathsStart(args)
+    const parsed = parseToolJson(result.content) as Record<string, unknown> | null
+    if (isToolError(parsed)) return `${start} · 读取失败`
+    if (typeof parsed?.total === 'number') return `${start} · ${parsed.total} 个目录`
+    return start
+  },
   parameters: {
     type: 'object',
     properties: {
@@ -31,6 +66,19 @@ export const proposeCategoryChangeTool = defineTool({
   name: 'propose_category_change',
   description:
     '根据已确认标签规划类目录，或准备创建、迁移子目录。紧接提案的下一轮按用户本意选择：询问执行情况选 status，要求把图放入目录选 file，其他对话或其他工具请求选 continue_chat。file 操作为引用图片建立归档复制提案。用户在卡片中确认后执行。',
+  sideEffect: 'proposal',
+  formatStart: formatProposeStart,
+  formatDone(args, result) {
+    const start = formatProposeStart(args)
+    const parsed = parseToolJson(result.content) as Record<string, unknown> | null
+    if (isToolError(parsed)) return `${start} · 未完成`
+    if (args.kind === 'status') return '核对目录提案状态 · 已获取'
+    if (args.kind === 'continue_chat') return '继续对话'
+    if (result.outcome?.type === 'proposal') {
+      return result.outcome.proposal.categoryProposalId ? `${start} · 已生成提案` : `${start} · 已核对`
+    }
+    return start
+  },
   parameters: {
     type: 'object',
     required: ['kind'],

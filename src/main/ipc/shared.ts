@@ -1,5 +1,6 @@
 import { BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { BizError } from '../common/bizError'
+import { bumpLibraryVersion } from '../common/readCache'
 import { getDbBootState } from '../services/databaseService'
 import { scheduleEmbedding } from '../services/ai/embeddingService'
 
@@ -21,6 +22,7 @@ export function requireDatabase(): void {
 
 // 标签或复核状态提交成功后，已有图库可能首次出现可建立向量索引的图片。
 export function refreshImageIndex<T>(result: T): T {
+  bumpLibraryVersion()
   scheduleEmbedding()
   return result
 }

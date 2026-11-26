@@ -128,9 +128,22 @@
                 </div>
               </div>
               <article v-else class="assistant__reply">
-                <div v-if="m.how" class="assistant__how">
+                <div v-if="m.how && !m.blocks?.some((b) => b.type === 'action')" class="assistant__how">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-3.5-3.5" /></svg>
                   <span>{{ m.how }}</span>
+                </div>
+                <div v-if="m.blocks?.length" class="assistant__timeline">
+                  <template v-for="(block, idx) in m.blocks" :key="block.type === 'action' ? `${block.id}-${idx}` : `n-${idx}`">
+                    <div v-if="block.type === 'action'" class="assistant__step" :class="`assistant__step--${block.status}`">
+                      <span class="assistant__step-icon" aria-hidden="true">
+                        <span v-if="block.status === 'running'" class="assistant__step-dot" />
+                        <svg v-else-if="block.status === 'done'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                        <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10M17 7L7 17" /></svg>
+                      </span>
+                      <span class="assistant__step-text" :class="{ 'nn-shine': block.status === 'running' }">{{ block.summary }}</span>
+                    </div>
+                    <MarkdownBody v-else-if="block.text" class="assistant__narration" :text="block.text" />
+                  </template>
                 </div>
                 <MarkdownBody v-if="m.text && (!m.categoryProposalId || m.proposalNote)" class="assistant__text" :text="m.text" />
                 <CategoryProposal v-if="m.categoryProposalId" :proposal-id="m.categoryProposalId" :message-id="m.id" :preview-revision="previewRevision" />
@@ -189,19 +202,50 @@
                     </svg>
                     缓存命中率 {{ cacheRate(m.cacheUsage) }}
                   </span>
+                  <span v-if="m.memoryNotice?.notices?.length" class="assistant__memory-wrap">
+                    <span class="assistant__memory" tabindex="0" role="note" aria-label="查看记忆更新内容">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+                        <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+                        <path d="M12 5v13" />
+                        <path d="M9 13a3 3 0 0 1-3-3M15 13a3 3 0 0 0 3-3" />
+                      </svg>
+                      <span>记忆已修改</span>
+                      <div class="assistant__memory-pop" role="tooltip">
+                        <span class="assistant__caret assistant__caret--down assistant__caret--memory" aria-hidden="true" />
+                        <p v-for="(line, i) in m.memoryNotice.notices.slice(0, 2)" :key="i" class="assistant__memory-line">{{ line }}</p>
+                      </div>
+                    </span>
+                  </span>
+                  <span v-if="m.interrupted" class="assistant__stopped">已停止</span>
                   <time class="assistant__time" :datetime="m.createdAt">{{ fmtDay(m.createdAt) }}</time>
                 </div>
               </article>
             </template>
 
             <!-- 流式输出中的回复 -->
-            <article v-if="store.waiting && !store.compacting && store.streamingText" class="assistant__reply assistant__reply--streaming" aria-live="polite">
-              <MarkdownBody class="assistant__text" :text="store.streamingText" />
-              <span class="assistant__stream-dot" aria-hidden="true" />
+            <article v-if="store.waiting && !store.compacting && (store.streamingBlocks.length || store.streamingText)" class="assistant__reply assistant__reply--streaming" aria-live="polite">
+              <div v-if="store.streamingBlocks.length" class="assistant__timeline">
+                <template v-for="(block, idx) in store.streamingBlocks" :key="block.type === 'action' ? `${block.id}-${idx}` : `sn-${idx}`">
+                  <div v-if="block.type === 'action'" class="assistant__step" :class="`assistant__step--${block.status}`">
+                    <span class="assistant__step-icon" aria-hidden="true">
+                      <span v-if="block.status === 'running'" class="assistant__step-dot" />
+                      <svg v-else-if="block.status === 'done'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                      <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10M17 7L7 17" /></svg>
+                    </span>
+                    <span class="assistant__step-text" :class="{ 'nn-shine': block.status === 'running' }">{{ block.summary }}</span>
+                  </div>
+                  <MarkdownBody v-else-if="block.text" class="assistant__narration" :text="block.text" />
+                </template>
+              </div>
+              <template v-if="store.streamingText">
+                <MarkdownBody class="assistant__text" :text="store.streamingText" />
+                <span class="assistant__stream-dot" aria-hidden="true" />
+              </template>
             </article>
 
             <!-- 等待回复：转动的星星和带流光的一行字 -->
-            <div v-if="store.waiting && !store.compacting && (!store.streamingText || store.streamingStatus)" class="assistant__busy" role="status">
+            <div v-if="store.waiting && !store.compacting && !hasRunningAction && (!store.streamingText || store.streamingStatus)" class="assistant__busy" role="status">
               <svg class="nn-gem" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
                 <defs>
                   <linearGradient id="nnStarBusy" x1="3" y1="3" x2="21" y2="21" gradientUnits="userSpaceOnUse">
@@ -239,6 +283,41 @@
             <strong>{{ store.compacting ? '正在精简…' : '精简' }}</strong>
             <span>对话上下文（已用 {{ usedPercent }}）</span>
           </button>
+          <div v-if="store.queue.length" class="assistant__queue nn-thin" aria-label="待发送队列">
+            <div v-for="q in store.queue" :key="q.id" class="assistant__queue-row">
+              <span class="assistant__queue-text">{{ queuePreview(q) }}</span>
+              <span v-if="q.attachments.length || q.references.length" class="assistant__queue-badge">
+                +{{ q.attachments.length + q.references.length }}
+              </span>
+              <div class="assistant__queue-actions">
+                <button
+                  class="assistant__queue-btn"
+                  type="button"
+                  aria-label="现在发送"
+                  :disabled="store.aborting || store.loadingMessages || store.changingTurn"
+                  @click="store.sendQueuedNow(q.id)"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+                </button>
+                <button
+                  class="assistant__queue-btn"
+                  type="button"
+                  aria-label="回到输入框编辑"
+                  @click="editQueuedItem(q.id)"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 6.5l4 4M4 20l4.5-1 12-12a2.8 2.8 0 0 0-4-4l-12 12z" /></svg>
+                </button>
+                <button
+                  class="assistant__queue-btn assistant__queue-btn--del"
+                  type="button"
+                  aria-label="删除排队消息"
+                  @click="store.removeQueued(q.id)"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
+                </button>
+              </div>
+            </div>
+          </div>
           <div class="assistant__composer" :class="{ 'assistant__composer--drop': draggingReference }" @dragover="overReference" @drop="dropReference">
             <Transition name="nn-pop">
               <div v-if="menu === 'dir'" class="assistant__dirs" role="listbox" aria-label="在哪里找" data-ai-menu>
@@ -349,9 +428,28 @@
               <ContextMeter :messages="store.messages" />
               <button v-if="formattedDraft" type="button" class="assistant__md-toggle" :aria-pressed="previewDraft"
                 :aria-label="previewDraft ? '继续编辑' : '预览 Markdown'" @click="toggleDraftPreview">MD</button>
-              <button class="assistant__send" :class="{ 'assistant__send--on': store.canSend && !reading }" type="button" aria-label="发送" :disabled="!store.canSend || reading" @click="submitComposer">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
-              </button>
+              <div class="assistant__actions">
+                <button
+                  v-if="store.waiting"
+                  class="assistant__stop"
+                  type="button"
+                  aria-label="停止回答"
+                  :disabled="store.aborting"
+                  @click="store.abortCurrent()"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" /></svg>
+                </button>
+                <button
+                  class="assistant__send"
+                  :class="{ 'assistant__send--on': store.canSend && !reading }"
+                  type="button"
+                  :aria-label="store.waiting ? '加入队列' : '发送'"
+                  :disabled="!store.canSend || reading"
+                  @click="submitComposer"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+                </button>
+              </div>
             </div>
           </div>
         </div>

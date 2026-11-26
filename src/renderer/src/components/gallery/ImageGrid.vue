@@ -1,7 +1,7 @@
 <template>
   <div class="image-grid-wrap">
     <div ref="gridRef" class="image-grid nn-noscroll" @wheel="onWheel" @mousemove.capture="onGridMove">
-      <section v-for="g in groups" :key="g.key" class="image-grid__group" :data-month="g.key">
+      <section v-for="(g, gi) in groups" :key="g.key" class="image-grid__group" :data-month="g.key">
         <div v-if="g.timeline" class="image-grid__head">
           <span class="image-grid__bar" aria-hidden="true" />
           <h3 class="image-grid__title">{{ g.label }}</h3>
@@ -37,10 +37,13 @@
           </button>
         </div>
 
-        <div class="image-grid__canvas">
-          <GridRow v-for="(row, ri) in g.rows" :key="ri" :data-first-id="row.tiles[0].id"
-            :style="{ '--image-height': row.imageHeight }"
-            :row-key="g.key + '/' + ri" :virtual="virtual" :visible-rows="visibleRows" @vue:mounted="mountRow" @vue:before-unmount="unmountRow">
+        <div class="image-grid__canvas" :style="{ position: 'relative', height: `${g.canvasHeightPx}px` }">
+          <GridRow
+            v-for="row in visibleRowsByGroup[gi]"
+            :key="row.rowIndex"
+            :data-first-id="row.firstId"
+            :style="{ '--image-height': row.imageHeight, transform: `translate3d(0, ${row.offsetInGroup}px, 0)` }"
+          >
             <button
               v-for="t in row.tiles"
               :key="t.id"
@@ -104,7 +107,13 @@
         </div>
       </section>
     </div>
-    <GridScrollbar :target="gridRef" :timeline="groups[0]?.timeline ?? false" :revision="groups" />
+    <GridScrollbar
+      :target="gridRef"
+      :timeline="groups[0]?.timeline ?? false"
+      :revision="groups"
+      :month-offsets="monthOffsets"
+      :layout-height="totalLayoutHeight"
+    />
   </div>
 </template>
 
