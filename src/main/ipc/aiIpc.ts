@@ -27,7 +27,13 @@ import { scheduleEmbedding } from '../services/ai/embeddingService'
 import { cancelAllLooks, getLookState, getSuggestionRefreshStatus, lookNow, refreshSuggestion, retryLook } from '../services/ai/lookService'
 import { predictNext } from '../services/ai/nextPrediction'
 import { approveOrganize, cancelOrganize, estimateOrganize, getOrganizeState, startOrganize } from '../services/ai/organizeService'
-import { estimateReorganize, resetOrganizedToSource, startReorganizeRelook } from '../services/ai/reorganizeService'
+import {
+  estimateReorganize,
+  relookSingleImage,
+  resetOrganizedToSource,
+  resetSingleImageToSource,
+  startReorganizeRelook
+} from '../services/ai/reorganizeService'
 import { acceptAllSuggestions, assistPrompt, decideMany, decideSuggestion, importAssist, listSuggestions } from '../services/ai/suggestionService'
 import { getRatingProgress } from '../services/rating/ratingService'
 import { handle } from './handle'
@@ -284,6 +290,14 @@ export function registerAiIpc(paths: DataPaths): void {
   handle(IpcChannel.reorganizeRelook, async () => {
     requireDatabase()
     return startReorganizeRelook()
+  })
+  handle(IpcChannel.reorganizeResetOne, async (_event, imageId: number) => {
+    requireDatabase()
+    return resetSingleImageToSource(imageId).then(refreshImageIndex)
+  })
+  handle(IpcChannel.reorganizeRelookOne, async (_event, imageId: number) => {
+    requireDatabase()
+    return relookSingleImage(imageId)
   })
   handle(IpcChannel.assistPrompt, async (_event, imageId: number) => {
     requireDatabase()

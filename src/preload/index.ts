@@ -204,7 +204,9 @@ const api = {
     estimate: (): Promise<ApiResponse<ReorganizeEstimateVO>> => ipcRenderer.invoke(IpcChannel.reorganizeEstimate),
     dismissEstimate: (): Promise<ApiResponse<void>> => ipcRenderer.invoke(IpcChannel.reorganizeDismissEstimate),
     resetToSource: (): Promise<ApiResponse<ReorganizeResetResultVO>> => ipcRenderer.invoke(IpcChannel.reorganizeResetToSource),
-    relook: (): Promise<ApiResponse<ReorganizeRelookResultVO>> => ipcRenderer.invoke(IpcChannel.reorganizeRelook)
+    relook: (): Promise<ApiResponse<ReorganizeRelookResultVO>> => ipcRenderer.invoke(IpcChannel.reorganizeRelook),
+    resetOne: (imageId: number): Promise<ApiResponse<ReorganizeResetResultVO>> => ipcRenderer.invoke(IpcChannel.reorganizeResetOne, imageId),
+    relookOne: (imageId: number): Promise<ApiResponse<ReorganizeRelookResultVO>> => ipcRenderer.invoke(IpcChannel.reorganizeRelookOne, imageId)
   },
   rating: {
     progress: (): Promise<ApiResponse<RatingProgressVO>> => ipcRenderer.invoke(IpcChannel.ratingProgress),

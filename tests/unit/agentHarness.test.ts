@@ -815,4 +815,34 @@ describe('AgentHarness 集成动态工具与通用视觉过滤', () => {
     expect(newPrefix).not.toContain('仅建议雪花')
     expect(newPrefix).not.toContain('仅源目录火羽')
   })
+
+  it('可检索范围为空时 search_images 返回 scopeEmpty，且助手保留诺诺口吻回复不被静态文案覆盖', async () => {
+    const { pg } = getDatabase()
+    // 清空测试图像，仅留空白类目录
+    await pg.exec('UPDATE image SET delete_state = 1 WHERE delete_state = 0')
+
+    // 1. 直接触发空范围快路径时使用温暖的诺诺口吻
+    const qFast = await ask({ conversationId: null, text: '帮我找几张可爱的猫娘图片', scope: null, includeR18: false })
+    const rFast = await answer(qFast.conversation.id)
+    expect(rFast.text).toContain('诺诺把类目录翻了一遍')
+
+    // 2. 经由大模型工具循环拿到 scopeEmpty 后，模型生成的真实回复不被覆盖
+    script.push(
+      {
+        tool_calls: [
+          { id: 'empty-1', type: 'function', function: { name: 'search_images', arguments: JSON.stringify({ tags: ['猫娘'], contrast: [] }) } }
+        ]
+      },
+      { content: '诺诺翻了一遍相册，现在类目录里还没有猫娘图呀，先去归档几张吧 ฅ^•ﻌ•^ฅ' }
+    )
+    const q = await ask({ conversationId: null, text: '图库里有适合做头像的可爱猫耳角色吗，我想翻翻看', scope: null, includeR18: false })
+    const reply = await answer(q.conversation.id)
+
+    expect(reply.text).toBe('诺诺翻了一遍相册，现在类目录里还没有猫娘图呀，先去归档几张吧 ฅ^•ﻌ•^ฅ')
+    expect(reply.how).toBeNull()
+    const toolMsgs = calls.at(-1)!.messages as Array<{ role: string; content?: unknown }>
+    const toolPayload = JSON.parse(String(toolMsgs.findLast((m) => m.role === 'tool')?.content ?? '{}'))
+    expect(toolPayload.scopeEmpty).toBe(true)
+    expect(typeof toolPayload.scopeReason).toBe('string')
+  })
 })

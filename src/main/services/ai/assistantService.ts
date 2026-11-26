@@ -652,7 +652,9 @@ export async function answer(
           memoryIds: state.memoryIds ?? []
         }
         if (outcome && !found && !allAlreadyShown && !(await hasSearchableImage(dirs, u.includeR18))) {
-          content.text = await emptyScopeText(dirs, u.includeR18)
+          if (!content.text.trim() || content.text === localReplyText(0) || content.text === '诺诺没想好怎么回答，换个说法再问一次吧。') {
+            content.text = await emptyScopeText(dirs, u.includeR18)
+          }
           content.how = null
           content.incomplete = undefined
         }

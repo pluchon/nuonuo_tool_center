@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import type {
   AiUsageDailyPoint,
+  AiUsageKindRow,
   AiUsageRadarAxis,
   AiUsageSeriesPoint,
   AiUsageStatsVO
@@ -9,7 +10,7 @@ import type {
 import { fetchAiUsageStats } from '@/api/ai'
 
 type ViewMode = 'heatmap' | 'trend' | 'radar'
-type TrendRange = 'd7' | 'd30' | 'm12'
+type TrendRange = 'd7' | 'd15' | 'd30' | 'm6' | 'm12'
 
 interface PopoverState {
   leftPx: number
@@ -25,6 +26,8 @@ const loading = ref(true)
 const loadError = ref('')
 const viewMode = ref<ViewMode>('heatmap')
 const trendRange = ref<TrendRange>('d7')
+const selectedYear = ref(new Date().getFullYear())
+const animSeed = ref(0)
 const stageRef = ref<HTMLElement | null>(null)
 const popover = ref<PopoverState | null>(null)
 const activeBarIndex = ref<number | null>(null)
@@ -34,7 +37,12 @@ async function loadUsageStats(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    stats.value = await fetchAiUsageStats()
+    const data = await fetchAiUsageStats()
+    stats.value = data
+    if (data.availableYears.length && !data.availableYears.includes(selectedYear.value)) {
+      selectedYear.value = data.availableYears[0]
+    }
+    animSeed.value += 1
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '用量读取失败'
   } finally {
@@ -51,13 +59,39 @@ function switchView(next: ViewMode): void {
   popover.value = null
   activeBarIndex.value = null
   activeRadarIndex.value = null
+  animSeed.value += 1
 }
 
 function switchRange(next: TrendRange): void {
   trendRange.value = next
   popover.value = null
   activeBarIndex.value = null
+  animSeed.value += 1
 }
+
+function stepYear(delta: number): void {
+  const years = stats.value?.availableYears ?? []
+  const idx = years.indexOf(selectedYear.value)
+  if (idx < 0) return
+  // availableYears 按降序排列：往前一年即 idx + 1，往后一年即 idx - 1
+  const nextIdx = idx - delta
+  if (nextIdx < 0 || nextIdx >= years.length) return
+  selectedYear.value = years[nextIdx]
+  popover.value = null
+  animSeed.value += 1
+}
+
+const canPrevYear = computed(() => {
+  const years = stats.value?.availableYears ?? []
+  const idx = years.indexOf(selectedYear.value)
+  return idx >= 0 && idx < years.length - 1
+})
+
+const canNextYear = computed(() => {
+  const years = stats.value?.availableYears ?? []
+  const idx = years.indexOf(selectedYear.value)
+  return idx > 0
+})
 
 function clearHover(): void {
   popover.value = null
@@ -85,19 +119,17 @@ function formatLatency(ms: number): string {
   return `${Math.round(ms)}ms`
 }
 
-const kpiSuccessRate = computed(() => {
-  const s = stats.value?.summary
-  if (!s || s.totalCalls === 0) return '0%'
-  return `${((s.successCalls / s.totalCalls) * 100).toFixed(1)}%`
-})
-
 const kpiCloudHit = computed(() => {
   const s = stats.value?.summary
   if (!s) return '0.0%'
   return `${(s.cloudHitRate * 100).toFixed(1)}%`
 })
 
-// ---- 年度热力图（53 周 × 7 天，周一置顶） ----
+function heatClass(level: 0 | 1 | 2 | 3 | 4): string {
+  return `ai-usage__heat--${level}`
+}
+
+// ---- 年度热力图（全年 1月~12月，左侧不标周几） ----
 interface HeatCell {
   col: number
   row: number
@@ -107,16 +139,16 @@ interface HeatCell {
   point: AiUsageDailyPoint
 }
 
-const HEAT_PAD_LEFT = 20
-const HEAT_PAD_TOP = 16
+const HEAT_PAD_LEFT = 4
+const HEAT_PAD_TOP = 18
 const HEAT_CELL = 8.4
 const HEAT_GAP = 2.4
 const HEAT_STEP = HEAT_CELL + HEAT_GAP
 
 const heatmapLayout = computed(() => {
-  const points = stats.value?.heatmap ?? []
+  const points = stats.value?.heatmapByYear?.[selectedYear.value] ?? stats.value?.heatmap ?? []
   if (points.length === 0) {
-    return { cells: [] as HeatCell[], monthLabels: [] as { x: number; label: string }[], activeDays: 0, width: 604, height: 100 }
+    return { cells: [] as HeatCell[], monthLabels: [] as { x: number; label: string }[], width: 582, height: 100 }
   }
   const firstParts = points[0].date.split('-').map(Number)
   const firstDate = new Date(firstParts[0], firstParts[1] - 1, firstParts[2])
@@ -128,7 +160,6 @@ const heatmapLayout = computed(() => {
   const monthLabels: { x: number; label: string }[] = []
   let lastMonth = ''
   let lastLabelX = -100
-  let activeDays = 0
 
   points.forEach((pt, idx) => {
     const slot = startOffset + idx
@@ -139,7 +170,6 @@ const heatmapLayout = computed(() => {
 
     let level: 0 | 1 | 2 | 3 | 4 = 0
     if (pt.totalTokens > 0 || pt.calls > 0) {
-      activeDays += 1
       if (maxVal <= 0) {
         level = 1
       } else {
@@ -165,23 +195,18 @@ const heatmapLayout = computed(() => {
   })
 
   const totalCols = Math.ceil((startOffset + points.length) / 7)
-  const width = Math.max(596, HEAT_PAD_LEFT + totalCols * HEAT_STEP + 4)
-  const height = HEAT_PAD_TOP + 7 * HEAT_STEP + 2
-  return { cells, monthLabels, activeDays, width, height }
+  const width = Math.max(578, HEAT_PAD_LEFT + totalCols * HEAT_STEP + 4)
+  const height = HEAT_PAD_TOP + 7 * HEAT_STEP + 4
+  return { cells, monthLabels, width, height }
 })
 
-// ---- 主题联动热力等级类 ----
-function heatClass(level: 0 | 1 | 2 | 3 | 4): string {
-  return `ai-usage__heat--${level}`
-}
-
-// ---- 趋势堆叠柱图（Claude 风格） ----
-const BAR_VB_W = 600
-const BAR_VB_H = 166
+// ---- 趋势堆叠柱图（7天 / 15天 / 30天 / 6个月 / 1年） ----
+const BAR_VB_W = 580
+const BAR_VB_H = 132
 const BAR_LEFT = 42
-const BAR_RIGHT = 12
-const BAR_TOP = 14
-const BAR_BOTTOM = 24
+const BAR_RIGHT = 10
+const BAR_TOP = 10
+const BAR_BOTTOM = 22
 const BAR_PLOT_W = BAR_VB_W - BAR_LEFT - BAR_RIGHT
 const BAR_PLOT_H = BAR_VB_H - BAR_TOP - BAR_BOTTOM
 
@@ -213,7 +238,7 @@ const barLayout = computed(() => {
   const rawMax = list.reduce((acc, p) => Math.max(acc, p.cachedTokens + p.inputFreshTokens + p.outputTokens), 0)
   const yMax = rawMax > 0 ? Math.ceil(rawMax * 1.12) : 1000
   const slotW = BAR_PLOT_W / count
-  const barW = Math.min(26, Math.max(6, slotW * 0.58))
+  const barW = Math.min(24, Math.max(6, slotW * 0.56))
 
   const bars: StackedBarGeom[] = list.map((pt, index) => {
     const slotX = BAR_LEFT + index * slotW
@@ -231,9 +256,7 @@ const barLayout = computed(() => {
 
     const showLabel =
       count <= 12 ||
-      index === 0 ||
-      index === count - 1 ||
-      index % 5 === 0
+      (count === 15 ? index === 0 || index === 14 || index % 3 === 0 : index === 0 || index === count - 1 || index % 5 === 0)
 
     return {
       index,
@@ -261,10 +284,10 @@ const barLayout = computed(() => {
   return { bars, gridLines, yMax }
 })
 
-// ---- 5 轴效率雷达 + 场景分布 ----
-const RADAR_CX = 122
+// ---- 5 轴效率雷达（不显示数值占比） + 右侧分场景明细 ----
+const RADAR_CX = 116
 const RADAR_CY = 104
-const RADAR_R = 64
+const RADAR_R = 62
 
 function polarPoint(index: number, total: number, radius: number): { x: number; y: number } {
   const angle = -Math.PI / 2 + (index * 2 * Math.PI) / total
@@ -278,24 +301,24 @@ const radarLayout = computed(() => {
   const axes = stats.value?.radar ?? []
   const n = axes.length || 5
   const rings = [0.25, 0.5, 0.75, 1].map((frac) => {
-    const pts = Array.from({ length: n }, (_, i) => {
+    return Array.from({ length: n }, (_, i) => {
       const p = polarPoint(i, n, RADAR_R * frac)
       return `${p.x.toFixed(1)},${p.y.toFixed(1)}`
     }).join(' ')
-    return pts
   })
 
   const spokes = axes.map((axis, i) => {
     const outer = polarPoint(i, n, RADAR_R)
-    const labelPt = polarPoint(i, n, RADAR_R + 22)
-    const valPt = polarPoint(i, n, RADAR_R * (Math.max(4, axis.value) / 100))
+    const labelPt = polarPoint(i, n, RADAR_R + 18)
+    const valPt = polarPoint(i, n, RADAR_R * (Math.max(6, axis.value) / 100))
     const anchor =
       Math.abs(outer.x - RADAR_CX) < 8
         ? 'middle'
         : outer.x > RADAR_CX
           ? 'start'
           : 'end'
-    return { axis, outer, labelPt, valPt, anchor, index: i }
+    const dy = outer.y < RADAR_CY - 20 ? -2 : outer.y > RADAR_CY + 20 ? 8 : 3
+    return { axis, outer, labelPt, valPt, anchor, dy, index: i }
   })
 
   const polygonPoints = spokes.map((s) => `${s.valPt.x.toFixed(1)},${s.valPt.y.toFixed(1)}`).join(' ')
@@ -346,9 +369,10 @@ function onHeatHover(event: MouseEvent, cell: HeatCell): void {
     [
       { label: '总计', value: `${formatTokens(pt.totalTokens)} tokens` },
       { label: '缓存命中', value: formatTokens(pt.cachedTokens) },
-      { label: '调用 · 费用', value: `${pt.calls} 次 · ¥${formatYuan(pt.estCostYuan)}` }
+      { label: '调用次数', value: `${pt.calls} 次` },
+      { label: '估算费用', value: `¥${formatYuan(pt.estCostYuan)}` }
     ],
-    -44
+    -56
   )
 }
 
@@ -366,8 +390,10 @@ function onBarHover(event: MouseEvent, bar: StackedBarGeom): void {
       { label: '缓存命中', value: formatTokens(pt.cachedTokens) },
       { label: '新增输入', value: formatTokens(pt.inputFreshTokens) },
       { label: '模型输出', value: formatTokens(pt.outputTokens) },
-      { label: '调用 · 费用', value: `${pt.calls} 次 · ¥${formatYuan(pt.estCostYuan)}` }
-    ]
+      { label: '调用次数', value: `${pt.calls} 次` },
+      { label: '估算费用', value: `¥${formatYuan(pt.estCostYuan)}` }
+    ],
+    44
   )
 }
 
@@ -393,7 +419,7 @@ function radarHintValue(axis: AiUsageRadarAxis): { label: string; value: string 
     case 'successRate':
       return [
         { label: '成功 / 总计', value: `${s.successCalls} / ${s.totalCalls}` },
-        { label: '失败', value: `${s.errorCalls} 次` }
+        { label: '失败次数', value: `${s.errorCalls} 次` }
       ]
     case 'costSaved':
       return [
@@ -407,39 +433,82 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
   activeRadarIndex.value = index
   const el = event.currentTarget as Element | null
   if (!el) return
-  showPopoverAtClientPoint(el.getBoundingClientRect(), axis.label, radarHintValue(axis))
+  showPopoverAtClientPoint(el.getBoundingClientRect(), axis.label, radarHintValue(axis), 48)
+}
+
+function onKindHover(event: MouseEvent, row: AiUsageKindRow): void {
+  const el = event.currentTarget as Element | null
+  if (!el) return
+  showPopoverAtClientPoint(
+    el.getBoundingClientRect(),
+    row.label,
+    [
+      { label: '调用次数', value: `${row.calls.toLocaleString()} 次` },
+      { label: '平均耗时', value: formatLatency(row.avgLatencyMs) },
+      { label: '总 Tokens', value: formatTokens(row.totalTokens) },
+      { label: '估算费用', value: `¥${formatYuan(row.estCostYuan)}` }
+    ],
+    20
+  )
 }
 </script>
 
 <template>
   <section class="set-dlg__group ai-usage" aria-label="用量统计">
     <div class="ai-usage__head">
-      <h3 class="set-dlg__group-title">用量统计</h3>
-      <div class="set-dlg__seg" role="tablist" aria-label="用量视图">
+      <div class="ai-usage__title-wrap">
+        <span class="ai-usage__title-badge" aria-hidden="true">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19h16M7 16V9M12 16V5M17 16v-4" />
+          </svg>
+        </span>
+        <h3 class="set-dlg__group-title ai-usage__title">用量统计</h3>
+      </div>
+
+      <div class="ai-usage__tabs" role="tablist" aria-label="用量视图">
         <button
           type="button"
           role="tab"
-          class="set-dlg__seg-btn"
+          class="ai-usage__tab"
           :class="{ 'is-active': viewMode === 'heatmap' }"
           :aria-selected="viewMode === 'heatmap'"
           @click="switchView('heatmap')"
-        >年度热力</button>
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <rect x="4" y="4" width="6" height="6" rx="1.5" />
+            <rect x="14" y="4" width="6" height="6" rx="1.5" />
+            <rect x="4" y="14" width="6" height="6" rx="1.5" />
+            <rect x="14" y="14" width="6" height="6" rx="1.5" fill="currentColor" fill-opacity="0.35" />
+          </svg>
+          <span>年度热力</span>
+        </button>
         <button
           type="button"
           role="tab"
-          class="set-dlg__seg-btn"
+          class="ai-usage__tab"
           :class="{ 'is-active': viewMode === 'trend' }"
           :aria-selected="viewMode === 'trend'"
           @click="switchView('trend')"
-        >趋势柱图</button>
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+            <path d="M6 19v-7M12 19V5M18 19v-10" />
+          </svg>
+          <span>趋势柱图</span>
+        </button>
         <button
           type="button"
           role="tab"
-          class="set-dlg__seg-btn"
+          class="ai-usage__tab"
           :class="{ 'is-active': viewMode === 'radar' }"
           :aria-selected="viewMode === 'radar'"
           @click="switchView('radar')"
-        >效率雷达</button>
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true">
+            <polygon points="12,3 20.5,9.2 17.3,19 6.7,19 3.5,9.2" />
+            <circle cx="12" cy="12" r="2" fill="currentColor" />
+          </svg>
+          <span>效率雷达</span>
+        </button>
       </div>
     </div>
 
@@ -449,61 +518,100 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
     <template v-else-if="stats">
       <div class="ai-usage__kpis">
         <div class="ai-usage__kpi">
-          <span class="ai-usage__kpi-label">总 Tokens</span>
+          <div class="ai-usage__kpi-top">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" />
+            </svg>
+            <span class="ai-usage__kpi-label">总 Tokens</span>
+          </div>
           <strong class="ai-usage__kpi-val">{{ formatTokens(stats.summary.totalTokens) }}</strong>
-          <span class="ai-usage__kpi-sub">输入 {{ formatTokens(stats.summary.inputTokens) }} · 输出 {{ formatTokens(stats.summary.outputTokens) }}</span>
         </div>
         <div class="ai-usage__kpi">
-          <span class="ai-usage__kpi-label">估算费用</span>
+          <div class="ai-usage__kpi-top">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M9.5 8.5L12 12l2.5-3.5M9 12.5h6M12 12v5" />
+            </svg>
+            <span class="ai-usage__kpi-label">估算费用</span>
+          </div>
           <strong class="ai-usage__kpi-val">¥{{ formatYuan(stats.summary.estCostYuan) }}</strong>
-          <span class="ai-usage__kpi-sub">缓存与批量已省 ¥{{ formatYuan(stats.summary.savedCostYuan) }}</span>
         </div>
         <div class="ai-usage__kpi">
-          <span class="ai-usage__kpi-label">云端缓存</span>
+          <div class="ai-usage__kpi-top">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />
+            </svg>
+            <span class="ai-usage__kpi-label">云端缓存</span>
+          </div>
           <strong class="ai-usage__kpi-val">{{ kpiCloudHit }}</strong>
-          <span class="ai-usage__kpi-sub">本地省流 {{ stats.summary.localHits.toLocaleString() }} 次</span>
         </div>
         <div class="ai-usage__kpi">
-          <span class="ai-usage__kpi-label">调用次数</span>
+          <div class="ai-usage__kpi-top">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 12h4l2.5-6 3 12L16 12h4" />
+            </svg>
+            <span class="ai-usage__kpi-label">调用次数</span>
+          </div>
           <strong class="ai-usage__kpi-val">{{ stats.summary.totalCalls.toLocaleString() }}</strong>
-          <span class="ai-usage__kpi-sub">成功率 {{ kpiSuccessRate }} · 搜索 {{ stats.summary.searchCalls }}</span>
         </div>
       </div>
 
       <div ref="stageRef" class="ai-usage__stage" @mouseleave="clearHover">
-        <!-- 1. 年度热力图 -->
-        <div v-if="viewMode === 'heatmap'" class="ai-usage__panel">
-          <svg
-            class="ai-usage__heat-svg"
-            :viewBox="`0 0 ${heatmapLayout.width} ${heatmapLayout.height}`"
-            role="img"
-            aria-label="近365天Token消耗热力图"
-          >
-            <text
-              v-for="m in heatmapLayout.monthLabels"
-              :key="m.x"
-              :x="m.x"
-              y="10"
-              class="ai-usage__svg-axis"
-            >{{ m.label }}</text>
-            <text x="2" :y="HEAT_PAD_TOP + 0 * HEAT_STEP + 7" class="ai-usage__svg-axis">一</text>
-            <text x="2" :y="HEAT_PAD_TOP + 2 * HEAT_STEP + 7" class="ai-usage__svg-axis">三</text>
-            <text x="2" :y="HEAT_PAD_TOP + 4 * HEAT_STEP + 7" class="ai-usage__svg-axis">五</text>
-            <rect
-              v-for="cell in heatmapLayout.cells"
-              :key="cell.point.date"
-              :x="cell.x"
-              :y="cell.y"
-              :width="HEAT_CELL"
-              :height="HEAT_CELL"
-              rx="1.8"
-              class="ai-usage__heat-cell"
-              :class="heatClass(cell.level)"
-              @mouseenter="onHeatHover($event, cell)"
-            />
-          </svg>
+        <!-- 1. 全年热力图 -->
+        <div v-if="viewMode === 'heatmap'" :key="`heat-${selectedYear}-${animSeed}`" class="ai-usage__panel ai-usage__panel--heat">
+          <div class="ai-usage__svg-wrap">
+            <svg
+              class="ai-usage__heat-svg"
+              :viewBox="`0 0 ${heatmapLayout.width} ${heatmapLayout.height}`"
+              role="img"
+              :aria-label="`${selectedYear}年Token消耗热力图`"
+            >
+              <text
+                v-for="m in heatmapLayout.monthLabels"
+                :key="m.x"
+                :x="m.x"
+                y="11"
+                class="ai-usage__svg-axis"
+              >{{ m.label }}</text>
+              <rect
+                v-for="cell in heatmapLayout.cells"
+                :key="cell.point.date"
+                :x="cell.x"
+                :y="cell.y"
+                :width="HEAT_CELL"
+                :height="HEAT_CELL"
+                rx="1.8"
+                class="ai-usage__heat-cell"
+                :class="heatClass(cell.level)"
+                :style="{ '--col-delay': `${Math.min(260, cell.col * 4)}ms` }"
+                @mouseenter="onHeatHover($event, cell)"
+              />
+            </svg>
+          </div>
+
           <div class="ai-usage__foot">
-            <span class="ai-usage__foot-meta">近 365 天活跃 {{ heatmapLayout.activeDays }} 天</span>
+            <div class="ai-usage__year-switch" aria-label="年份切换">
+              <button
+                type="button"
+                class="ai-usage__year-btn"
+                :disabled="!canPrevYear"
+                aria-label="上一年"
+                @click="stepYear(-1)"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+              </button>
+              <span class="ai-usage__year-label">{{ selectedYear }} 年</span>
+              <button
+                type="button"
+                class="ai-usage__year-btn"
+                :disabled="!canNextYear"
+                aria-label="下一年"
+                @click="stepYear(1)"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>
+              </button>
+            </div>
+
             <div class="ai-usage__legend">
               <span>少</span>
               <span
@@ -517,25 +625,14 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
           </div>
         </div>
 
-        <!-- 2. Claude 风格堆叠柱图 -->
-        <div v-else-if="viewMode === 'trend'" class="ai-usage__panel">
+        <!-- 2. 趋势堆叠柱图 -->
+        <div v-else-if="viewMode === 'trend'" :key="`trend-${trendRange}-${animSeed}`" class="ai-usage__panel ai-usage__panel--trend">
           <div class="ai-usage__subbar">
-            <div class="ai-usage__legend">
-              <span class="ai-usage__legend-item">
-                <i class="ai-usage__swatch ai-usage__swatch--cached" />缓存命中
-              </span>
-              <span class="ai-usage__legend-item">
-                <i class="ai-usage__swatch ai-usage__swatch--fresh" />新增输入
-              </span>
-              <span class="ai-usage__legend-item">
-                <i class="ai-usage__swatch ai-usage__swatch--out" />模型输出
-              </span>
-            </div>
-            <div class="set-dlg__seg ai-usage__subseg" role="tablist" aria-label="时间范围">
+            <div class="ai-usage__ranges" role="tablist" aria-label="时间范围">
               <button
                 type="button"
                 role="tab"
-                class="set-dlg__seg-btn"
+                class="ai-usage__range-btn"
                 :class="{ 'is-active': trendRange === 'd7' }"
                 :aria-selected="trendRange === 'd7'"
                 @click="switchRange('d7')"
@@ -543,7 +640,15 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
               <button
                 type="button"
                 role="tab"
-                class="set-dlg__seg-btn"
+                class="ai-usage__range-btn"
+                :class="{ 'is-active': trendRange === 'd15' }"
+                :aria-selected="trendRange === 'd15'"
+                @click="switchRange('d15')"
+              >15天</button>
+              <button
+                type="button"
+                role="tab"
+                class="ai-usage__range-btn"
                 :class="{ 'is-active': trendRange === 'd30' }"
                 :aria-selected="trendRange === 'd30'"
                 @click="switchRange('d30')"
@@ -551,11 +656,19 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
               <button
                 type="button"
                 role="tab"
-                class="set-dlg__seg-btn"
+                class="ai-usage__range-btn"
+                :class="{ 'is-active': trendRange === 'm6' }"
+                :aria-selected="trendRange === 'm6'"
+                @click="switchRange('m6')"
+              >6个月</button>
+              <button
+                type="button"
+                role="tab"
+                class="ai-usage__range-btn"
                 :class="{ 'is-active': trendRange === 'm12' }"
                 :aria-selected="trendRange === 'm12'"
                 @click="switchRange('m12')"
-              >12个月</button>
+              >1年</button>
             </div>
           </div>
 
@@ -591,37 +704,45 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
                 rx="3"
                 class="ai-usage__bar-hoverbg"
               />
-              <rect
-                v-if="bar.cachedH > 0"
-                :x="bar.barX"
-                :y="bar.cachedY"
-                :width="bar.barW"
-                :height="bar.cachedH"
-                rx="1"
-                class="ai-usage__seg-cached"
-              />
-              <rect
-                v-if="bar.freshH > 0"
-                :x="bar.barX"
-                :y="bar.freshY"
-                :width="bar.barW"
-                :height="bar.freshH"
-                rx="1"
-                class="ai-usage__seg-fresh"
-              />
-              <rect
-                v-if="bar.outH > 0"
-                :x="bar.barX"
-                :y="bar.outY"
-                :width="bar.barW"
-                :height="bar.outH"
-                rx="1"
-                class="ai-usage__seg-out"
-              />
+              <g
+                class="ai-usage__bar-anim"
+                :style="{
+                  transformOrigin: `${bar.barX + bar.barW / 2}px ${BAR_TOP + BAR_PLOT_H}px`,
+                  '--bar-delay': `${Math.min(220, bar.index * 10)}ms`
+                }"
+              >
+                <rect
+                  v-if="bar.cachedH > 0"
+                  :x="bar.barX"
+                  :y="bar.cachedY"
+                  :width="bar.barW"
+                  :height="bar.cachedH"
+                  rx="1"
+                  class="ai-usage__seg-cached"
+                />
+                <rect
+                  v-if="bar.freshH > 0"
+                  :x="bar.barX"
+                  :y="bar.freshY"
+                  :width="bar.barW"
+                  :height="bar.freshH"
+                  rx="1"
+                  class="ai-usage__seg-fresh"
+                />
+                <rect
+                  v-if="bar.outH > 0"
+                  :x="bar.barX"
+                  :y="bar.outY"
+                  :width="bar.barW"
+                  :height="bar.outH"
+                  rx="1"
+                  class="ai-usage__seg-out"
+                />
+              </g>
               <text
                 v-if="bar.showLabel"
                 :x="bar.slotX + bar.slotW / 2"
-                :y="BAR_VB_H - 6"
+                :y="BAR_VB_H - 5"
                 text-anchor="middle"
                 class="ai-usage__svg-axis"
               >{{ bar.point.label }}</text>
@@ -636,14 +757,26 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
               />
             </g>
           </svg>
+
+          <div class="ai-usage__legend ai-usage__legend--center">
+            <span class="ai-usage__legend-item">
+              <i class="ai-usage__swatch ai-usage__swatch--cached" />缓存命中
+            </span>
+            <span class="ai-usage__legend-item">
+              <i class="ai-usage__swatch ai-usage__swatch--fresh" />新增输入
+            </span>
+            <span class="ai-usage__legend-item">
+              <i class="ai-usage__swatch ai-usage__swatch--out" />模型输出
+            </span>
+          </div>
         </div>
 
-        <!-- 3. 5 轴效率雷达 + 场景耗时费用分布 -->
-        <div v-else class="ai-usage__panel ai-usage__radar-grid">
+        <!-- 3. 5 轴效率雷达 + 分场景分布 -->
+        <div v-else :key="`radar-${animSeed}`" class="ai-usage__panel ai-usage__radar-grid">
           <div class="ai-usage__radar-wrap">
             <svg
               class="ai-usage__radar-svg"
-              viewBox="0 0 244 206"
+              viewBox="0 0 232 204"
               role="img"
               aria-label="AI省流与效率五维雷达图"
             >
@@ -662,27 +795,26 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
                 :y2="s.outer.y"
                 class="ai-usage__radar-spoke"
               />
-              <polygon :points="radarLayout.polygonPoints" class="ai-usage__radar-area" />
+              <circle :cx="RADAR_CX" :cy="RADAR_CY" r="2.2" class="ai-usage__radar-core" />
+              <g class="ai-usage__radar-shape" :style="{ transformOrigin: `${RADAR_CX}px ${RADAR_CY}px` }">
+                <polygon :points="radarLayout.polygonPoints" class="ai-usage__radar-area" />
+                <circle
+                  v-for="s in radarLayout.spokes"
+                  :key="`dot-${s.axis.key}`"
+                  :cx="s.valPt.x"
+                  :cy="s.valPt.y"
+                  :r="activeRadarIndex === s.index ? 4.5 : 3.2"
+                  class="ai-usage__radar-dot"
+                />
+              </g>
 
               <g v-for="s in radarLayout.spokes" :key="`lbl-${s.axis.key}`">
                 <text
                   :x="s.labelPt.x"
-                  :y="s.labelPt.y - 2"
+                  :y="s.labelPt.y + s.dy"
                   :text-anchor="s.anchor"
                   class="ai-usage__radar-lbl"
                 >{{ s.axis.label }}</text>
-                <text
-                  :x="s.labelPt.x"
-                  :y="s.labelPt.y + 10"
-                  :text-anchor="s.anchor"
-                  class="ai-usage__radar-val"
-                >{{ s.axis.display }}</text>
-                <circle
-                  :cx="s.valPt.x"
-                  :cy="s.valPt.y"
-                  :r="activeRadarIndex === s.index ? 4.5 : 3"
-                  class="ai-usage__radar-dot"
-                />
                 <circle
                   :cx="s.valPt.x"
                   :cy="s.valPt.y"
@@ -695,19 +827,27 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
             </svg>
           </div>
 
-          <div class="ai-usage__kinds">
+          <div class="ai-usage__kinds nn-thin">
             <div v-if="stats.byKind.length === 0" class="ai-usage__kind-empty">暂无调用记录</div>
-            <div v-for="row in stats.byKind" :key="row.api" class="ai-usage__kind-row">
+            <div
+              v-for="(row, rIdx) in stats.byKind"
+              :key="row.api"
+              class="ai-usage__kind-row"
+              @mouseenter="onKindHover($event, row)"
+            >
               <div class="ai-usage__kind-top">
                 <span class="ai-usage__kind-name">{{ row.label }}</span>
                 <span class="ai-usage__kind-meta">
-                  {{ row.calls }} 次 · {{ formatLatency(row.avgLatencyMs) }} · {{ formatTokens(row.totalTokens) }} · ¥{{ formatYuan(row.estCostYuan) }}
+                  {{ formatTokens(row.totalTokens) }} · ¥{{ formatYuan(row.estCostYuan) }}
                 </span>
               </div>
               <div class="ai-usage__kind-track">
                 <div
                   class="ai-usage__kind-fill"
-                  :style="{ width: `${Math.max(4, (row.totalTokens / maxKindTokens) * 100)}%` }"
+                  :style="{
+                    width: `${Math.max(5, (row.totalTokens / maxKindTokens) * 100)}%`,
+                    '--row-delay': `${rIdx * 45}ms`
+                  }"
                 />
               </div>
             </div>
@@ -738,7 +878,10 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 
 <style scoped lang="scss">
 .ai-usage {
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px 16px;
 }
 
 .ai-usage__head {
@@ -748,9 +891,73 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
   gap: 12px;
 }
 
+.ai-usage__title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.ai-usage__title-badge {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--a-soft);
+  color: var(--a-ink);
+  border: 1px solid var(--a-line2);
+}
+
+.ai-usage__title {
+  padding: 0;
+}
+
+.ai-usage__tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--settings-rule);
+  background: color-mix(in srgb, var(--c-i-9C90B3) 8%, transparent);
+}
+
+.ai-usage__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--c-i-6E6280);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease;
+
+  &:hover:not(.is-active) {
+    background: var(--a06);
+    color: var(--c-i-3B3047);
+  }
+
+  &.is-active {
+    background: var(--a-soft);
+    border-color: var(--a-line2);
+    color: var(--a-ink);
+    font-weight: 700;
+  }
+}
+
 .ai-usage__state {
   margin: 0;
-  padding: 16px 0;
+  padding: 20px 0;
   font-size: 12px;
   color: var(--c-i-7F7494);
   text-align: center;
@@ -765,13 +972,20 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 .ai-usage__kpi {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 5px;
   min-width: 0;
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 9px 11px;
+  border-radius: 8px;
   border: 1px solid var(--settings-rule);
-  background: var(--settings-card);
+  background: color-mix(in srgb, var(--a) 2.5%, var(--settings-card));
   font-variant-numeric: tabular-nums;
+}
+
+.ai-usage__kpi-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--c-i-7F7494);
 }
 
 .ai-usage__kpi-label {
@@ -780,18 +994,10 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 }
 
 .ai-usage__kpi-val {
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.25;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
   color: var(--a-ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ai-usage__kpi-sub {
-  font-size: 10.5px;
-  color: var(--c-i-7F7494);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -799,16 +1005,30 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 
 .ai-usage__stage {
   position: relative;
+  height: 228px;
+  box-sizing: border-box;
   border: 1px solid var(--settings-rule);
-  border-radius: 8px;
-  background: var(--settings-card);
-  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--a) 2%, var(--settings-card));
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
 }
 
 .ai-usage__panel {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
   gap: 8px;
+}
+
+.ai-usage__svg-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
 }
 
 .ai-usage__heat-svg,
@@ -819,9 +1039,17 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
   overflow: visible;
 }
 
+.ai-usage__bar-svg {
+  flex: 1;
+  min-height: 0;
+}
+
 .ai-usage__heat-cell {
-  transition: opacity 0.12s ease;
   cursor: default;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ai-usage-heat-in 0.36s cubic-bezier(0.22, 1, 0.36, 1) var(--col-delay, 0ms) both;
+  transition: stroke 0.12s ease;
 }
 
 .ai-usage__heat-cell:hover {
@@ -863,24 +1091,74 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 
 .ai-usage__foot,
 .ai-usage__subbar {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.ai-usage__foot-meta {
-  font-size: 11px;
-  color: var(--c-i-7F7494);
+.ai-usage__subbar {
+  justify-content: flex-end;
+}
+
+.ai-usage__year-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: 6px;
+  border: 1px solid var(--settings-rule);
+  background: var(--settings-card);
   font-variant-numeric: tabular-nums;
+}
+
+.ai-usage__year-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--c-i-6E6280);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s;
+
+  &:hover:not(:disabled) {
+    background: var(--a06);
+    color: var(--a-ink);
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+}
+
+.ai-usage__year-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-i-3B3047);
+  padding: 0 4px;
 }
 
 .ai-usage__legend {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 11px;
   color: var(--c-i-7F7494);
+}
+
+.ai-usage__legend--center {
+  flex: none;
+  align-self: center;
+  justify-content: center;
+  gap: 16px;
 }
 
 .ai-usage__legend-dot {
@@ -892,7 +1170,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 .ai-usage__legend-item {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
 }
 
 .ai-usage__swatch {
@@ -920,18 +1198,57 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
   fill: color-mix(in srgb, var(--a) 28%, var(--c-i-7F7494));
 }
 
-.ai-usage__subseg {
-  transform: scale(0.92);
-  transform-origin: right center;
+.ai-usage__ranges {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  border-radius: 7px;
+  border: 1px solid var(--settings-rule);
+  background: color-mix(in srgb, var(--c-i-9C90B3) 8%, transparent);
+}
+
+.ai-usage__range-btn {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--c-i-6E6280);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease,
+    border-color 0.14s ease;
+
+  &:hover:not(.is-active) {
+    background: var(--a06);
+    color: var(--c-i-3B3047);
+  }
+
+  &.is-active {
+    background: var(--a-soft);
+    border-color: var(--a-line2);
+    color: var(--a-ink);
+    font-weight: 700;
+  }
 }
 
 .ai-usage__grid-line {
   stroke: var(--settings-rule);
   stroke-width: 1;
+  stroke-dasharray: 2 3;
 }
 
 .ai-usage__bar-hoverbg {
   fill: var(--a06);
+}
+
+.ai-usage__bar-anim {
+  animation: ai-usage-bar-up 0.42s cubic-bezier(0.22, 1, 0.36, 1) var(--bar-delay, 0ms) both;
 }
 
 .ai-usage__hit-col {
@@ -940,25 +1257,27 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 
 .ai-usage__radar-grid {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 214px minmax(0, 1fr);
   align-items: center;
-  gap: 14px;
+  gap: 16px;
 }
 
 .ai-usage__radar-wrap {
   display: flex;
   justify-content: center;
+  align-items: center;
+  height: 100%;
 }
 
 .ai-usage__radar-svg {
-  width: 214px;
+  width: 210px;
   max-width: 100%;
   height: auto;
   overflow: visible;
 }
 
 .ai-usage__radar-ring {
-  fill: none;
+  fill: color-mix(in srgb, var(--a) 2%, transparent);
   stroke: var(--settings-rule);
   stroke-width: 1;
 }
@@ -966,65 +1285,81 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 .ai-usage__radar-spoke {
   stroke: var(--settings-rule);
   stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+
+.ai-usage__radar-core {
+  fill: var(--a-line);
+}
+
+.ai-usage__radar-shape {
+  animation: ai-usage-radar-bloom 0.48s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .ai-usage__radar-area {
-  fill: color-mix(in srgb, var(--a) 22%, transparent);
+  fill: color-mix(in srgb, var(--a) 24%, transparent);
   stroke: var(--a);
-  stroke-width: 1.75;
+  stroke-width: 1.8;
   stroke-linejoin: round;
 }
 
 .ai-usage__radar-dot {
   fill: var(--a);
   stroke: var(--c-surface);
-  stroke-width: 1.2;
+  stroke-width: 1.3;
+  transition: r 0.14s ease;
 }
 
 .ai-usage__radar-lbl {
   fill: var(--c-i-5E5270);
-  font-size: 9.5px;
-  font-weight: 500;
-}
-
-.ai-usage__radar-val {
-  fill: var(--a-ink);
-  font-size: 9px;
-  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .ai-usage__kinds {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  justify-content: center;
+  gap: 7px;
   min-width: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .ai-usage__kind-empty {
   font-size: 12px;
   color: var(--c-i-7F7494);
   text-align: center;
-  padding: 18px 0;
+  padding: 20px 0;
 }
 
 .ai-usage__kind-row {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  transition: background 0.14s ease;
+  cursor: default;
+
+  &:hover {
+    background: var(--a06);
+  }
 }
 
 .ai-usage__kind-top {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   font-variant-numeric: tabular-nums;
 }
 
 .ai-usage__kind-name {
   font-size: 12px;
   color: var(--c-i-3B3047);
-  font-weight: 500;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -1032,28 +1367,27 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
   font-size: 11px;
   color: var(--c-i-7F7494);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .ai-usage__kind-track {
   height: 5px;
-  border-radius: 3px;
+  border-radius: 999px;
   background: color-mix(in srgb, var(--c-i-9C90B3) 20%, transparent);
   overflow: hidden;
 }
 
 .ai-usage__kind-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 999px;
   background: var(--a);
-  transition: width 0.25s ease;
+  transform-origin: left center;
+  animation: ai-usage-kind-slide 0.45s cubic-bezier(0.22, 1, 0.36, 1) var(--row-delay, 0ms) both;
 }
 
 .ai-usage__pop {
   position: absolute;
   transform: translate(-50%, -100%);
-  min-width: 174px;
+  min-width: 176px;
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--look-edge);
@@ -1118,9 +1452,67 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
   color: var(--a-ink);
 }
 
+@keyframes ai-usage-heat-in {
+  from {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ai-usage-bar-up {
+  from {
+    opacity: 0.35;
+    transform: scaleY(0.05);
+  }
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes ai-usage-radar-bloom {
+  from {
+    opacity: 0;
+    transform: scale(0.18);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ai-usage-kind-slide {
+  from {
+    opacity: 0.4;
+    transform: scaleX(0);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-usage__heat-cell,
+  .ai-usage__bar-anim,
+  .ai-usage__radar-shape,
+  .ai-usage__kind-fill {
+    animation: none;
+  }
+}
+
 @media (max-width: 560px) {
   .ai-usage__kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ai-usage__stage {
+    height: auto;
+    min-height: 228px;
   }
 
   .ai-usage__radar-grid {

@@ -1,6 +1,7 @@
 import { computed, defineComponent, ref, watch } from 'vue'
 import { NAME_MAX, type ExifInfoVO, type ImageDetailVO, type ImageLocationVO } from '@shared/api'
 import { openFileWithDefault, showFileInFolder, thumbUrl } from '@/api/gallery'
+import { relookSingleImage, resetSingleToSource } from '@/api/organize'
 import { useGalleryStore } from '@/stores/gallery'
 import { useAssistantStore } from '@/stores/assistant'
 import { useLookStore } from '@/stores/look'
@@ -190,6 +191,8 @@ export default defineComponent({
     // 在“AI 建议”视图里才显示建议卡
     const aiView = computed(() => viewStore.page === 'gallery' && viewStore.view === 'ai')
 
+    const singleBusy = ref(false)
+
     const askNono = (): void => {
       const d = detail.value
       if (!d) {
@@ -202,6 +205,44 @@ export default defineComponent({
         position: 1
       }])
       viewStore.showAssistant()
+    }
+
+    const resetSingle = async (): Promise<void> => {
+      const d = detail.value
+      if (!d || singleBusy.value) {
+        return
+      }
+      singleBusy.value = true
+      try {
+        const res = await resetSingleToSource(d.imageId)
+        if (res.skippedOnlyInCategory > 0 && res.resetImages === 0) {
+          toast.show('缺少在线源目录，已保留类目录里的原图', 'error')
+        } else {
+          toast.show(res.movedToSource > 0 ? '已移回源目录并清空整理记录' : '已回归源目录')
+        }
+        await Promise.all([gallery.afterEdit(), look.init()])
+      } catch (err) {
+        fail(err)
+      } finally {
+        singleBusy.value = false
+      }
+    }
+
+    const relookSingle = async (): Promise<void> => {
+      const d = detail.value
+      if (!d || singleBusy.value || d.isR18) {
+        return
+      }
+      singleBusy.value = true
+      try {
+        await relookSingleImage(d.imageId)
+        toast.show('已交给诺诺重新看，结果将进入“AI 建议”')
+        await look.init()
+      } catch (err) {
+        fail(err)
+      } finally {
+        singleBusy.value = false
+      }
     }
 
     return {
@@ -230,7 +271,10 @@ export default defineComponent({
       onNameCancel,
       onShowInFolder,
       onOpenDefault,
-      askNono
+      singleBusy,
+      askNono,
+      resetSingle,
+      relookSingle
     }
   }
 })

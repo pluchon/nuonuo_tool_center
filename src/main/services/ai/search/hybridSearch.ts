@@ -57,12 +57,12 @@ export function localReply(found: number): string {
 
 export async function emptyScopeText(dirs: AiSearchFilter['dirs'], includeR18: boolean): Promise<string> {
   if (!includeR18 && (await hasSearchableImage(dirs, true))) {
-    return '当前筛选条件下没有可检索的普通图片（该范围内仅有 R-18 图片，可打开 R-18 开关按已确认标签检索）。'
+    return '这个范围里现在只收着标为 R-18 的图片呢，如果想一起找的话，把下面的 R-18 开关打开就行啦~'
   }
   if (dirs?.length && (await hasAnyImageInScope(dirs, includeR18))) {
-    return '当前类目录中的图片尚未确认标签或仍在待复核状态，暂时无法参与检索。'
+    return '诺诺翻了一圈，这个目录里的图片还没确认标签或还在待复核，暂时没法直接搜图，确认好标签再来找我吧~'
   }
-  return '当前范围内没有可检索的图片。请先将已确认标签、完成复核的图片归入类目录。'
+  return '诺诺把类目录翻了一遍，这边还没有已经归档并确认过标签的图片呢；先把喜欢且核对过的图放进类目录，我就能立刻帮你找到啦 ฅ^•ﻌ•^ฅ'
 }
 
 export function ordinaryCardCaption(value: unknown, outcome: SearchOutcome): string | undefined {

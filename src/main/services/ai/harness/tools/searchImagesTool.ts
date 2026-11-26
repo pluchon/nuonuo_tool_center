@@ -3,7 +3,7 @@ import { findTagNamesOf, hasSearchableImage } from '../../../../repositories/aiS
 import { itemsOfImages } from '../../../galleryService'
 import { contrastDescriptions, semanticVector } from '../../embeddingService'
 import type { DictTag } from '../../localRouter'
-import { ordinaryCardCaption, runSearch, specFromArgs } from '../../search/hybridSearch'
+import { emptyScopeText, ordinaryCardCaption, runSearch, specFromArgs } from '../../search/hybridSearch'
 import { defineTool, isToolError, parseToolJson, truncateLabel } from '../toolRegistry'
 
 const BRIEF_MAX = 8
@@ -314,7 +314,9 @@ export const searchImagesTool = defineTool({
     const tagNames = await findTagNamesOf(brief)
     const items = await itemsOfImages(brief, env.includeR18, env.dirs)
     const total = env.includeR18 ? outcome.imageIds.length : outcome.ordinaryIds.length
-    const closestTags = total === 0 && !allAlreadyShown ? findClosestTags(args, env.tags, env.includeR18) : []
+    const scopeEmpty = total === 0 && !allAlreadyShown && !(await hasSearchableImage(env.dirs, env.includeR18))
+    const closestTags = total === 0 && !allAlreadyShown && !scopeEmpty ? findClosestTags(args, env.tags, env.includeR18) : []
+    const scopeReason = scopeEmpty ? await emptyScopeText(env.dirs, env.includeR18) : undefined
     return {
       content: JSON.stringify({
         total,
@@ -327,6 +329,13 @@ export const searchImagesTool = defineTool({
         ...(env.includeR18 ? { r18Total: outcome.imageIds.length - outcome.ordinaryIds.length } : {}),
         alreadyShownCount,
         allAlreadyShown,
+        ...(scopeEmpty
+          ? {
+              scopeEmpty: true,
+              scopeReason,
+              hint: '当前可检索范围为空（还没有已确认标签的类目录图片），不必反复换词重搜；请直接用诺诺温暖自然的语气告诉用户没找到的原因并温柔提示。'
+            }
+          : {}),
         ...(closestTags.length > 0 ? { closestTags, hint: NO_MATCH_HINT } : {})
       }),
       outcome: {

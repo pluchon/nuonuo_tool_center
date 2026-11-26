@@ -109,6 +109,8 @@ export const IpcChannel = {
   reorganizeDismissEstimate: 'reorganize:dismissEstimate',
   reorganizeResetToSource: 'reorganize:resetToSource',
   reorganizeRelook: 'reorganize:relook',
+  reorganizeResetOne: 'reorganize:resetOne',
+  reorganizeRelookOne: 'reorganize:relookOne',
   windowSetTheme: 'window:setTheme',
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggleMaximize',
@@ -885,9 +887,13 @@ export interface AiUsageRadarAxis {
 export interface AiUsageStatsVO {
   summary: AiUsageSummary
   heatmap: AiUsageDailyPoint[]
+  availableYears: number[]
+  heatmapByYear: Record<number, AiUsageDailyPoint[]>
   series: {
     d7: AiUsageSeriesPoint[]
+    d15: AiUsageSeriesPoint[]
     d30: AiUsageSeriesPoint[]
+    m6: AiUsageSeriesPoint[]
     m12: AiUsageSeriesPoint[]
   }
   byKind: AiUsageKindRow[]

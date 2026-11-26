@@ -26,7 +26,7 @@ afterAll(async () => {
 })
 
 describe('getAiUsageStats', () => {
-  it('空库返回完整的 365 天热力、7/30/12 序列与 5 轴零值雷达', async () => {
+  it('空库返回当年完整日历热力、7/15/30/6月/1年序列与 5 轴零值雷达', async () => {
     const fixedNow = new Date(2026, 10, 26, 14, 0, 0)
     const stats = await getAiUsageStats(fixedNow)
 
@@ -47,12 +47,16 @@ describe('getAiUsageStats', () => {
       cloudHitRate: 0,
       localHits: 0
     })
+    expect(stats.availableYears).toEqual([2026])
     expect(stats.heatmap).toHaveLength(365)
-    expect(stats.heatmap[0].date).toBe('2025-11-27')
-    expect(stats.heatmap[364].date).toBe('2026-11-26')
+    expect(stats.heatmap[0].date).toBe('2026-01-01')
+    expect(stats.heatmap[364].date).toBe('2026-12-31')
+    expect(stats.heatmapByYear[2026]).toHaveLength(365)
     expect(stats.series.d7).toHaveLength(7)
     expect(stats.series.d7[6]).toMatchObject({ key: '2026-11-26', label: '11/26', totalTokens: 0 })
+    expect(stats.series.d15).toHaveLength(15)
     expect(stats.series.d30).toHaveLength(30)
+    expect(stats.series.m6).toHaveLength(6)
     expect(stats.series.m12).toHaveLength(12)
     expect(stats.series.m12[11]).toMatchObject({ key: '2026-11', label: '11月' })
     expect(stats.byKind).toEqual([])
@@ -160,7 +164,7 @@ describe('getAiUsageStats', () => {
     expect(stats.summary.savedCostYuan).toBeCloseTo(0.83, 6)
     expect(stats.summary.cloudHitRate).toBeCloseTo(0.2, 6)
 
-    const todayPoint = stats.heatmap[364]
+    const todayPoint = stats.heatmap.find((p) => p.date === '2026-11-26')
     expect(todayPoint).toMatchObject({
       date: '2026-11-26',
       totalTokens: 1_800_000,
@@ -169,7 +173,9 @@ describe('getAiUsageStats', () => {
       outputTokens: 300_000,
       calls: 2
     })
-    expect(todayPoint.estCostYuan).toBeCloseTo(1.184, 6)
+    expect(todayPoint!.estCostYuan).toBeCloseTo(1.184, 6)
+    expect(stats.series.d15).toHaveLength(15)
+    expect(stats.series.m6).toHaveLength(6)
 
     expect(stats.series.d7[6]).toMatchObject({
       key: '2026-11-26',

@@ -17,7 +17,7 @@ import { retryOnWinBusy } from '../../common/winFs'
 import { getDatabase } from '../../db/client'
 import { col } from '../../db/sqlUtil'
 import { aiJob, image, imageAiResult, imageFile, imageTag } from '../../db/schema'
-import { hasPendingSuggestion, LOOK_CONTENT_REJECTED } from '../../repositories/aiResultRepository'
+import { findLookInfo, hasPendingSuggestion, LOOK_CONTENT_REJECTED } from '../../repositories/aiResultRepository'
 import {
   cloudAllowedSql,
   hasAcceptedTagSql,
@@ -202,26 +202,217 @@ interface OrganizedFileRow {
   relPath: string
 }
 
+async function executeResetRows(
+  rows: OrganizedFileRow[],
+  fallbackResetImageIds: number[] = []
+): Promise<ReorganizeResetResultVO> {
+  const { db } = getDatabase()
+  const byImage = new Map<number, { contentHash: string; files: OrganizedFileRow[] }>()
+  for (const r of rows) {
+    const entry = byImage.get(r.imageId) ?? { contentHash: r.contentHash, files: [] }
+    entry.files.push(r)
+    byImage.set(r.imageId, entry)
+  }
+
+  for (const imageId of fallbackResetImageIds) {
+    if (!byImage.has(imageId)) {
+      byImage.set(imageId, { contentHash: '', files: [] })
+    }
+  }
+
+  if (byImage.size === 0) {
+    return { resetImages: 0, removedCopies: 0, movedToSource: 0, skippedOnlyInCategory: 0 }
+  }
+
+  const sourceRoots = await findActiveRootsByKind('SOURCE')
+  const onlineSourceRoots: typeof sourceRoots = []
+  for (const sr of sourceRoots) {
+    if (await isDirOnline(sr.path)) {
+      onlineSourceRoots.push(sr)
+    }
+  }
+  const onlineSourceIds = new Set(onlineSourceRoots.map((r) => r.id))
+
+  const retiredFileIds: number[] = []
+  const relocatedFiles: Array<{ fileId: number; rootId: number; relPath: string }> = []
+  const resetImageIds: number[] = []
+  let removedCopies = 0
+  let movedToSource = 0
+  let skippedOnlyInCategory = 0
+
+  const commitDbChanges = async (): Promise<void> => {
+    if (retiredFileIds.length === 0 && relocatedFiles.length === 0 && resetImageIds.length === 0) {
+      return
+    }
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < retiredFileIds.length; i += DB_CHUNK) {
+        const chunk = retiredFileIds.slice(i, i + DB_CHUNK)
+        await tx.update(imageFile).set({ status: 'DELETED', deleteState: 1 }).where(inArray(imageFile.id, chunk))
+      }
+      for (const moved of relocatedFiles) {
+        await retireRowsAt(tx, moved.rootId, moved.relPath)
+        await relocateImageFile(tx, moved.fileId, moved.rootId, moved.relPath)
+      }
+      for (let i = 0; i < resetImageIds.length; i += DB_CHUNK) {
+        const chunk = resetImageIds.slice(i, i + DB_CHUNK)
+        await tx
+          .update(image)
+          .set({ displayName: null, description: null, source: null })
+          .where(inArray(image.id, chunk))
+        await tx
+          .update(imageTag)
+          .set({ deleteState: 1 })
+          .where(and(inArray(imageTag.imageId, chunk), eq(imageTag.deleteState, 0)))
+        await tx
+          .update(imageAiResult)
+          .set({ deleteState: 1 })
+          .where(and(inArray(imageAiResult.imageId, chunk), eq(imageAiResult.deleteState, 0)))
+        await tx
+          .update(aiJob)
+          .set({ status: 'CANCELLED', finishedAt: new Date() })
+          .where(
+            and(
+              eq(aiJob.kind, 'LOOK'),
+              eq(aiJob.deleteState, 0),
+              inArray(aiJob.imageId, chunk),
+              inArray(aiJob.status, ['QUEUED', 'FAILED'])
+            )
+          )
+      }
+    })
+    bumpLibraryVersion()
+  }
+
+  try {
+    for (const [imageId, entry] of byImage) {
+      const catFiles = entry.files.filter((f) => f.rootKind === 'CATEGORY')
+      const srcFiles = entry.files.filter((f) => f.rootKind === 'SOURCE')
+
+      if (catFiles.length === 0) {
+        resetImageIds.push(imageId)
+        continue
+      }
+
+      let hasValidSource = false
+      for (const sf of srcFiles) {
+        if (!onlineSourceIds.has(sf.rootId)) continue
+        if (await isValidSourceFile(join(sf.rootPath, sf.relPath), entry.contentHash)) {
+          hasValidSource = true
+          break
+        }
+      }
+
+      if (hasValidSource) {
+        for (const cf of catFiles) {
+          const trashed = await trashCategoryFile(join(cf.rootPath, cf.relPath), cf.rootPath)
+          retiredFileIds.push(cf.fileId)
+          if (trashed) removedCopies += 1
+        }
+        resetImageIds.push(imageId)
+        continue
+      }
+
+      if (onlineSourceRoots.length === 0) {
+        skippedOnlyInCategory += 1
+        continue
+      }
+
+      let primaryCat: OrganizedFileRow | null = null
+      for (const cf of catFiles) {
+        if (await isFilePresent(join(cf.rootPath, cf.relPath))) {
+          primaryCat = cf
+          break
+        }
+      }
+      if (!primaryCat) {
+        skippedOnlyInCategory += 1
+        continue
+      }
+
+      const targetRoot = onlineSourceRoots[0]
+      const catAbs = join(primaryCat.rootPath, primaryCat.relPath)
+      const fileName = basename(primaryCat.relPath)
+      let destPath: string | null = null
+      for (let n = 1; n <= MAX_SUFFIX; n++) {
+        const to = candidate(targetRoot.path, fileName, n)
+        try {
+          await publishExclusive(catAbs, to)
+          await retryOnWinBusy(() => unlink(catAbs))
+          destPath = to
+          break
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+        }
+      }
+      if (!destPath) {
+        throw new BizError('CONFLICT', `源目录同名文件过多：${fileName}`)
+      }
+
+      relocatedFiles.push({
+        fileId: primaryCat.fileId,
+        rootId: targetRoot.id,
+        relPath: relative(targetRoot.path, destPath)
+      })
+      movedToSource += 1
+
+      for (const other of catFiles) {
+        if (other.fileId === primaryCat.fileId) continue
+        const trashed = await trashCategoryFile(join(other.rootPath, other.relPath), other.rootPath)
+        retiredFileIds.push(other.fileId)
+        if (trashed) removedCopies += 1
+      }
+
+      resetImageIds.push(imageId)
+    }
+  } finally {
+    await commitDbChanges()
+  }
+
+  log.info(
+    `归回源目录：重置 ${resetImageIds.length} 张，移回源目录 ${movedToSource} 张，清理副本 ${removedCopies} 份，跳过 ${skippedOnlyInCategory} 张`
+  )
+  return {
+    resetImages: resetImageIds.length,
+    removedCopies,
+    movedToSource,
+    skippedOnlyInCategory
+  }
+}
+
+interface RawFileQueryRow {
+  image_id: number
+  content_hash: string
+  file_id: number
+  root_id: number
+  root_kind: 'SOURCE' | 'CATEGORY'
+  root_path: string
+  rel_path: string
+}
+
+function mapRawFileRows(rows: RawFileQueryRow[]): OrganizedFileRow[] {
+  return rows.map((r) => ({
+    imageId: Number(r.image_id),
+    contentHash: r.content_hash,
+    fileId: Number(r.file_id),
+    rootId: Number(r.root_id),
+    rootKind: r.root_kind,
+    rootPath: r.root_path,
+    relPath: r.rel_path
+  }))
+}
+
 // 模式 1：归回源目录（不调用任何大模型，安全保留唯一原图副本）
 export async function resetOrganizedToSource(): Promise<ReorganizeResetResultVO> {
   await assertIdleForReorganize()
   resettingOrganized = true
   try {
-    return await enqueue(async () => {
+    const result = await enqueue(async () => {
       assertIdleBaseForReorganize()
       if (await isReorganizeRelookBusy()) {
         throw new BizError('CONFLICT', '正在重新整理，请先等待完成或停止当前队列')
       }
-      const { db, pg } = getDatabase()
-      const res = await pg.query<{
-        image_id: number
-        content_hash: string
-        file_id: number
-        root_id: number
-        root_kind: 'SOURCE' | 'CATEGORY'
-        root_path: string
-        rel_path: string
-      }>(
+      const { pg } = getDatabase()
+      const res = await pg.query<RawFileQueryRow>(
         `SELECT i.id AS image_id, i.content_hash, f.id AS file_id, f.root_id, r.kind AS root_kind, r.path AS root_path, f.rel_path
            FROM image i
            JOIN image_file f ON f.image_id = i.id AND f.delete_state = 0 AND f.status = 'NORMAL'
@@ -250,184 +441,112 @@ export async function resetOrganizedToSource(): Promise<ReorganizeResetResultVO>
             )
           ORDER BY i.id, f.id`
       )
-
-    const byImage = new Map<number, { contentHash: string; files: OrganizedFileRow[] }>()
-    for (const r of res.rows) {
-      const imageId = Number(r.image_id)
-      const entry = byImage.get(imageId) ?? { contentHash: r.content_hash, files: [] }
-      entry.files.push({
-        imageId,
-        contentHash: r.content_hash,
-        fileId: Number(r.file_id),
-        rootId: Number(r.root_id),
-        rootKind: r.root_kind,
-        rootPath: r.root_path,
-        relPath: r.rel_path
-      })
-      byImage.set(imageId, entry)
-    }
-
-    if (byImage.size === 0) {
-      return { resetImages: 0, removedCopies: 0, movedToSource: 0, skippedOnlyInCategory: 0 }
-    }
-
-    const sourceRoots = await findActiveRootsByKind('SOURCE')
-    const onlineSourceRoots: typeof sourceRoots = []
-    for (const sr of sourceRoots) {
-      if (await isDirOnline(sr.path)) {
-        onlineSourceRoots.push(sr)
-      }
-    }
-    const onlineSourceIds = new Set(onlineSourceRoots.map((r) => r.id))
-
-    const retiredFileIds: number[] = []
-    const relocatedFiles: Array<{ fileId: number; rootId: number; relPath: string }> = []
-    const resetImageIds: number[] = []
-    let removedCopies = 0
-    let movedToSource = 0
-    let skippedOnlyInCategory = 0
-
-    const commitDbChanges = async (): Promise<void> => {
-      if (retiredFileIds.length === 0 && relocatedFiles.length === 0 && resetImageIds.length === 0) {
-        return
-      }
-      await db.transaction(async (tx) => {
-        for (let i = 0; i < retiredFileIds.length; i += DB_CHUNK) {
-          const chunk = retiredFileIds.slice(i, i + DB_CHUNK)
-          await tx.update(imageFile).set({ status: 'DELETED', deleteState: 1 }).where(inArray(imageFile.id, chunk))
-        }
-        for (const moved of relocatedFiles) {
-          await retireRowsAt(tx, moved.rootId, moved.relPath)
-          await relocateImageFile(tx, moved.fileId, moved.rootId, moved.relPath)
-        }
-        for (let i = 0; i < resetImageIds.length; i += DB_CHUNK) {
-          const chunk = resetImageIds.slice(i, i + DB_CHUNK)
-          await tx
-            .update(image)
-            .set({ displayName: null, description: null, source: null })
-            .where(inArray(image.id, chunk))
-          await tx
-            .update(imageTag)
-            .set({ deleteState: 1 })
-            .where(and(inArray(imageTag.imageId, chunk), eq(imageTag.deleteState, 0)))
-          await tx
-            .update(imageAiResult)
-            .set({ deleteState: 1 })
-            .where(and(inArray(imageAiResult.imageId, chunk), eq(imageAiResult.deleteState, 0)))
-          await tx
-            .update(aiJob)
-            .set({ status: 'CANCELLED', finishedAt: new Date() })
-            .where(
-              and(
-                eq(aiJob.kind, 'LOOK'),
-                eq(aiJob.deleteState, 0),
-                inArray(aiJob.imageId, chunk),
-                inArray(aiJob.status, ['QUEUED', 'FAILED'])
-              )
-            )
-        }
-      })
-      bumpLibraryVersion()
-    }
-
-    try {
-      for (const [imageId, entry] of byImage) {
-        const catFiles = entry.files.filter((f) => f.rootKind === 'CATEGORY')
-        const srcFiles = entry.files.filter((f) => f.rootKind === 'SOURCE')
-
-        if (catFiles.length === 0) {
-          resetImageIds.push(imageId)
-          continue
-        }
-
-        let hasValidSource = false
-        for (const sf of srcFiles) {
-          if (!onlineSourceIds.has(sf.rootId)) continue
-          if (await isValidSourceFile(join(sf.rootPath, sf.relPath), entry.contentHash)) {
-            hasValidSource = true
-            break
-          }
-        }
-
-        if (hasValidSource) {
-          for (const cf of catFiles) {
-            const trashed = await trashCategoryFile(join(cf.rootPath, cf.relPath), cf.rootPath)
-            retiredFileIds.push(cf.fileId)
-            if (trashed) removedCopies += 1
-          }
-          resetImageIds.push(imageId)
-          continue
-        }
-
-        if (onlineSourceRoots.length === 0) {
-          skippedOnlyInCategory += 1
-          continue
-        }
-
-        let primaryCat: OrganizedFileRow | null = null
-        for (const cf of catFiles) {
-          if (await isFilePresent(join(cf.rootPath, cf.relPath))) {
-            primaryCat = cf
-            break
-          }
-        }
-        if (!primaryCat) {
-          skippedOnlyInCategory += 1
-          continue
-        }
-
-        const targetRoot = onlineSourceRoots[0]
-        const catAbs = join(primaryCat.rootPath, primaryCat.relPath)
-        const fileName = basename(primaryCat.relPath)
-        let destPath: string | null = null
-        for (let n = 1; n <= MAX_SUFFIX; n++) {
-          const to = candidate(targetRoot.path, fileName, n)
-          try {
-            await publishExclusive(catAbs, to)
-            await retryOnWinBusy(() => unlink(catAbs))
-            destPath = to
-            break
-          } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
-          }
-        }
-        if (!destPath) {
-          throw new BizError('CONFLICT', `源目录同名文件过多：${fileName}`)
-        }
-
-        relocatedFiles.push({
-          fileId: primaryCat.fileId,
-          rootId: targetRoot.id,
-          relPath: relative(targetRoot.path, destPath)
-        })
-        movedToSource += 1
-
-        for (const other of catFiles) {
-          if (other.fileId === primaryCat.fileId) continue
-          const trashed = await trashCategoryFile(join(other.rootPath, other.relPath), other.rootPath)
-          retiredFileIds.push(other.fileId)
-          if (trashed) removedCopies += 1
-        }
-
-        resetImageIds.push(imageId)
-      }
-    } finally {
-      await commitDbChanges()
-    }
-
-    log.info(
-      `归回源目录：重置 ${resetImageIds.length} 张，移回源目录 ${movedToSource} 张，清理副本 ${removedCopies} 份，跳过 ${skippedOnlyInCategory} 张`
-    )
-      return {
-        resetImages: resetImageIds.length,
-        removedCopies,
-        movedToSource,
-        skippedOnlyInCategory
-      }
+      return executeResetRows(mapRawFileRows(res.rows))
     })
+    if (result.resetImages > 0) {
+      await pushLookState()
+    }
+    return result
   } finally {
     resettingOrganized = false
   }
+}
+
+// 单图：回归源目录（容错兜底：同时清除可能残留的陈旧 AI 建议与名称标签）
+export async function resetSingleImageToSource(imageId: number): Promise<ReorganizeResetResultVO> {
+  if (!Number.isInteger(imageId) || imageId <= 0) {
+    throw new BizError('BAD_REQUEST', '图片编号不正确')
+  }
+  await assertIdleForReorganize()
+  resettingOrganized = true
+  try {
+    const result = await enqueue(async () => {
+      assertIdleBaseForReorganize()
+      if (await isReorganizeRelookBusy()) {
+        throw new BizError('CONFLICT', '正在重新整理，请先等待完成或停止当前队列')
+      }
+      const { pg } = getDatabase()
+      const existsRes = await pg.query<{ id: number }>(
+        `SELECT id FROM image WHERE id = $1 AND delete_state = 0`,
+        [imageId]
+      )
+      if (existsRes.rows.length === 0) {
+        throw new BizError('NOT_FOUND', '这张图已经不在图库里了')
+      }
+      const res = await pg.query<RawFileQueryRow>(
+        `SELECT i.id AS image_id, i.content_hash, f.id AS file_id, f.root_id, r.kind AS root_kind, r.path AS root_path, f.rel_path
+           FROM image i
+           JOIN image_file f ON f.image_id = i.id AND f.delete_state = 0 AND f.status = 'NORMAL'
+           JOIN library_root r ON r.id = f.root_id AND r.delete_state = 0
+          WHERE i.id = $1 AND i.delete_state = 0
+          ORDER BY f.id`,
+        [imageId]
+      )
+      return executeResetRows(mapRawFileRows(res.rows), [imageId])
+    })
+    await pushLookState()
+    return result
+  } finally {
+    resettingOrganized = false
+  }
+}
+
+// 单图：交给诺诺带着已有信息重看一遍，结果进入“AI 建议”
+export async function relookSingleImage(imageId: number): Promise<ReorganizeRelookResultVO> {
+  if (!Number.isInteger(imageId) || imageId <= 0) {
+    throw new BizError('BAD_REQUEST', '图片编号不正确')
+  }
+  if (!readCloudCredentials().dashscopeApiKey) {
+    throw new BizError('DEPENDENCY_FAILED', LOOK_KEY_HINT)
+  }
+  await assertIdleForReorganize()
+  if (isRatingBusy()) {
+    throw new BizError('CONFLICT', '本地分级还在进行，判完才能让诺诺重新看')
+  }
+  const info = await findLookInfo(imageId)
+  if (!info) {
+    throw new BizError('NOT_FOUND', '这张图已经不在图库里了')
+  }
+  if (info.isR18) {
+    throw new BizError('CONFLICT', 'R-18 图不发给云端')
+  }
+  if (!info.cloudAllowed) {
+    throw new BizError('CONFLICT', '本地分级还没判完这张，判完再让诺诺重新看')
+  }
+
+  const { db } = getDatabase()
+  await db.transaction(async (tx) => {
+    const {
+      rows: [openRow]
+    } = await tx.execute<{ busy: boolean }>(
+      sql`select ${hasOpenLookSql} as busy from ${image} where ${col(image.id)} = ${imageId}`
+    )
+    if (openRow?.busy) {
+      throw new BizError('CONFLICT', '这张图正在看图队列中，请稍候')
+    }
+    await tx
+      .update(aiJob)
+      .set({ status: 'CANCELLED', remoteId: null })
+      .where(
+        and(
+          eq(aiJob.kind, 'LOOK'),
+          eq(aiJob.status, 'FAILED'),
+          eq(aiJob.imageId, imageId),
+          sql`${aiJob.error} is distinct from ${LOOK_CONTENT_REJECTED}`
+        )
+      )
+    await tx.insert(aiJob).values({
+      kind: 'LOOK',
+      imageId,
+      priority: 8,
+      payload: { reorganize: true }
+    })
+  })
+
+  log.info(`单图重新 AI 整理：已将图片 ${imageId} 排入诺诺重看`)
+  await pushLookState()
+  scheduleLook()
+  return { enqueued: 1 }
 }
 
 // 模式 2：已整理图片携带已有信息上下文重新看图，结果进“AI 建议”

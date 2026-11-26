@@ -155,8 +155,12 @@ export async function getAiUsageStats(now = new Date()): Promise<AiUsageStatsVO>
   let estCostYuan = 0
   let savedCostYuan = 0
 
+  const currentYear = now.getFullYear()
+  const yearsSet = new Set<number>([currentYear])
   for (const raw of rows) {
     const m = evaluateRow(raw)
+    const createdYear = Number(m.dateKey.slice(0, 4))
+    if (Number.isInteger(createdYear) && createdYear > 1970) yearsSet.add(createdYear)
     totalTokens += m.totalTokens
     inputTokens += m.inputTokens
     cachedTokens += m.cachedTokens
@@ -224,24 +228,35 @@ export async function getAiUsageStats(now = new Date()): Promise<AiUsageStatsVO>
   const roundedSaved = roundYuan(savedCostYuan)
   const cloudHitRate = inputTokens > 0 ? Math.min(1, cachedTokens / inputTokens) : 0
 
-  const heatmap: AiUsageDailyPoint[] = []
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  for (let offset = -364; offset <= 0; offset += 1) {
-    const d = new Date(todayStart)
-    d.setDate(todayStart.getDate() + offset)
-    const date = localDateKey(d)
-    const b = dayBuckets.get(date)
-    heatmap.push({
-      date,
-      totalTokens: b?.totalTokens ?? 0,
-      inputTokens: b?.inputTokens ?? 0,
-      cachedTokens: b?.cachedTokens ?? 0,
-      outputTokens: b?.outputTokens ?? 0,
-      calls: b?.calls ?? 0,
-      estCostYuan: roundYuan(b?.estCostYuan ?? 0)
-    })
+  const buildYearHeatmap = (year: number): AiUsageDailyPoint[] => {
+    const out: AiUsageDailyPoint[] = []
+    const cursor = new Date(year, 0, 1)
+    const end = new Date(year, 11, 31)
+    while (cursor <= end) {
+      const date = localDateKey(cursor)
+      const b = dayBuckets.get(date)
+      out.push({
+        date,
+        totalTokens: b?.totalTokens ?? 0,
+        inputTokens: b?.inputTokens ?? 0,
+        cachedTokens: b?.cachedTokens ?? 0,
+        outputTokens: b?.outputTokens ?? 0,
+        calls: b?.calls ?? 0,
+        estCostYuan: roundYuan(b?.estCostYuan ?? 0)
+      })
+      cursor.setDate(cursor.getDate() + 1)
+    }
+    return out
   }
 
+  const availableYears = [...yearsSet].sort((a, b) => b - a)
+  const heatmapByYear: Record<number, AiUsageDailyPoint[]> = {}
+  for (const yr of availableYears) {
+    heatmapByYear[yr] = buildYearHeatmap(yr)
+  }
+  const heatmap = heatmapByYear[currentYear]
+
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   const buildDaySeries = (days: number): AiUsageSeriesPoint[] => {
     const out: AiUsageSeriesPoint[] = []
     for (let offset = -(days - 1); offset <= 0; offset += 1) {
@@ -263,22 +278,25 @@ export async function getAiUsageStats(now = new Date()): Promise<AiUsageStatsVO>
     return out
   }
 
-  const m12: AiUsageSeriesPoint[] = []
-  for (let offset = -11; offset <= 0; offset += 1) {
-    const d = new Date(now.getFullYear(), now.getMonth() + offset, 1)
-    const key = localMonthKey(d)
-    const b = monthBuckets.get(key)
-    const yy = String(d.getFullYear()).slice(-2)
-    m12.push({
-      key,
-      label: d.getMonth() === 0 ? `${yy}/01` : `${d.getMonth() + 1}月`,
-      inputFreshTokens: b?.inputFreshTokens ?? 0,
-      cachedTokens: b?.cachedTokens ?? 0,
-      outputTokens: b?.outputTokens ?? 0,
-      totalTokens: b?.totalTokens ?? 0,
-      calls: b?.calls ?? 0,
-      estCostYuan: roundYuan(b?.estCostYuan ?? 0)
-    })
+  const buildMonthSeries = (months: number): AiUsageSeriesPoint[] => {
+    const out: AiUsageSeriesPoint[] = []
+    for (let offset = -(months - 1); offset <= 0; offset += 1) {
+      const d = new Date(now.getFullYear(), now.getMonth() + offset, 1)
+      const key = localMonthKey(d)
+      const b = monthBuckets.get(key)
+      const yy = String(d.getFullYear()).slice(-2)
+      out.push({
+        key,
+        label: d.getMonth() === 0 ? `${yy}/01` : `${d.getMonth() + 1}月`,
+        inputFreshTokens: b?.inputFreshTokens ?? 0,
+        cachedTokens: b?.cachedTokens ?? 0,
+        outputTokens: b?.outputTokens ?? 0,
+        totalTokens: b?.totalTokens ?? 0,
+        calls: b?.calls ?? 0,
+        estCostYuan: roundYuan(b?.estCostYuan ?? 0)
+      })
+    }
+    return out
   }
 
   const byKind: AiUsageKindRow[] = Array.from(kindBuckets.entries())
@@ -328,10 +346,14 @@ export async function getAiUsageStats(now = new Date()): Promise<AiUsageStatsVO>
       localHits
     },
     heatmap,
+    availableYears,
+    heatmapByYear,
     series: {
       d7: buildDaySeries(7),
+      d15: buildDaySeries(15),
       d30: buildDaySeries(30),
-      m12
+      m6: buildMonthSeries(6),
+      m12: buildMonthSeries(12)
     },
     byKind,
     radar

@@ -403,5 +403,16 @@ describe('重新整理（估算、归回源目录、参考上下文重看）', (
     const resetRes = await reorg.resetOrganizedToSource()
     expect(resetRes.resetImages).toBe(3)
     expect((await pg.query(`SELECT 1 FROM image_tag WHERE image_id = 1 AND delete_state = 0`)).rows).toHaveLength(1)
+
+    // 单图容错：即使图片还挂着陈旧 PENDING AI 建议，也能直接回归源目录清干净
+    const singleReset = await reorg.resetSingleImageToSource(1)
+    expect(singleReset.resetImages).toBe(1)
+    expect((await pg.query(`SELECT 1 FROM image_ai_result WHERE image_id = 1 AND delete_state = 0`)).rows).toHaveLength(0)
+    expect((await pg.query(`SELECT 1 FROM image_tag WHERE image_id = 1 AND delete_state = 0`)).rows).toHaveLength(0)
+
+    // 单图诺诺重新看：入队 payload { reorganize: true }，已在队列时拒绝重复入队
+    const relookOne = await reorg.relookSingleImage(2)
+    expect(relookOne.enqueued).toBe(1)
+    await expect(reorg.relookSingleImage(2)).rejects.toMatchObject({ code: 'CONFLICT' })
   })
 })

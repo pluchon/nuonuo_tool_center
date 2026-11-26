@@ -57,3 +57,13 @@ export function resetOrganizedToSource(): Promise<ReorganizeResetResultVO> {
 export function startReorganizeRelook(): Promise<ReorganizeRelookResultVO> {
   return unwrap(window.api.reorganize.relook())
 }
+
+// 单图：回归源目录
+export function resetSingleToSource(imageId: number): Promise<ReorganizeResetResultVO> {
+  return unwrap(window.api.reorganize.resetOne(imageId))
+}
+
+// 单图：诺诺重新看
+export function relookSingleImage(imageId: number): Promise<ReorganizeRelookResultVO> {
+  return unwrap(window.api.reorganize.relookOne(imageId))
+}
