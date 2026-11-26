@@ -21,6 +21,7 @@ function hasMiaoOrKaomoji(text: string): boolean {
 export interface TurnTailCues {
   recentAssistantTexts?: string[]
   previousInterrupted?: boolean
+  addedTags?: string[]
 }
 
 // Claude Code 式零成本微压缩：多步工具往返中保留最近一组工具原始返回，把更早步骤里过长的 tool 结果就地折叠为简短摘要
@@ -140,6 +141,9 @@ export function buildTurnTail(
   }
   if (cues?.previousInterrupted) {
     situational.push('[情景] 上一轮在半途被主人打断，直接顺着新指示接上，不道歉，不重复刚才已经试过的同参数查询。')
+  }
+  if (cues?.addedTags?.length) {
+    situational.push(`[图库最新变更] 新增可用标签（类目录已确认）：${cues.addedTags.join('、')}`)
   }
   const cueText = situational.length ? `\n${situational.join('\n')}` : ''
   return [

@@ -378,10 +378,30 @@ describe('重新整理（估算、归回源目录、参考上下文重看）', (
     const estPending = await reorg.estimateReorganize()
     // 1 有 PENDING 建议被排除，4 仅 display_name 被排除；仅剩 2(ACCEPTED标签) 和 H(类目录) => 2 张
     expect(estPending.organizedCount).toBe(2)
+    expect(estPending.pendingSuggestionCount).toBe(1)
+
+    // 把存在待确认 ORGANIZE dir 建议的新图手动移入类目录后，应自动清除该 dir 待确认状态并纳入已整理计数
+    const { pg: pgDb } = getDatabase()
+    const bufMove = Buffer.from('img-manual-move-cat')
+    writeFileSync(join(sourceDir, 'manual-move.jpg'), bufMove)
+    const { hashBuffer: hashBuf } = await import('../../src/main/services/scan/imageProbe')
+    const hMove = hashBuf(bufMove)
+    await pgDb.exec(`
+      INSERT INTO image (content_hash, format, byte_size, rating, rating_source, is_r18, thumb_ready)
+      VALUES ('${hMove}', 'JPG', ${bufMove.length}, 'GENERAL', 'MODEL', false, 1);
+      INSERT INTO image_file (image_id, root_id, rel_path, mtime)
+      SELECT id, 1, 'manual-move.jpg', now() FROM image WHERE content_hash = '${hMove}';
+      INSERT INTO image_ai_result (image_id, kind, model, result, field_status)
+      SELECT id, 'ORGANIZE', 'm', '{"dir":"角色"}', '{"dir":"PENDING"}' FROM image WHERE content_hash = '${hMove}';
+    `)
+    const { moveImages } = await import('../../src/main/services/fileOps/transferService')
+    await moveImages({ view: 'all', sort: 'new' }, [Number((await pgDb.query<{ id: number }>(`SELECT id FROM image WHERE content_hash = '${hMove}'`)).rows[0].id)], join(libraryDir, '角色'))
+    const estAfterManualMove = await reorg.estimateReorganize()
+    expect(estAfterManualMove.organizedCount).toBe(3)
 
     // 验证归回源目录也严格排除带 PENDING 建议的图 1
     const resetRes = await reorg.resetOrganizedToSource()
-    expect(resetRes.resetImages).toBe(2)
+    expect(resetRes.resetImages).toBe(3)
     expect((await pg.query(`SELECT 1 FROM image_tag WHERE image_id = 1 AND delete_state = 0`)).rows).toHaveLength(1)
   })
 })

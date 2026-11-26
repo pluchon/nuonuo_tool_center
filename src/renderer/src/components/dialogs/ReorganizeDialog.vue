@@ -43,6 +43,8 @@
           </li>
         </ul>
 
+        <p v-if="diagnosticHint" class="reorg-dlg__hint" role="status">{{ diagnosticHint }}</p>
+
         <div class="reorg-dlg__btns">
           <button
             class="reorg-dlg__reset"

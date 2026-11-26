@@ -785,6 +785,23 @@ export interface ReorganizeEstimateVO {
   tokens: number
   yuan: number
   ratingLeft: number
+  pendingSuggestionCount?: number
+  blockedByRatingCount?: number
+  inQueueCount?: number
+}
+
+export type ApiKind = 'chat' | 'compact' | 'look' | 'dream' | 'translate' | 'identify' | 'embed' | 'organize' | 'predict'
+
+export const API_KIND_META: Record<ApiKind, { label: string }> = {
+  chat: { label: '助手对话' },
+  look: { label: '诺诺看图' },
+  organize: { label: '一键整理' },
+  embed: { label: '画面向量' },
+  compact: { label: '对话精简' },
+  dream: { label: '空闲做梦' },
+  translate: { label: '词表翻译' },
+  identify: { label: '以图找图' },
+  predict: { label: '指令联想' }
 }
 
 // 重新整理“归回源目录”的结果

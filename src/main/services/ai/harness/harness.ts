@@ -9,7 +9,7 @@ import { contextUsage, fitContext } from '../contextWindow'
 import { workingHistory, type HistoryTurn } from '../conversationCompaction'
 import { prepareRatedUpload } from '../embeddingService'
 import { relevantMemories } from '../memoryRetrieval'
-import { profileOfConversation } from '../profileService'
+import { profileSnapshotForConversation } from '../profileService'
 import { buildMessages, markStepCache, stableStringify, type PromptMessage } from '../promptPrefix'
 import type { MatchEvidence } from '../searchFeedback'
 import { localReply, searchByImage } from '../search/hybridSearch'
@@ -302,11 +302,17 @@ export async function runAgentLoop(
 ): Promise<{ text: string; state: HarnessState; interrupted?: boolean }> {
   const u = user.content as UserContent
   const question = [userText(u), env.referenceNotes].filter(Boolean).join('\n\n')
-  const profile = await profileOfConversation(
+  const allowedTagSet = new Set(env.tags.filter((t) => t.general).map((t) => t.name))
+  const { text: profile, includedTags } = await profileSnapshotForConversation(
     conversation.profileVersion,
     true,
-    new Set(env.tags.filter((t) => t.general).map((t) => t.name))
+    allowedTagSet
   )
+  // 若本段对话开始后用户又在类目录里确认了新标签，只在第④层注入紧凑增量，不破坏①②层缓存前缀
+  const addedTags = env.tags
+    .filter((t) => t.general && !includedTags.has(t.name))
+    .map((t) => t.name)
+    .slice(-40)
   const memories = await relevantMemories(u.text)
   const turnEnv: ToolEnv = {
     ...env,
@@ -339,7 +345,7 @@ export async function runAgentLoop(
     new Date(),
     memories.map((m) => `#${m.id} ${m.content}`),
     sessionState,
-    { recentAssistantTexts, previousInterrupted }
+    { recentAssistantTexts, previousInterrupted, addedTags }
   )
   const fixedBytes = Buffer.byteLength(ASSISTANT_RULES + profile + JSON.stringify(ASSISTANT_TOOLS)) + 1024
   const seenCallKeys = new Set<string>()

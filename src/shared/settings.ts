@@ -86,7 +86,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 export type SettingKey = keyof AppSettings
 
-export const AI_CREDENTIAL_KEYS = ['dashscopeApiKey', 'aliyunAccessKeyId', 'aliyunAccessKeySecret'] as const
+export const AI_CREDENTIAL_KEYS = ['dashscopeApiKey'] as const
 export type AiCredentialKey = (typeof AI_CREDENTIAL_KEYS)[number]
 export type AiCredentialPatch = Partial<Record<AiCredentialKey, string | null>>
 export type AiCredentialStatus = Record<AiCredentialKey, 'saved' | 'environment' | 'missing'>

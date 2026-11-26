@@ -8,7 +8,7 @@ import {
   type LookStateVO,
   type SuggestionRefreshStatusVO
 } from '@shared/api'
-import { BAILIAN_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
+import { AI_SETTING_KEYS, BAILIAN_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { bumpLibraryVersion } from '../../common/readCache'
@@ -66,7 +66,7 @@ const LOOK_PREFIX_IDLE_MS = 5 * 60_000
 // 发给模型的图：实时长边缩到 1280，批量缩到 1024 控制文件体积
 const LONG_EDGE = 1280
 // 记在设置里的“从什么时候起导入的图自动看”（第一次启用看图时写入，之前的老图不自动排队，免得一次花掉很多钱）
-const SINCE_KEY = 'ai.lookSince'
+const SINCE_KEY = AI_SETTING_KEYS.lookSince
 // 状态里最多列多少行
 const ROWS_MAX = 100
 
@@ -339,20 +339,33 @@ async function lookOne(job: AiJobEntity): Promise<void> {
     return
   }
   if (stopping) return
-  try {
-    const res1 = await searchCall({
+  const runPrimaryLook = (search: boolean) =>
+    searchCall({
       kind: 'look',
       model: BAILIAN_CONFIG.chatModel,
       imageId: info.id,
       instructions,
       text: lookTail(clues, { existingContext, refreshAttempt }),
       imageDataUrl: url,
-      search: !clues.photo,
+      search,
       enableThinking: forceThinking,
       ...(forceThinking ? { thinkingBudget: 2048 } : {}),
       timeoutMs: TIMEOUT_MS,
       signal: realtimeAbort.signal
     })
+  const primarySearch = !clues.photo
+  try {
+    let res1: Awaited<ReturnType<typeof searchCall>>
+    try {
+      res1 = await runPrimaryLook(primarySearch)
+    } catch (err) {
+      if (!stopping && !realtimeAbort.signal.aborted && primarySearch && isRetryableLookTimeout(err)) {
+        log.warn(`看图联网搜索超时，自动降级为纯视觉识别（图片 ${info.id}）`, err)
+        res1 = await runPrimaryLook(false)
+      } else {
+        throw err
+      }
+    }
     if (stopping) return
     let finalText = res1.text
     let finalSources = res1.sources.map((s) => s.url)
@@ -411,7 +424,7 @@ async function lookOne(job: AiJobEntity): Promise<void> {
         finalUsage,
         canonical,
         canonical ? { existing, fields: finalFields } : undefined,
-        isRefreshSuggestion
+        isRefreshSuggestion || isReorganize
       )
     ) {
       config?.onSuggested()
@@ -429,6 +442,13 @@ async function lookOne(job: AiJobEntity): Promise<void> {
       await updateJob(job.id, { status: 'FAILED', error: failure.message, finishedAt: new Date() })
     }
   }
+}
+
+function isRetryableLookTimeout(err: unknown): boolean {
+  const failure = err as (CloudLookError & { error?: CloudLookError }) | null
+  if (failure?.status === 401 || failure?.status === 403 || failure?.status === 429) return false
+  const classified = lookError(err)
+  return !classified.inputImageRejected && (classified.message === '超时' || classified.message === '网络异常')
 }
 
 function lookError(err: unknown): LookErrorClassification {

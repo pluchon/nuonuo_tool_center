@@ -63,7 +63,16 @@ async function loadSavedCredentials(): Promise<void> {
   try {
     const encrypted = await readFile(credentialFile)
     const { result } = await safeStorage.decryptStringAsync(encrypted)
-    const patch = validatePatch(JSON.parse(result))
+    const raw = JSON.parse(result) as unknown
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new BizError('BAD_REQUEST', 'AI 密钥格式不正确')
+    }
+    // 升级后旧版配置文件里可能残留已下线的 OSS 凭证键，仅保留当前支持的密钥字段
+    const filtered: Record<string, unknown> = {}
+    for (const key of AI_CREDENTIAL_KEYS) {
+      if (Object.hasOwn(raw, key)) filtered[key] = (raw as Record<string, unknown>)[key]
+    }
+    const patch = validatePatch(filtered)
     const credentials: CloudCredentials = {}
     for (const key of AI_CREDENTIAL_KEYS) {
       const value = patch[key]

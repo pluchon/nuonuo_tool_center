@@ -2,7 +2,7 @@
 // 再最多一天一次把记忆写成核心档案。拆成很多小步，每步开始前看忙不忙，忙了就停（已经发出的请求做完并保存），下次空闲接着做；
 // 每步都可以重做，不会重复写入。大部分偏好用本地规则从统计里得出，只有写核心档案调模型
 import { createHash } from 'node:crypto'
-import { BAILIAN_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
+import { AI_SETTING_KEYS, BAILIAN_CONFIG, readCloudCredentials } from '../../config/cloudConfig'
 import { getLogger } from '../../common/logger'
 import {
   findDreamCursor,
@@ -114,7 +114,7 @@ export function factsFromEvents(events: AiEventEntity[], tagsOf: Map<number, str
   return [...counts.values()].filter((f) => f.count >= MIN_COUNT)
 }
 
-const SUMMARY_KEY = 'ai.dream.summary'
+const SUMMARY_KEY = AI_SETTING_KEYS.dreamSummary
 
 async function loadLegacyDreamState(): Promise<DreamWorkflowState> {
   const [cursor, summary] = await Promise.all([

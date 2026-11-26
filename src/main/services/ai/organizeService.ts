@@ -10,7 +10,7 @@ import {
   type OrganizeStateVO
 } from '@shared/api'
 import { parseAssistJson } from '@shared/assistJson'
-import { BAILIAN_CONFIG, ORGANIZE_COST, readCloudCredentials } from '../../config/cloudConfig'
+import { AI_SETTING_KEYS, BAILIAN_CONFIG, ORGANIZE_COST, readCloudCredentials } from '../../config/cloudConfig'
 import { BizError } from '../../common/bizError'
 import { getLogger } from '../../common/logger'
 import { isValidDirName } from '../../common/pathUtil'
@@ -43,9 +43,9 @@ import { habitLines } from './suggestionService'
 const log = getLogger('organize')
 
 // 旧版设置键（用于首次启动时从 app_setting 平滑迁移到 ai_workflow）
-const LEGACY_STATE_KEY = 'ai.organize'
-const RULES_KEY = 'ai.organize.rules'
-const LEGACY_LOOK_FROM_KEY = 'ai.organizeLookFrom'
+const LEGACY_STATE_KEY = AI_SETTING_KEYS.organizeLegacyState
+const RULES_KEY = AI_SETTING_KEYS.organizeRules
+const LEGACY_LOOK_FROM_KEY = AI_SETTING_KEYS.organizeLegacyLookFrom
 // 新建目录最多几个；交给模型的词每类最多几个
 const NEW_FOLDERS_MAX = 12
 const STAT_LIMITS = { characters: 40, works: 30, tags: 60 } as const

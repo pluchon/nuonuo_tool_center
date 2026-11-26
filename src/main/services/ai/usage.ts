@@ -1,8 +1,7 @@
 // 把百炼两种接口返回的用量统一成一种结构，字段名以实测返回为准（2026-11-22）
-import type { AiReplyCacheUsage } from '@shared/api'
+import type { AiReplyCacheUsage, ApiKind } from '@shared/api'
 
-// 调用类型：chat 对话、look 看图、dream 做梦、translate 翻译词表、identify 以图搜图、embed 语义向量、organize 一键整理出方案
-export type ApiKind = 'chat' | 'compact' | 'look' | 'dream' | 'translate' | 'identify' | 'embed' | 'organize' | 'predict'
+export type { ApiKind }
 
 // 计入缓存命中率目标的调用类型
 export const HIT_RATE_KINDS: ApiKind[] = ['chat', 'look']

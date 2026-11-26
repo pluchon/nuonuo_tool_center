@@ -56,11 +56,23 @@ export default defineComponent({
       ]
     })
 
+    const diagnosticHint = computed(() => {
+      const e = est.value
+      if (!e || (e.organizedCount > 0 && e.toLook > 0)) return ''
+      const parts: string[] = []
+      if (e.pendingSuggestionCount) parts.push(`${e.pendingSuggestionCount.toLocaleString('zh-CN')} 张尚有未处理“AI 建议”`)
+      if (e.blockedByRatingCount) parts.push(`${e.blockedByRatingCount.toLocaleString('zh-CN')} 张因边界分级限制暂不送云重看`)
+      if (e.inQueueCount) parts.push(`${e.inQueueCount.toLocaleString('zh-CN')} 张已在看图队列中`)
+      if (e.ratingLeft) parts.push(`${e.ratingLeft.toLocaleString('zh-CN')} 张等待本地分级`)
+      return parts.join('；')
+    })
+
     return {
       org,
       closeRef,
       est,
       stats,
+      diagnosticHint,
       lines: LINES,
       starPath: ICON.spark
     }

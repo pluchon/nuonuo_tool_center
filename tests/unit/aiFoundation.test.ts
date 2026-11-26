@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
 import { aiEvent, aiJob, aiProfile, apiUsage } from '../../src/main/db/schema'
 import { findRecentUsage, insertApiUsage } from '../../src/main/repositories/apiUsageRepository'
-import { checkHitRate } from '../../src/main/services/ai/bailianClient'
+import { checkHitRate, searchCall } from '../../src/main/services/ai/bailianClient'
 import { embed } from '../../src/main/services/ai/embeddingClient'
 import { EMBEDDING_CONFIG } from '../../src/main/config/cloudConfig'
 import { assertCacheMarks, buildMessages, countCacheMarks, markStepCache, stableStringify } from '../../src/main/services/ai/promptPrefix'
@@ -228,5 +228,47 @@ describe('AI 表和记账', () => {
     await db.insert(apiUsage).values(Array.from({ length: 25 }, () => ({ api: 'look', inputTokens: 1000, batch: true })))
     await insertApiUsage({ api: 'look', error: '请求失败' })
     expect(await checkHitRate('look')).toBeCloseTo(0.75)
+  })
+
+  it('searchCall 支持 SSE 流式响应保活并提取来源链接与用量', async () => {
+    const encoder = new TextEncoder()
+    const events = [
+      `event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', content_index: 0, delta: '{"name":"星辰"', item_id: 'm1', logprobs: [], output_index: 0, sequence_number: 1 })}\n\n`,
+      `event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', content_index: 0, delta: ',"tags":["星空"]}', item_id: 'm1', logprobs: [], output_index: 0, sequence_number: 2 })}\n\n`,
+      `event: response.completed\ndata: ${JSON.stringify({
+        type: 'response.completed',
+        sequence_number: 3,
+        response: {
+          output: [{ type: 'web_search_call', action: { sources: [{ url: 'https://example.com/art/1' }] } }],
+          usage: { input_tokens: 120, output_tokens: 18, input_tokens_details: { cached_tokens: 40 } },
+          tool_usage: { web_search: { num_requests: 1 } }
+        }
+      })}\n\n`
+    ]
+    const sseBody = new ReadableStream({
+      start(controller) {
+        for (const chunk of events) controller.enqueue(encoder.encode(chunk))
+        controller.close()
+      }
+    })
+    const send = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(sseBody, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8' } })
+    )
+    vi.stubGlobal('fetch', send)
+    vi.stubEnv('DASHSCOPE_API_KEY', 'fixture-sse')
+    try {
+      const res = await searchCall({
+        kind: 'look',
+        model: 'qwen3.8-flash',
+        instructions: '识别图片',
+        text: '看图'
+      })
+      expect(res.text).toBe('{"name":"星辰","tags":["星空"]}')
+      expect(res.sources).toEqual([{ url: 'https://example.com/art/1' }])
+      expect(res.usage).toMatchObject({ inputTokens: 120, cachedTokens: 40, outputTokens: 18, searchCount: 1 })
+    } finally {
+      vi.unstubAllGlobals()
+      vi.unstubAllEnvs()
+    }
   })
 })

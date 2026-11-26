@@ -78,7 +78,7 @@ const CHECK_MS = 1200
 const SAVE_DELAY_MS = 250
 
 const CREDENTIAL_PLACEHOLDERS = { saved: '已保存', environment: '使用环境变量', missing: '未设置' } as const
-const emptyCredentials = (): Record<AiCredentialKey, string> => ({ dashscopeApiKey: '', aliyunAccessKeyId: '', aliyunAccessKeySecret: '' })
+const emptyCredentials = (): Record<AiCredentialKey, string> => ({ dashscopeApiKey: '' })
 
 // 设置弹窗（照原型 setDlg）：900×620 磨砂玻璃，左侧分类、右侧分组卡片
 import AiPolicySettings from './AiPolicySettings.vue'
@@ -362,9 +362,7 @@ export default defineComponent({
           return [{
             title: '阿里云',
             rows: [
-              { type: 'credential', label: '百炼 API Key', key: 'dashscopeApiKey' },
-              { type: 'credential', label: 'AccessKey ID', key: 'aliyunAccessKeyId' },
-              { type: 'credential', label: 'AccessKey Secret', key: 'aliyunAccessKeySecret' }
+              { type: 'credential', label: '百炼 API Key', key: 'dashscopeApiKey' }
             ]
           }]
         case 'data':

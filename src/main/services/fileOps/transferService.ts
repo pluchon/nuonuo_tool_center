@@ -31,6 +31,7 @@ import { filesForAction } from '../galleryService'
 import { getScanState } from '../scan/scanService'
 import { enqueue, trashPath } from './fileOpsService'
 import { verifyImageFile } from './fileOpRecovery'
+import { acceptPendingOrganizeDir } from '../../repositories/aiResultRepository'
 import { recordEvents } from '../ai/eventService'
 
 const log = getLogger('fileOps')
@@ -184,7 +185,8 @@ export async function moveImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
     let done = 0
     let failed = 0
     let error: string | null = null
-    for (const op of planned) {
+    for (const [i, op] of planned.entries()) {
+      const movedImageId = todo[i]?.imageId
       let to: string
       try {
         to = await transferInto(op, target.abs)
@@ -198,6 +200,9 @@ export async function moveImages(query: GalleryQueryDTO, rawIds: unknown, rawTar
       // 磁盘已经更改。索引写入失败时保留待恢复日志。
       await db.transaction(async (tx) => {
         await recordMovedFile(tx, op.imageFileId!, target.root, to)
+        if (target.root?.kind === 'CATEGORY' && movedImageId) {
+          await acceptPendingOrganizeDir(tx, [movedImageId])
+        }
         await updateOpStatus(tx, op.id, 'DONE')
       })
       bumpLibraryVersion()
@@ -296,6 +301,9 @@ export async function copyImagesInQueue(query: GalleryQueryDTO, rawIds: unknown,
     const { mtime } = await stat(to)
     await db.transaction(async (tx) => {
       await recordCopiedFile(tx, row.imageId, target.root, to, mtime)
+      if (target.root?.kind === 'CATEGORY') {
+        await acceptPendingOrganizeDir(tx, [row.imageId])
+      }
       await updateOpStatus(tx, op.id, 'DONE')
     })
     bumpLibraryVersion()

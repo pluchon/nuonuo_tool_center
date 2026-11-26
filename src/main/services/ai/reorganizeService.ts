@@ -16,8 +16,16 @@ import { bumpLibraryVersion } from '../../common/readCache'
 import { retryOnWinBusy } from '../../common/winFs'
 import { getDatabase } from '../../db/client'
 import { col } from '../../db/sqlUtil'
-import { aiJob, image, imageAiResult, imageFile, imageTag, libraryRoot } from '../../db/schema'
+import { aiJob, image, imageAiResult, imageFile, imageTag } from '../../db/schema'
 import { hasPendingSuggestion, LOOK_CONTENT_REJECTED } from '../../repositories/aiResultRepository'
+import {
+  cloudAllowedSql,
+  hasAcceptedTagSql,
+  hasNormalFileSql,
+  hasOpenLookSql,
+  inCategorySql,
+  ratingCandidateSql
+} from '../../repositories/imagePredicates'
 import { relocateImageFile, retireRowsAt } from '../../repositories/fileOpRepository'
 import { findActiveRootsByKind } from '../../repositories/libraryRootRepository'
 import { verifyImageFile } from '../fileOps/fileOpRecovery'
@@ -33,57 +41,18 @@ const ESTIMATE_BATCH_SIZE = 256
 const MAX_SUFFIX = 999
 const DB_CHUNK = 1000
 
-const hasNormalFileSql = sql`exists (
-  select 1 from ${imageFile}
-  join ${libraryRoot} on ${col(libraryRoot.id)} = ${col(imageFile.rootId)}
-  where ${col(imageFile.imageId)} = ${col(image.id)}
-    and ${col(imageFile.deleteState)} = 0
-    and ${col(imageFile.status)} = 'NORMAL'
-    and ${col(libraryRoot.deleteState)} = 0
-)`
-
-const inCategorySql = sql`exists (
-  select 1 from ${imageFile}
-  join ${libraryRoot} on ${col(libraryRoot.id)} = ${col(imageFile.rootId)}
-  where ${col(imageFile.imageId)} = ${col(image.id)}
-    and ${col(imageFile.deleteState)} = 0
-    and ${col(imageFile.status)} = 'NORMAL'
-    and ${col(libraryRoot.deleteState)} = 0
-    and ${col(libraryRoot.kind)} = 'CATEGORY'
-)`
-
-const hasAcceptedTagSql = sql`exists (
-  select 1 from ${imageTag}
-  where ${col(imageTag.imageId)} = ${col(image.id)}
-    and ${col(imageTag.deleteState)} = 0
-    and ${col(imageTag.status)} = 'ACCEPTED'
-)`
-
-// 已整理图片：未删除、非 R-18、有活跃 NORMAL 文件、无待确认 AI 建议，且已确认入库（有已采用标签或在类目录中）
-const organizedWhereSql = sql`(
+// 已整理基础集合：未删除、非 R-18、有活跃 NORMAL 文件，且已有已采用标签或在类目录中
+const organizedBaseWhereSql = sql`(
   ${col(image.deleteState)} = 0
   and ${col(image.isR18)} = false
   and ${hasNormalFileSql}
-  and not ${hasPendingSuggestion}
   and (${hasAcceptedTagSql} or ${inCategorySql})
 )`
 
-const cloudAllowedSql = sql`(
-  ${col(image.ratingSource)} = 'MANUAL'
-  or (${col(image.ratingSource)} = 'MODEL' and ${col(image.rating)} in ('GENERAL', 'SENSITIVE'))
-)`
-
-const hasOpenLookSql = sql`exists (
-  select 1 from ${aiJob}
-  where ${col(aiJob.imageId)} = ${col(image.id)}
-    and ${col(aiJob.kind)} = 'LOOK'
-    and ${col(aiJob.deleteState)} = 0
-    and ${col(aiJob.status)} in ('QUEUED', 'RUNNING')
-)`
-
-const ratingCandidateSql = sql`(
-  ${col(image.ratingSource)} is null
-  and ${col(image.thumbReady)} = 1
+// 已整理图片：在上述基础上排除仍有待确认 AI 建议的图片（在“AI 建议”里先审完再参与重新整理）
+const organizedWhereSql = sql`(
+  ${organizedBaseWhereSql}
+  and not ${hasPendingSuggestion}
 )`
 
 function candidate(dir: string, name: string, n: number): string {
@@ -162,13 +131,16 @@ async function assertIdleForReorganize(): Promise<void> {
   }
 }
 
-// 重新整理前的估算：已整理图片数、重新看图张数、预估 token/花费、已整理中待分级张数
+// 重新整理前的估算：已整理图片数、重新看图张数、预估 token/花费、待分级及暂不可重看诊断数
 export async function estimateReorganize(signal?: AbortSignal): Promise<ReorganizeEstimateVO> {
   const { db } = getDatabase()
   let cursor = 0
   let organizedCount = 0
   let toLook = 0
   let ratingLeft = 0
+  let pendingSuggestionCount = 0
+  let blockedByRatingCount = 0
+  let inQueueCount = 0
 
   for (;;) {
     signal?.throwIfAborted()
@@ -180,16 +152,25 @@ export async function estimateReorganize(signal?: AbortSignal): Promise<Reorgani
       organized_count: number
       to_look: number
       rating_left: number
+      pending_suggestion_count: number
+      blocked_by_rating_count: number
+      in_queue_count: number
     }>(sql`select max(id) as last_id,
         count(*)::int as size,
         count(*) filter (where ${organizedWhereSql})::int as organized_count,
         count(*) filter (where ${organizedWhereSql} and ${cloudAllowedSql} and not ${hasOpenLookSql})::int as to_look,
-        count(*) filter (where ${organizedWhereSql} and ${ratingCandidateSql})::int as rating_left
+        count(*) filter (where ${organizedWhereSql} and ${ratingCandidateSql})::int as rating_left,
+        count(*) filter (where ${organizedBaseWhereSql} and ${hasPendingSuggestion})::int as pending_suggestion_count,
+        count(*) filter (where ${organizedWhereSql} and ${col(image.ratingSource)} is not null and not ${cloudAllowedSql})::int as blocked_by_rating_count,
+        count(*) filter (where ${organizedWhereSql} and ${cloudAllowedSql} and ${hasOpenLookSql})::int as in_queue_count
       from (select * from ${image} where id > ${cursor} order by id limit ${ESTIMATE_BATCH_SIZE}) as image`)
 
     organizedCount += Number(row?.organized_count ?? 0)
     toLook += Number(row?.to_look ?? 0)
     ratingLeft += Number(row?.rating_left ?? 0)
+    pendingSuggestionCount += Number(row?.pending_suggestion_count ?? 0)
+    blockedByRatingCount += Number(row?.blocked_by_rating_count ?? 0)
+    inQueueCount += Number(row?.in_queue_count ?? 0)
 
     if (!row || Number(row.size) < ESTIMATE_BATCH_SIZE) {
       const realtime = Math.min(toLook, ORGANIZE_COST.realtimeMax)
@@ -200,7 +181,10 @@ export async function estimateReorganize(signal?: AbortSignal): Promise<Reorgani
         toLook,
         tokens: (toLook + ratingLeft) * ORGANIZE_COST.tokensPerImage,
         yuan: Math.round(yuan * 100) / 100,
-        ratingLeft
+        ratingLeft,
+        pendingSuggestionCount,
+        blockedByRatingCount,
+        inQueueCount
       }
     }
     cursor = Number(row.last_id)

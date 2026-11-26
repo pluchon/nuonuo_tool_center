@@ -5,6 +5,7 @@ import { aiJob, image, imageAiResult, imageTag } from '../db/schema'
 import { setImmediate as yieldToIpc } from 'node:timers/promises'
 import { ratingCandidate } from './imageRepository'
 import { upsertWorkflow, type WorkflowNext } from './aiWorkflowRepository'
+import { cloudAllowedSql, ratingCandidateSql } from './imagePredicates'
 
 export type AiResultEntity = typeof imageAiResult.$inferSelect
 export type AiJobEntity = typeof aiJob.$inferSelect
@@ -20,6 +21,22 @@ export function lookBatchFileId(job: AiJobEntity): string | null {
 
 export function resumesAfterLookCancel(job: AiJobEntity): boolean {
   return (job.payload as { resumeOnCancel?: boolean } | null)?.resumeOnCancel === true
+}
+
+// 手工归档到类目录时，同步结束残留的待确认「放进类目录」建议，避免图片仍滞留在 AI 建议状态
+export async function acceptPendingOrganizeDir(tx: Pick<AppDatabase, 'update'>, imageIds: number[]): Promise<void> {
+  if (imageIds.length === 0) return
+  await tx
+    .update(imageAiResult)
+    .set({ fieldStatus: sql`jsonb_set(coalesce(${imageAiResult.fieldStatus}, '{}'::jsonb), '{dir}', '"ACCEPTED"'::jsonb)` })
+    .where(
+      and(
+        inArray(imageAiResult.imageId, imageIds),
+        eq(imageAiResult.deleteState, 0),
+        eq(imageAiResult.kind, 'ORGANIZE'),
+        sql`${imageAiResult.fieldStatus}->>'dir' = 'PENDING'`
+      )
+    )
 }
 
 // 建议里一项的状态

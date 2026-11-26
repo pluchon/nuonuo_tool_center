@@ -764,4 +764,55 @@ describe('AgentHarness 集成动态工具与通用视觉过滤', () => {
     expect(events.some((e) => e.kind === 'narration_commit')).toBe(false)
     expect(events.some((e) => e.kind === 'action_start' || e.kind === 'action_end')).toBe(false)
   })
+
+  it('词表在类目录内变更后立即热感知（新对话更新档案版、进行中对话仅第④层注入增量并严格排除 AI 建议与源目录图）', async () => {
+    const { pg } = getDatabase()
+    // 先起一段对话锁定旧档案版本（不包含“新热标签”）
+    script.push({ content: '好呀，我现在记得当前词表。' })
+    const qOld = await ask({ conversationId: null, text: '先打个招呼', scope: null, includeR18: false })
+    await answer(qOld.conversation.id)
+    const oldPrefix = JSON.stringify(calls.at(-1)!.messages[0])
+
+    // 新增三个标签：仅「热感知星空」用于类目录且已确认；「仅建议雪花」仍处 PENDING；「仅源目录火羽」不在类目录
+    await pg.exec(`
+      INSERT INTO library_root (kind, name, path) VALUES ('SOURCE', 'src', 'D:/tmp-src');
+      INSERT INTO image (content_hash, format, byte_size, display_name, thumb_ready) VALUES
+        ('hot-cat', 'PNG', 10, '热感知图', 1),
+        ('hot-pend', 'PNG', 10, '待确认图', 1),
+        ('hot-src', 'PNG', 10, '源目录图', 1);
+      INSERT INTO image_file (image_id, root_id, rel_path, mtime)
+        SELECT id, CASE content_hash WHEN 'hot-src' THEN (SELECT max(id) FROM library_root WHERE kind='SOURCE') ELSE 1 END,
+               CASE content_hash WHEN 'hot-src' THEN 'hot-src.png' ELSE '二次元/' || content_hash || '.png' END, now()
+        FROM image WHERE content_hash IN ('hot-cat', 'hot-pend', 'hot-src');
+      INSERT INTO tag (name, category_id) VALUES ('热感知星空', 4), ('仅建议雪花', 4), ('仅源目录火羽', 4);
+      INSERT INTO image_tag (image_id, tag_id, source, status)
+        SELECT i.id, t.id, 'MANUAL', 'ACCEPTED' FROM image i JOIN tag t ON
+          (i.content_hash = 'hot-cat' AND t.name = '热感知星空')
+          OR (i.content_hash = 'hot-pend' AND t.name = '仅建议雪花')
+          OR (i.content_hash = 'hot-src' AND t.name = '仅源目录火羽');
+      INSERT INTO image_ai_result (image_id, kind, model, result, field_status)
+        SELECT id, 'IDENTIFY', 'm', '{"name":"待审"}', '{"name":"PENDING"}' FROM image WHERE content_hash = 'hot-pend';
+    `)
+
+    // 1. 进行中老对话继续发消息：第①②层前缀保持字节一致，同时第④层立即注入「热感知星空」，不含 PENDING 和源目录词
+    script.push({ content: '我看到新增了热感知星空标签啦~' })
+    await ask({ conversationId: qOld.conversation.id, text: '刚整理了新图吗', scope: null, includeR18: false })
+    await answer(qOld.conversation.id)
+    const ongoingMsgs = calls.at(-1)!.messages as Array<{ role: string; content: unknown }>
+    expect(JSON.stringify(ongoingMsgs[0])).toBe(oldPrefix)
+    const ongoingTail = String((ongoingMsgs.at(-2) as { content?: unknown })?.content ?? '')
+    expect(ongoingTail).toContain('热感知星空')
+    expect(ongoingTail).not.toContain('仅建议雪花')
+    expect(ongoingTail).not.toContain('仅源目录火羽')
+
+    // 2. 不等待 24 小时新开对话：档案版本号立即递增且第①②层词表已含「热感知星空」（不含待审与源目录）
+    script.push({ content: '新对话也已经知道热感知星空啦~' })
+    const qNew = await ask({ conversationId: null, text: '看看现在有什么新标签', scope: null, includeR18: false })
+    expect(qNew.conversation.id).not.toBe(qOld.conversation.id)
+    await answer(qNew.conversation.id)
+    const newPrefix = JSON.stringify(calls.at(-1)!.messages[0])
+    expect(newPrefix).toContain('热感知星空')
+    expect(newPrefix).not.toContain('仅建议雪花')
+    expect(newPrefix).not.toContain('仅源目录火羽')
+  })
 })

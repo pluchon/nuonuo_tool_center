@@ -3,14 +3,17 @@ import { and, desc, eq, gt, inArray, lte, sql } from 'drizzle-orm'
 import { getDatabase, type DatabaseHandle } from '../db/client'
 import { aiSearchCache } from '../db/schema'
 import { getLogger } from '../common/logger'
+import { AI_SETTING_KEYS } from '../config/cloudConfig'
 import { stableStringify } from '../services/ai/promptPrefix'
 
 export const SEARCH_CACHE_TTL = 24 * 60 * 60 * 1000
 export async function recordLocalReuse(owner = getDatabase()): Promise<void> {
   if (owner.pg.closed) return
-  await owner.pg.query(`insert into app_setting(key,value) values ('ai.localHits','1'::jsonb)
-    on conflict (key) where delete_state=0 do update set value=to_jsonb((app_setting.value #>> '{}')::bigint+1)`)
-    .catch((err:unknown) => log.warn('本地缓存计数更新失败', err))
+  await owner.pg.query(
+    `insert into app_setting(key,value) values ($1,'1'::jsonb)
+     on conflict (key) where delete_state=0 do update set value=to_jsonb((app_setting.value #>> '{}')::bigint+1)`,
+    [AI_SETTING_KEYS.localHits]
+  ).catch((err: unknown) => log.warn('本地缓存计数更新失败', err))
 }
 const MAX_ENTRIES = 1000
 const log = getLogger('search-cache')

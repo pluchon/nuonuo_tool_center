@@ -268,6 +268,33 @@ export async function recordBatchUsage(meta: CallMeta, usage: unknown): Promise<
   return u
 }
 
+// Responses：流式 SSE 保活（防止联网搜索长耗时被网关/套接字断开）并返回最终结果；若响应为非流式 JSON（如测试模拟），直接解析
+interface RawResponsePayload {
+  output?: unknown[]
+  output_text?: string
+  usage?: unknown
+  tool_usage?: unknown
+  error?: { message?: string; code?: string } | null
+}
+
+function extractResponseText(payload: RawResponsePayload | undefined): string {
+  if (!payload) return ''
+  if (typeof payload.output_text === 'string' && payload.output_text.length > 0) {
+    return payload.output_text
+  }
+  if (!Array.isArray(payload.output)) return ''
+  let text = ''
+  for (const item of payload.output as Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>) {
+    if (item?.type !== 'message' || !Array.isArray(item.content)) continue
+    for (const part of item.content) {
+      if (part?.type === 'output_text' && typeof part.text === 'string') {
+        text += part.text
+      }
+    }
+  }
+  return text
+}
+
 // Responses 调用（看图）：图片放在最后；search 为真时带联网搜索，来源只取搜索工具返回的链接
 export async function searchCall(
   meta: CallMeta & {
@@ -287,20 +314,49 @@ export async function searchCall(
     if (meta.imageDataUrl) {
       content.push({ type: 'input_image', image_url: meta.imageDataUrl })
     }
-    const res = (await getBailianClient().responses.create(
-      {
-        model: meta.model,
-        instructions: meta.instructions,
-        input: [{ role: 'user', content }],
-        ...(meta.search === false ? {} : { tools: [{ type: 'web_search' }] }),
-        enable_thinking: meta.enableThinking === true,
-        ...(meta.enableThinking && meta.thinkingBudget ? { thinking_budget: meta.thinkingBudget } : {})
-      } as never,
-      { timeout: meta.timeoutMs ?? BAILIAN_CONFIG.requestTimeoutMs, signal: meta.signal }
-    )) as unknown as { output?: unknown[]; output_text?: string; usage?: unknown; tool_usage?: unknown }
-    const usage = normalizeResponsesUsage(res.usage, res.tool_usage)
+    const { data: stream, response } = (await getBailianClient().responses
+      .create(
+        {
+          model: meta.model,
+          instructions: meta.instructions,
+          input: [{ role: 'user', content }],
+          ...(meta.search === false ? {} : { tools: [{ type: 'web_search' }] }),
+          enable_thinking: meta.enableThinking === true,
+          ...(meta.enableThinking && meta.thinkingBudget ? { thinking_budget: meta.thinkingBudget } : {}),
+          stream: true
+        } as never,
+        { timeout: meta.timeoutMs ?? BAILIAN_CONFIG.requestTimeoutMs, signal: meta.signal }
+      )
+      .withResponse()) as unknown as {
+      data: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>
+      response: Response
+    }
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+    if (contentType.includes('application/json') && !response.bodyUsed) {
+      const res = (await response.json()) as RawResponsePayload
+      const usage = normalizeResponsesUsage(res.usage, res.tool_usage)
+      await record(meta, usage, Date.now() - t0)
+      return { text: extractResponseText(res), sources: collectSearchSources(res.output), usage }
+    }
+
+    let streamedText = ''
+    let completed: RawResponsePayload | undefined
+    for await (const event of stream) {
+      if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+        streamedText += event.delta
+      } else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
+        completed = event.response as unknown as RawResponsePayload
+      } else if (event.type === 'response.failed') {
+        const errInfo = (event.response as unknown as RawResponsePayload | undefined)?.error
+        throw Object.assign(new Error(errInfo?.message || '云端看图请求失败'), { code: errInfo?.code })
+      } else if (event.type === 'error') {
+        throw Object.assign(new Error(event.message || '云端看图流异常'), { code: event.code ?? undefined })
+      }
+    }
+    const usage = normalizeResponsesUsage(completed?.usage, completed?.tool_usage)
     await record(meta, usage, Date.now() - t0)
-    return { text: res.output_text ?? '', sources: collectSearchSources(res.output), usage }
+    const text = extractResponseText(completed) || streamedText
+    return { text, sources: collectSearchSources(completed?.output), usage }
   } catch (err) {
     if (!meta.signal?.aborted) await record(meta, EMPTY_USAGE, Date.now() - t0, errorText(err))
     throw err

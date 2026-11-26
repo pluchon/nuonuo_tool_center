@@ -383,12 +383,30 @@ describe('看图队列和 AI 建议', () => {
     const { pg: db } = getDatabase()
     await db.exec(`UPDATE image SET rating = 'GENERAL' WHERE id = 4`)
     const { searchCall } = await import('../../src/main/services/ai/bailianClient')
-    vi.mocked(searchCall).mockRejectedValueOnce(Object.assign(new Error('Request timed out.'), { name: 'APIConnectionTimeoutError' }))
+    vi.mocked(searchCall)
+      .mockRejectedValueOnce(Object.assign(new Error('Request timed out.'), { name: 'APIConnectionTimeoutError' }))
+      .mockRejectedValueOnce(Object.assign(new Error('Request timed out.'), { name: 'APIConnectionTimeoutError' }))
     await look.lookNow(4)
     await idle()
     let s = await look.getLookState()
     expect(s.activity).toBe('idle')
     expect(s.rows).toMatchObject([{ imageId: 4, state: 'FAILED', error: '超时' }])
+
+    // 仅联网主请求超时时，自动降级为纯视觉快速识别并成功落库（不直接标 FAILED）
+    vi.mocked(searchCall)
+      .mockRejectedValueOnce(Object.assign(new Error('Request timed out.'), { name: 'APIConnectionTimeoutError' }))
+      .mockResolvedValueOnce({
+        text: '```json\n{"name":"纯视觉兜底","character":"","work":"","tags":["夜空"],"source":"","description":"联网超时后纯视觉识别完成"}\n```',
+        sources: [],
+        usage: { inputTokens: 10, outputTokens: 5, cachedTokens: 0, cacheWriteTokens: 0, imageTokens: 0, searchCount: 0 }
+      })
+    await look.retryLook(s.rows[0].jobId)
+    await idle()
+    expect((await sugg.listSuggestions(4)).find((item) => item.kind === 'name')?.value).toBe('纯视觉兜底')
+
+    // 重置为失败任务继续测格式异常后的二次重试
+    await db.exec(`DELETE FROM image_ai_result WHERE image_id = 4; UPDATE ai_job SET status = 'FAILED', error = '超时' WHERE image_id = 4`)
+    s = await look.getLookState()
     const truncated = { text: '{"name":', sources: [], usage: { inputTokens: 5, outputTokens: 1, cachedTokens: 0, cacheWriteTokens: 0, imageTokens: 0, searchCount: 0 } }
     vi.mocked(searchCall).mockResolvedValueOnce(truncated)
     await look.retryLook(s.rows[0].jobId)
@@ -665,9 +683,11 @@ describe('看图队列和 AI 建议', () => {
     await idle()
     const baselineInstructions = calls[0].instructions
 
-    // 若本次重看请求失败，原有待确认建议必须保留不被删除
+    // 若本次重看请求失败（主请求与纯视觉降级均超时），原有待确认建议必须保留不被删除
     calls.length = 0
-    vi.mocked(searchCall).mockRejectedValueOnce(Object.assign(new Error('Request timed out.'), { name: 'APIConnectionTimeoutError' }))
+    vi.mocked(searchCall)
+      .mockRejectedValueOnce(Object.assign(new Error('Request timed out.'), { name: 'APIConnectionTimeoutError' }))
+      .mockRejectedValueOnce(Object.assign(new Error('Request timed out.'), { name: 'APIConnectionTimeoutError' }))
     const failedSt = await look.refreshSuggestion(imgId)
     expect(failedSt).toEqual({ refreshCount: 1, maxRefreshes: 5, active: true })
     await idle()
