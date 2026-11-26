@@ -6,7 +6,7 @@
 
 <h1 align="center">诺诺的图床</h1>
 
-<p align="center">一款 Windows 本地图库，诺诺可以陪你聊天，也能帮你找图、整理收藏。</p>
+<p align="center">Windows 本地图床与看图整理工具，带着「诺诺」一起收图、打标签和找图。</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 10 / 11" />
@@ -26,31 +26,31 @@
 <p align="center">
   <a href="#功能">功能</a> ·
   <a href="#截图">截图</a> ·
-  <a href="#它是怎么工作的">工作原理</a> ·
+  <a href="#工作原理">工作原理</a> ·
   <a href="#隐私和数据">隐私和数据</a> ·
   <a href="#开发">开发</a>
 </p>
 
 ---
 
-壁纸存在一个盘，照片和插画散在另外几个文件夹。把这些文件夹加到「源目录」，就能在同一个图库里浏览。导入时原图留在原处，你可以给它们起名、打标签，再按自己的习惯归类。
+图存多了以后，壁纸、截图、插画和照片很容易散在各个盘的文件夹里，想用时怎么翻都找不到。把这些文件夹添进「源目录」，就能在一个界面里按时间、标签和尺寸统一看图，原图照样留在原来的位置。
 
-- **本地优先**：图库数据都在本机，不需要账号；R-18 在本地判定，永远不上云。
-- **AI 可选**：配置了阿里云百炼的密钥才会用到诺诺，没配也不影响其他功能。
-- **AI 只给建议**：改名字、打标签、动文件，都要你点头。
+- **数据留在本地**：图库索引、缩略图和设置都存放在自己电脑上，不用注册账号；R-18 只在本地跑模型判断，不发往云端。
+- **AI 按需启用**：填了阿里云百炼 API Key 才会用到诺诺看图和对话，没配置时照样是一套完整的本地图库。
+- **改动由你决定**：起名、打标签、建类目录或者挪动文件，AI 只负责给出建议和方案，确认了才会落库或写盘。
 
 ## 功能
 
 | 功能 | 说明 |
 | --- | --- |
-| **收图** | 导入任意文件夹，原图留在原地；实时监听新增、删除、改名；同一张图在几个地方出现时只算一张。支持 JPG、PNG、GIF、WEBP、BMP、AVIF、HEIC 和常见 RAW。 |
-| **整理** | 名字、标签（带分类和别名）、自建的“类目录”；复制、移动、删除都能撤销，删除走系统回收站。 |
-| **找图、看图** | 按名字和标签搜，按目录、方向、尺寸、时间筛；网格按月分组；大图缩放、旋转、翻页不用等。 |
-| **本地 R-18 分级** | 导入后在后台用本地模型逐张判，明显的自动标上；你手动改过的永远以你为准。int8 量化模型约 0.56 秒一张，只用 CPU、低优先级。 |
-| **诺诺助手** | 可以和诺诺聊天，也可以说“找海边的风景”。它会从类目录里查找已经确认标签的图片。可以上传一张图找相似图片，也可以附上 Markdown 提示词，让诺诺按文件要求看图。 |
-| **AI 建议** | 新图判完分级后诺诺自动看一遍，给出名字、标签、角色、作品、出处，可以逐条挑选，也可以全部采用。 |
-| **一键整理** | 诺诺拟一份“建哪些类目录、哪些图放进去”的方案，你改好、批了才复制进去。 |
-| **外观** | 浅色、深色、跟随系统，六种主题色，主题背景或自己的图，磨砂玻璃和透明度可调。 |
+| **收图与监听** | 添加任意本地文件夹即可导入，原图不动；实时同步外部的新增、删除和改名，同内容图片自动去重。支持 JPG、PNG、GIF、WEBP、BMP、AVIF、HEIC 及常见 RAW。 |
+| **分类与整理** | 自定义图片名称、分类标签及别名，并用「类目录」按主题归档；复制、移动和删除均支持撤销，删除走系统回收站；已归档的图片支持通过「重新整理」退回源目录或带原有上下文重看。 |
+| **检索与看图** | 支持按名字、标签、目录、方向、尺寸和导入时间筛选；按月分段网格搭配虚拟滚动，大图查看支持缩放、旋转、翻转与键盘切图。 |
+| **本地 R-18 分级** | 导入后在独立子进程用 CPU（int8 模型）后台慢速判图，明显的自动标上 R-18；你手动改过的分级结果永远优先。 |
+| **诺诺助手** | 可以直接用自然语言聊天或找图（只在类目录的已确认标签范围里检索），也能上传图片按画面找相似，或附带 Markdown 说明看图。 |
+| **AI 建议** | 过了本地分级的非 R-18 新图自动交给诺诺看图，生成名字、标签、角色、作品和出处建议，支持逐条采纳、整张采纳以及单图重看。 |
+| **一键整理与用量统计** | 按你的目录规则拟好建目录和归档方案，批准后执行；「设置 → AI」里可直接查看近一年热力图、7天/30天/12个月趋势柱图、五维省流雷达和费用估算。 |
+| **外观定制** | 支持浅色、深色和跟随系统，多套主题色、主题背景及自定义壁纸，透明度与磨砂效果实时联动。 |
 
 ## 截图
 
@@ -63,9 +63,9 @@
   <img src="https://zlhimage.oss-cn-guangzhou.aliyuncs.com/item_picture/nuonuo_tool_center/readme/screenshots/suggest-dark-b22c1ffba5fd.png" alt="AI 建议：逐条采用" width="49%" />
 </p>
 
-## 它是怎么工作的
+## 工作原理
 
-一张新图进来以后会经过这几步：
+一张新图进库之后会经过这条流程：
 
 ```mermaid
 flowchart TD
@@ -77,43 +77,43 @@ flowchart TD
     S -- "你采用" --> D["名字、标签、类目录"]
 ```
 
-- **界面和主进程分开**：界面（Vue）只管显示，读写文件和数据库都在 Electron 主进程里做，图片用 `ltm://` 协议直接读，不经过 IPC。
-- **数据库是嵌入式的 Postgres**（PGlite），带 pgvector 做语义搜索，不用装任何服务。
-- **分级在单独的进程里跑**，进程优先级调低；你在用软件时 3 线程，切到别处或电脑空闲（插着电）时 4 线程，不会把电脑卡住。
-- **动磁盘的操作先记日志再执行**：删除先在库里藏起来，撤销是即时的；中途崩溃下次启动会补完。复制和移动从不覆盖已有文件。
+- **前后端进程隔离**：Vue 界面只负责展示与交互，文件读写和数据库操作都在 Electron 主进程完成；图片经自定义 `ltm://` 协议直接读取，不经 IPC 传大图。
+- **嵌入式 Postgres + pgvector**：内置 PGlite 与向量检索扩展，开箱即用，不需要额外安装数据库服务。
+- **后台低负载分级**：分级在单独的工作进程运行，前台活跃时 3 线程、空闲或切到后台时 4 线程，尽量不抢桌面响应。
+- **磁盘操作先记日志**：删除和挪动先写入状态日志再改磁盘，支持即时撤销与意外退出后的启动恢复，复制与移动默认不覆盖已有文件。
 
 ## 隐私和数据
 
 | 内容 | 位置 |
 | --- | --- |
-| 图库数据库、缩略图、日志、诺诺的记忆和对话 | `%APPDATA%\LocalToolManage` |
-| 本地分级模型（第一次用时自动下载） | `%APPDATA%\LocalToolManage\models` |
-| 类目录 | 新图库默认使用应用数据目录下的「类目录」。旧图库沿用原位置，可在设置中查看路径。 |
-| 原图 | 导入时留在原文件夹 |
+| 图库数据库、缩略图、日志、对话记录与凭证 | `%APPDATA%\LocalToolManage` |
+| 本地分级模型（首次启用时下载） | `%APPDATA%\LocalToolManage\models` |
+| 类目录 | 新图库默认位于应用数据目录下的「类目录」，可在设置里查看路径 |
+| 原图 | 导入后留在原本的源目录文件夹中 |
 
-- 在「设置 → AI」中填写云端密钥。默认读取 `DASHSCOPE_API_KEY`（百炼）、`ALIYUN_ACCESS_KEY_ID` 和 `ALIYUN_ACCESS_KEY_SECRET`（阿里云 OSS）。离开密钥输入区时自动加密保存填写的值，并优先使用。
-- 发给云端的只有过了本地分级的图，先缩小、去掉 EXIF；需要公网地址时私有上传、用完即删。
-- 也可以从图片详情复制提示词，和图片一起发给自己常用的 AI，再把回复贴回来。标准 JSON 在本地导入，自然语言或 Markdown 回复会在提交后交给百炼整理。
-- 设置里可以导出整个图库数据库作备份（不含图片本身）。
+- 在「设置 → AI」填写百炼 API Key（默认读取系统环境变量 `DASHSCOPE_API_KEY`）；手动填写的内容离开输入框后即加密保存在本地并优先使用。
+- 只有通过本地分级的非 R-18 图片才会发给云端；上传前先做缩图并剥离 EXIF 元数据，直接通过 base64 发送给百炼接口，不再经过第三方对象存储中转。
+- 也可以从图片详情页复制提示词，把图片交给其他常用的 AI 处理后再把结果贴回来导入。
+- 设置的「数据与缓存」里支持整库导出备份（不包含原图文件本身）。
 
 ## 开发
 
-需要 Windows 和 Node.js 22.12 或更高版本。
+需要 Windows 与 Node.js 22.12 或更高版本。
 
 ```powershell
 npm install
-npm run dev          # 开发模式，数据放在 D:\ltm-dev，不碰真实数据
+npm run dev          # 开发模式，数据隔离在 D:\ltm-dev，不碰真实图库
 npm run typecheck
 npm test             # 单元测试
-npm run build
-npm run test:e2e     # 端到端测试（先 build），Playwright 驱动真实的 Electron 窗口
+npm run build        # 构建产物并刷新桌面快捷方式
+npm run test:e2e     # 端到端测试（先 build），Playwright 驱动真实 Electron 窗口
 ```
 
-- 数据目录用环境变量隔离：`LTM_DATA_DIR`、`LTM_CATEGORY_HOME`；分级模型可以用 `LTM_MODEL_DIR` 指到共用目录。
-- 改了 `src/main/db/schema.ts` 后运行 `npm run db:generate`，迁移只往前加。
-- 换图标：替换 `resources/icon.png`，运行 `node scripts/make-icon.mjs`。
-- README 截图：`$env:LTM_SHOTS='1'; npx vitest run tests/e2e/readme-shots.test.ts`，使用合成图片和模拟百炼响应。
-- 生成 int8 分级模型（本机运行、不联网、不覆盖已有文件，需要 [uv](https://docs.astral.sh/uv/)）：
+- 通过环境变量隔离数据目录：`LTM_DATA_DIR`、`LTM_CATEGORY_HOME`、`LTM_MODEL_DIR`。
+- 调整 `src/main/db/schema.ts` 后运行 `npm run db:generate`，迁移只增不删。
+- 更换图标：替换 `resources/icon.png` 后运行 `node scripts/make-icon.mjs`。
+- 重新生成 README 截图：`$env:LTM_SHOTS='1'; npx vitest run --maxWorkers=1 tests/e2e/readme-shots.test.ts`（使用合成风景图和本地模拟百炼接口）。
+- 本地生成 int8 分级模型（需要 [uv](https://docs.astral.sh/uv/)）：
 
 ```powershell
 uv run -p 3.11 --with onnxruntime==1.32.0 --with onnx==1.23.2 python scripts/quantize-model.py "$env:APPDATA\LocalToolManage\models\wd-swinv2-tagger-v3"
@@ -121,18 +121,24 @@ uv run -p 3.11 --with onnxruntime==1.32.0 --with onnx==1.23.2 python scripts/qua
 
 ```
 src/
-  main/        主进程：扫描、监听、文件操作、数据库、ltm:// 协议
-    services/ai/       诺诺：对话、看图、AI 建议、一键整理、记忆
-    services/rating/   本地 R-18 分级
-    services/cloud/    百炼和 OSS 临时上传
-    workers/           分级工作进程
-  preload/     暴露给界面的 window.api
-  renderer/    界面：Vue 组件、Pinia 状态、主题
-  shared/      两边共用的类型和设置
-drizzle/       数据库迁移
-scripts/       开发启动、图标、int8 模型
-tests/         单元测试和端到端测试
-docs/          设计文档、界面原型
+  main/
+    config/            模型计价、配置键与百炼客户端参数
+    db/                PGlite 实例、Drizzle Schema 与迁移执行
+    ipc/               IPC 通道注册
+    protocol/          ltm:// 缩略图与原图直出协议
+    repositories/      SQL 谓词与数据访问
+    services/ai/       诺诺对话 harness、看图、建议、整理、重新整理、记忆与用量统计
+    services/fileOps/  目录与文件安全复制、移动、删除及恢复
+    services/rating/   本地 WD int8 R-18 分级调度
+    services/scan/     图片探测、缩略图与目录增量监听
+    workers/           分级子进程入口
+  preload/             通过 contextBridge 暴露的 window.api
+  renderer/            Vue 3 界面、Pinia 状态与主题变量联动
+  shared/              主进程与渲染层共用的 IPC 协议、设置与常量
+drizzle/               数据库 SQL 迁移脚本
+scripts/               隔离开发启动、桌面快捷方式、图标与量化脚本
+tests/                 单元测试（tests/unit）与 Playwright 端到端测试（tests/e2e）
+docs/                  设计文档、重构记录与原型稿
 ```
 
 完整设计见 [docs/design.md](docs/design.md)。
@@ -140,5 +146,5 @@ docs/          设计文档、界面原型
 ## 致谢与许可
 
 - 主题背景 Halftone、Plotter、Paper 移植自 Claude Code 官方 theme-examples 插件，按 Apache-2.0 使用。
-- 界面字体是 Nunito 和 Noto Sans SC；本地分级模型是 [SmilingWolf/wd-swinv2-tagger-v3](https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3)。
+- 界面字体使用 Nunito 与 Noto Sans SC；本地分级模型来自 [SmilingWolf/wd-swinv2-tagger-v3](https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3)。
 - 本项目以 MIT 许可证发布，见 [LICENSE](LICENSE)。

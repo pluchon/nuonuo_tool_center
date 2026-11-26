@@ -50,7 +50,10 @@ describe('退出再进来，进度接着上次', () => {
     expect(Number(recovered?.[1])).toBeGreaterThanOrEqual(32)
     expect(Number(recovered?.[1])).toBeLessThan(count)
     await second.page.locator('.side-nav__label:text-is("pics")').click()
-    await second.page.waitForFunction((n) => document.querySelectorAll('.tile').length === n, count)
+    await second.page.waitForFunction((n) => {
+      const item = [...document.querySelectorAll('.side-nav__item')].find((el) => el.querySelector('.side-nav__label')?.textContent === 'pics')
+      return item?.querySelector('.side-nav__count')?.textContent === String(n) && document.querySelectorAll('.tile').length > 0
+    }, count)
     await expect.poll(() => second.page.evaluate(() => window.api.scan.getState())).toMatchObject({
       ok: true, data: { progress: null, last: { total: count, failed: 0, stopped: false } }
     })

@@ -232,13 +232,7 @@ describe('看图队列和 AI 建议', () => {
     }
     const { initAiCredentialSettings, saveAiCredentialSettings } = await import('../../src/main/services/aiCredentialSettings')
     process.env.DASHSCOPE_API_KEY = ''
-    vi.stubEnv('ALIYUN_ACCESS_KEY_ID', '')
-    vi.stubEnv('ALIYUN_ACCESS_KEY_SECRET', '')
-    try {
-      await initAiCredentialSettings(dir)
-    } finally {
-      vi.unstubAllEnvs()
-    }
+    await initAiCredentialSettings(dir)
     await look.initLook()
     expect(await look.getLookState()).toMatchObject({ needsApiKey: true, count: 2, activity: 'queued' })
     expect(calls).toHaveLength(0)
@@ -764,5 +758,30 @@ describe('看图队列和 AI 建议', () => {
     expect(await look.getSuggestionRefreshStatus(imgId)).toEqual({ refreshCount: 5, maxRefreshes: 5, active: false })
     // 超过 5 次上限后拒绝
     await expect(look.refreshSuggestion(imgId)).rejects.toMatchObject({ code: 'CONFLICT' })
+  })
+
+  it('网格与详情页重新识别遮罩（activeImageIds）仅针对已配密钥下的 refreshSuggestion / reorganize 任务，不含普通排队任务', async () => {
+    const { aiJob } = await import('../../src/main/db/schema')
+    const { db } = getDatabase()
+    await db.delete(aiJob)
+    await db.insert(aiJob).values([
+      { kind: 'LOOK', status: 'QUEUED', imageId: 1, priority: 0, payload: null },
+      { kind: 'LOOK', status: 'QUEUED', imageId: 2, priority: 5, payload: { reorganize: true } },
+      { kind: 'LOOK', status: 'QUEUED', imageId: 3, priority: -1, payload: { refreshSuggestion: true } }
+    ])
+    const state = await look.getLookState()
+    expect(state.activeImageIds).toEqual([2, 3])
+    expect(state.activeImageIds).not.toContain(1)
+
+    const prevKey = process.env.DASHSCOPE_API_KEY
+    process.env.DASHSCOPE_API_KEY = ''
+    try {
+      const noKeyState = await look.getLookState()
+      expect(noKeyState.needsApiKey).toBe(true)
+      expect(noKeyState.activeImageIds).toEqual([])
+    } finally {
+      process.env.DASHSCOPE_API_KEY = prevKey
+      await db.delete(aiJob)
+    }
   })
 })

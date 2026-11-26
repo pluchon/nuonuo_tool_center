@@ -25,7 +25,7 @@ it('从聊天确认类目录创建与嵌套迁移，重新打开会话仍显示�
     return card
   }
   const create = await ask('创建类目录「山川/远景」')
-  const composerStyle = () => page.locator('.assistant__composer').evaluate(el => getComputedStyle(el).backgroundColor)
+  const composerStyle = () => page.locator('.assistant__composer').evaluate(el => getComputedStyle(el, '::before').backgroundColor)
   const firstColor = await composerStyle()
   await page.evaluate(() => window.api.settings.update({ accent: '#3F8F7B', appearance: 'dark' }))
   const reopen = async () => {

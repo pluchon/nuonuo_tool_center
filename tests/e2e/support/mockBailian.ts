@@ -57,7 +57,9 @@ export async function launchWithMockBailian(dirs: CaseDirs, rejectedImages = 0) 
           const userPrompt = typeof last?.content === 'string' ? last.content : ''
           const args = userPrompt.includes('猫')
             ? { tags: ['猫'], contrast: [] }
-            : { tags: ['风景'], orientation: 'landscape', contrast: [] }
+            : userPrompt.includes('测试标签')
+              ? { tags: ['测试标签'], contrast: [] }
+              : { tags: ['风景'], orientation: 'landscape', contrast: [] }
           message = {
             role,
             content: null,

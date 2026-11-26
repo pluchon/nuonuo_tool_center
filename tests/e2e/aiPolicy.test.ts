@@ -5,7 +5,7 @@ import {openDatabase, closeDatabase} from '../../src/main/db/client'
 import {closeLeftoverApps, freshCase, launchApp} from './support/app'
 
 afterEach(closeLeftoverApps)
-it('在 AI 设置展示后台画面索引与缓存用量并保存每日上限，且不渲染长期记忆或偏好控制', async () => {
+it('在 AI 设置展示后台画面索引与用量统计并保存每日上限，且不渲染长期记忆或偏好控制', async () => {
   const dirs = freshCase('policy-settings')
   mkdirSync(dirs.data,{recursive:true})
   const {pg} = await openDatabase(join(dirs.data,'pgdata'),resolve('drizzle'))
@@ -20,7 +20,7 @@ it('在 AI 设置展示后台画面索引与缓存用量并保存每日上限，
   }
   const first = await open()
   expect(await first.page.getByRole('region', { name: '后台画面索引' }).isVisible()).toBe(true)
-  expect(await first.page.getByRole('region', { name: '缓存用量' }).isVisible()).toBe(true)
+  expect(await first.page.getByRole('region', { name: '用量统计' }).isVisible()).toBe(true)
   expect(await first.page.getByRole('region', { name: '长期记忆' }).count()).toBe(0)
   expect(await first.page.getByText('长期记忆', { exact: true }).count()).toBe(0)
   expect(await first.page.getByText('测试推断', { exact: true }).count()).toBe(0)
@@ -41,9 +41,15 @@ it('在 AI 设置展示后台画面索引与缓存用量并保存每日上限，
   const next = await open()
   expect(await next.page.getByLabel('后台向量每日上限').inputValue()).toBe('750')
   expect(await next.page.getByRole('region', { name: '后台画面索引' }).isVisible()).toBe(true)
-  expect(await next.page.getByRole('region', { name: '缓存用量' }).isVisible()).toBe(true)
-  expect(await next.page.getByText('本地缓存命中', { exact: true }).isVisible()).toBe(true)
-  expect(await next.page.getByText('云端前缀缓存命中',{exact:true}).isVisible()).toBe(true)
+  expect(await next.page.getByRole('region', { name: '用量统计' }).isVisible()).toBe(true)
+  expect(await next.page.getByText('总 Tokens', { exact: true }).isVisible()).toBe(true)
+  expect(await next.page.getByText('估算费用', { exact: true }).isVisible()).toBe(true)
+  expect(await next.page.getByText('云端缓存', { exact: true }).isVisible()).toBe(true)
+  expect(await next.page.getByText('调用次数', { exact: true }).isVisible()).toBe(true)
+  await next.page.getByRole('tab', { name: '趋势柱图', exact: true }).click()
+  expect(await next.page.getByRole('img', { name: 'Token消耗趋势堆叠柱状图' }).isVisible()).toBe(true)
+  await next.page.getByRole('tab', { name: '效率雷达', exact: true }).click()
+  expect(await next.page.getByRole('img', { name: 'AI省流与效率五维雷达图' }).isVisible()).toBe(true)
   expect(await next.page.getByRole('region', { name: '长期记忆' }).count()).toBe(0)
   expect(await next.page.getByRole('button', { name: '纠正', exact: true }).count()).toBe(0)
   expect(await next.page.getByRole('button', { name: '忘记', exact: true }).count()).toBe(0)

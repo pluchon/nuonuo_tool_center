@@ -14,12 +14,11 @@
 - 图库数据是否被占用看应用自己的锁文件 `ltm.lock`（记真实 PID 和进程名），不看 PGlite 的 `postmaster.pid`（永远是假 PID -42，崩溃会残留）。PGlite 只有一条连接：应用运行时不要用脚本去开同一个 pgdata。
 - 日志在数据目录的 `logs\main.log`（5 MB 滚动，留 3 份）；开发模式记 info，快捷方式运行只记 warn 以上，`LTM_LOG_LEVEL` 可覆盖。
 - 关闭应用要走正常退出（关窗口），确保数据库落盘、释放锁；不要用 `taskkill /F` 杀进程（不带 `/F` 的 `taskkill /PID` 是正常关窗口，可以用）。
-- 桌面快捷方式 `LocalToolManage.lnk` 指向 `node_modules\electron\dist\electron.exe <项目目录>`，跑的是 `out/` 构建产物：改完代码要 `npm run build` 才生效。单实例锁按数据目录区分：开发模式（`D:\ltm-dev\data`）和快捷方式（真实目录）可以同时开。
+- 桌面快捷方式 `诺诺的图床.lnk` 指向 `node_modules\electron\dist\electron.exe <项目目录>`，跑的是 `out/` 构建产物：改完代码要 `npm run build` 才生效。单实例锁按数据目录区分：开发模式（`D:\ltm-dev\data`）和快捷方式（真实目录）可以同时开。
 
 ## 本机资源（核显笔记本，曾整机卡死）
 
 - 本地推理只用 CPU，`WdTagger.load` 默认限 2 线程；应用里的分级在你用软件时用 3 线程，插着电且软件不在前台或整台电脑 1 分钟没人操作时用 4 线程（实测再多几乎不快），回到软件立刻降回 3 线程。不要开 DirectML，不要并行跑多个推理进程；批量推理（一次多张）实测不快、内存翻几倍，不用。模型目录里有 `model.int8.onnx` 时优先用它（约快一倍，验证过 R-18 零漏判），用 `scripts/quantize-model.py` 生成，不覆盖已有文件。
-- `services/cloud`、`services/rating` 是 Phase 0 验证过的代码，现在还没有地方调用，是 AI 阶段要接上的，不是死代码，不要删。
 - 跑批量推理时降低进程优先级，并给脚本设超时；先用 1 张试跑，确认内存和耗时后再批量。
 
 ## 测试图片
@@ -30,9 +29,9 @@
 
 ## 云端
 
-- 凭证默认从用户环境变量读取：`DASHSCOPE_API_KEY`、`ALIYUN_ACCESS_KEY_ID`、`ALIYUN_ACCESS_KEY_SECRET`。「设置 → AI」保存的凭证使用系统加密，优先于环境变量。凭证不落库、不写日志。
-- OSS：bucket `zlhimage`（`oss-cn-guangzhou`），临时前缀 `local_image_temp/`。`local_image_temp/` 这个 0 字节对象是控制台的目录占位，清理时不能删。临时对象私有 ACL 上传，用完在 `finally` 里删除。
-- 百炼：OpenAI 兼容端点 `https://dashscope.aliyuncs.com/compatible-mode/v1`，以图搜图用 Responses API + `image_search` 工具。以图搜图用 `qwen3.8-flash`（用户指定，max 太慢）；其他场景用最新可用的 Qwen（以 `/v1/models` 实际返回为准）。客户端必须 `maxRetries: 0`。
+- 凭证默认从用户环境变量读取：`DASHSCOPE_API_KEY`。「设置 → AI」保存的凭证使用系统加密，优先于环境变量（旧版配置文件里的 OSS 字段会在读取时自动过滤忽略）。凭证不落库、不写日志。
+- 模型定价、AI 设置键与场景枚举集中在 `src/main/config/cloudConfig.ts` 与 `src/shared/api.ts`，SQL 高频筛选谓词集中在 `src/main/repositories/imagePredicates.ts`。
+- 百炼：OpenAI 兼容端点 `https://dashscope.aliyuncs.com/compatible-mode/v1`；看图通过 base64 `data:image/jpeg;base64,...` 直传（先缩放去 EXIF，不再经过 OSS 临时桶），使用 Responses API SSE 流式保活 + `image_search` 工具（联网超时时自动降级一次纯视觉）；核心视觉与对话模型为 `qwen3.8-flash`。客户端必须 `maxRetries: 0`。
 - 以图搜图的出处只采用工具返回的结果，不采用模型自己写的链接。
 
 ## AI（诺诺）的成本与缓存

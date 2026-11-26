@@ -79,7 +79,7 @@ describe('第三阶段：导入和扫描', () => {
     // 队列状态取决于本地分级进度和凭证配置，扫描计数始终来自实际文件。
     expect(['看图队列', '看图待配置']).toContain(footer[0])
     expect(footer[1]).toMatch(/^\d+$/)
-    expect(footer.slice(2)).toEqual(['一键整理', (IMAGE_COUNT + 2).toLocaleString('zh-CN'), '张', '刚刚扫描完成', '重新扫描'])
+    expect(footer.slice(2)).toEqual(['重新整理', '一键整理', (IMAGE_COUNT + 2).toLocaleString('zh-CN'), '张', '刚刚扫描完成', '重新扫描'])
     await shot(page, 'scanned-light')
 
     // 重新扫描：文件都没变，很快结束，计数不变

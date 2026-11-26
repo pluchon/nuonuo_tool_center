@@ -42,7 +42,7 @@ it('大量命中时仅渲染当前页，末页包含最后一张图片，重开�
   const pager = page.getByRole('navigation', { name: '搜索结果分页' })
   await pager.waitFor({ timeout: 60_000 })
   expect(await cards.count()).toBe(24)
-  expect(await page.locator('.assistant__how').innerText()).toContain('找到 2401 张')
+  expect(await page.locator('.assistant__reply').innerText()).toContain('2401 张')
   await pager.getByRole('button', { name: '末页' }).click()
   expect(await cards.count()).toBe(1)
   expect(await cards.first().innerText()).toBe('图片-1')

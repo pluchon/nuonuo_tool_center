@@ -56,8 +56,6 @@ export async function launchApp(dirs: CaseDirs, overrides: Record<string, string
   Object.assign(env, {
     // 禁止继承真实云端凭证，显式空白也会阻止回退到 Windows 用户环境变量。
     DASHSCOPE_API_KEY: ' ',
-    ALIYUN_ACCESS_KEY_ID: ' ',
-    ALIYUN_ACCESS_KEY_SECRET: ' ',
     ...overrides,
     LTM_DATA_DIR: dirs.data,
     LTM_CATEGORY_HOME: dirs.library,

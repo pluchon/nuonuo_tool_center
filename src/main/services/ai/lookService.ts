@@ -162,13 +162,20 @@ export async function getLookState(): Promise<LookStateVO> {
     })
   }
   const canCancel = jobs.some((j) => (j.status === 'QUEUED' || j.status === 'FAILED') && !j.remoteId && !runningIds.has(j.id) && !batch.isPacking(j.id))
-  // 队列预览只取前几行，底栏状态要包含后面的任务。
+  // 队列预览只取前几行，底栏状态要包含后面的任务；网格/详情遮罩仅用于显式“重新识别/重新AI整理”任务且有密钥时。
+  const hasCloudKey = cloudReady()
   const activeJobs = jobs.filter((j) => j.status === 'QUEUED' || j.status === 'RUNNING')
-  const activeImageIds = [...new Set(activeJobs.map((j) => j.imageId).filter((id): id is number => id !== null))]
+  const overlayJobs = hasCloudKey
+    ? activeJobs.filter((j) => {
+        const p = j.payload as { refreshSuggestion?: boolean; reorganize?: boolean } | null
+        return p?.refreshSuggestion === true || p?.reorganize === true
+      })
+    : []
+  const activeImageIds = [...new Set(overlayJobs.map((j) => j.imageId).filter((id): id is number => id !== null))]
   const reorganizing = activeJobs.some((j) => (j.payload as { reorganize?: boolean } | null)?.reorganize === true)
   const working = jobs.some(j => j.status !== 'FAILED' && (runningIds.has(j.id) || batch.isPacking(j.id) || j.remoteId || lookBatchFileId(j)))
   const activity = working ? 'working' : jobs.some(j => j.status !== 'FAILED') ? 'queued' : 'idle'
-  return { count: jobs.length, activity, rows, canCancel, needsApiKey: !cloudReady(), reorganizing, activeImageIds }
+  return { count: jobs.length, activity, rows, canCancel, needsApiKey: !hasCloudKey, reorganizing, activeImageIds }
 }
 
 // 密钥恢复后继续处理原队列，包括已经提交、等待查询结果的批次。

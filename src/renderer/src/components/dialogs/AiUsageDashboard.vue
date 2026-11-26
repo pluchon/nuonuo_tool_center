@@ -170,19 +170,9 @@ const heatmapLayout = computed(() => {
   return { cells, monthLabels, activeDays, width, height }
 })
 
-function heatFill(level: 0 | 1 | 2 | 3 | 4): string {
-  switch (level) {
-    case 0:
-      return 'color-mix(in srgb, var(--t2) 9%, transparent)'
-    case 1:
-      return 'color-mix(in srgb, var(--a) 26%, var(--c-surface))'
-    case 2:
-      return 'color-mix(in srgb, var(--a) 48%, var(--c-surface))'
-    case 3:
-      return 'color-mix(in srgb, var(--a) 72%, var(--c-surface))'
-    case 4:
-      return 'var(--a)'
-  }
+// ---- 主题联动热力等级类 ----
+function heatClass(level: 0 | 1 | 2 | 3 | 4): string {
+  return `ai-usage__heat--${level}`
 }
 
 // ---- 趋势堆叠柱图（Claude 风格） ----
@@ -321,7 +311,8 @@ const maxKindTokens = computed(() => {
 function showPopoverAtClientPoint(
   anchorRect: { left: number; top: number; width: number; height: number },
   title: string,
-  rows: { label: string; value: string }[]
+  rows: { label: string; value: string }[],
+  flipThreshold = 68
 ): void {
   const stage = stageRef.value
   if (!stage) return
@@ -333,7 +324,7 @@ function showPopoverAtClientPoint(
   const halfPopW = 92
   const clampedX = Math.min(Math.max(halfPopW, rawX), Math.max(halfPopW, stageRect.width - halfPopW))
   const caretOffsetPx = Math.min(Math.max(-68, rawX - clampedX), 68)
-  const flipped = rawTopY < 76
+  const flipped = rawTopY < flipThreshold
 
   popover.value = {
     leftPx: clampedX,
@@ -349,11 +340,16 @@ function onHeatHover(event: MouseEvent, cell: HeatCell): void {
   const el = event.currentTarget as Element | null
   if (!el) return
   const pt = cell.point
-  showPopoverAtClientPoint(el.getBoundingClientRect(), pt.date, [
-    { label: '总计', value: `${formatTokens(pt.totalTokens)} tokens` },
-    { label: '缓存命中', value: formatTokens(pt.cachedTokens) },
-    { label: '调用 · 费用', value: `${pt.calls} 次 · ¥${formatYuan(pt.estCostYuan)}` }
-  ])
+  showPopoverAtClientPoint(
+    el.getBoundingClientRect(),
+    pt.date,
+    [
+      { label: '总计', value: `${formatTokens(pt.totalTokens)} tokens` },
+      { label: '缓存命中', value: formatTokens(pt.cachedTokens) },
+      { label: '调用 · 费用', value: `${pt.calls} 次 · ¥${formatYuan(pt.estCostYuan)}` }
+    ],
+    -44
+  )
 }
 
 function onBarHover(event: MouseEvent, bar: StackedBarGeom): void {
@@ -501,8 +497,8 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
               :width="HEAT_CELL"
               :height="HEAT_CELL"
               rx="1.8"
-              :fill="heatFill(cell.level)"
               class="ai-usage__heat-cell"
+              :class="heatClass(cell.level)"
               @mouseenter="onHeatHover($event, cell)"
             />
           </svg>
@@ -514,7 +510,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
                 v-for="lv in ([0, 1, 2, 3, 4] as const)"
                 :key="lv"
                 class="ai-usage__legend-dot"
-                :style="{ background: heatFill(lv) }"
+                :class="heatClass(lv)"
               />
               <span>多</span>
             </div>
@@ -756,7 +752,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
   margin: 0;
   padding: 16px 0;
   font-size: 12px;
-  color: var(--t3);
+  color: var(--c-i-7F7494);
   text-align: center;
 }
 
@@ -780,7 +776,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 
 .ai-usage__kpi-label {
   font-size: 11px;
-  color: var(--t3);
+  color: var(--c-i-7F7494);
 }
 
 .ai-usage__kpi-val {
@@ -795,7 +791,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 
 .ai-usage__kpi-sub {
   font-size: 10.5px;
-  color: var(--t3);
+  color: var(--c-i-7F7494);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -833,8 +829,33 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
   stroke-width: 1;
 }
 
+.ai-usage__heat--0 {
+  fill: color-mix(in srgb, var(--c-i-9C90B3) 22%, transparent);
+  background: color-mix(in srgb, var(--c-i-9C90B3) 22%, transparent);
+}
+
+.ai-usage__heat--1 {
+  fill: color-mix(in srgb, var(--a) 26%, var(--c-surface));
+  background: color-mix(in srgb, var(--a) 26%, var(--c-surface));
+}
+
+.ai-usage__heat--2 {
+  fill: color-mix(in srgb, var(--a) 48%, var(--c-surface));
+  background: color-mix(in srgb, var(--a) 48%, var(--c-surface));
+}
+
+.ai-usage__heat--3 {
+  fill: color-mix(in srgb, var(--a) 72%, var(--c-surface));
+  background: color-mix(in srgb, var(--a) 72%, var(--c-surface));
+}
+
+.ai-usage__heat--4 {
+  fill: var(--a);
+  background: var(--a);
+}
+
 .ai-usage__svg-axis {
-  fill: var(--t3);
+  fill: var(--c-i-7F7494);
   font-size: 9px;
   font-variant-numeric: tabular-nums;
   user-select: none;
@@ -850,7 +871,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 
 .ai-usage__foot-meta {
   font-size: 11px;
-  color: var(--t3);
+  color: var(--c-i-7F7494);
   font-variant-numeric: tabular-nums;
 }
 
@@ -859,7 +880,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  color: var(--t3);
+  color: var(--c-i-7F7494);
 }
 
 .ai-usage__legend-dot {
@@ -895,8 +916,8 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 
 .ai-usage__swatch--out,
 .ai-usage__seg-out {
-  background: color-mix(in srgb, var(--a) 24%, var(--t2));
-  fill: color-mix(in srgb, var(--a) 24%, var(--t2));
+  background: color-mix(in srgb, var(--a) 28%, var(--c-i-7F7494));
+  fill: color-mix(in srgb, var(--a) 28%, var(--c-i-7F7494));
 }
 
 .ai-usage__subseg {
@@ -961,7 +982,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 }
 
 .ai-usage__radar-lbl {
-  fill: var(--t2);
+  fill: var(--c-i-5E5270);
   font-size: 9.5px;
   font-weight: 500;
 }
@@ -981,7 +1002,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 
 .ai-usage__kind-empty {
   font-size: 12px;
-  color: var(--t3);
+  color: var(--c-i-7F7494);
   text-align: center;
   padding: 18px 0;
 }
@@ -1002,14 +1023,14 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 
 .ai-usage__kind-name {
   font-size: 12px;
-  color: var(--t1);
+  color: var(--c-i-3B3047);
   font-weight: 500;
   white-space: nowrap;
 }
 
 .ai-usage__kind-meta {
   font-size: 11px;
-  color: var(--t3);
+  color: var(--c-i-7F7494);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1018,7 +1039,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 .ai-usage__kind-track {
   height: 5px;
   border-radius: 3px;
-  background: color-mix(in srgb, var(--t2) 10%, transparent);
+  background: color-mix(in srgb, var(--c-i-9C90B3) 20%, transparent);
   overflow: hidden;
 }
 
@@ -1039,7 +1060,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
   background: var(--look-pop-bg);
   backdrop-filter: var(--look-pop-blur);
   -webkit-backdrop-filter: var(--look-pop-blur);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.14);
+  box-shadow: 0 10px 24px rgba(var(--sh), 0.18);
   pointer-events: none;
   z-index: 20;
   display: flex;
@@ -1077,7 +1098,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
 .ai-usage__pop-title {
   font-size: 11px;
   font-weight: 600;
-  color: var(--t1);
+  color: var(--c-i-3B3047);
   border-bottom: 1px solid var(--settings-rule);
   padding-bottom: 3px;
   margin-bottom: 1px;
@@ -1089,7 +1110,7 @@ function onRadarHover(event: MouseEvent, axis: AiUsageRadarAxis, index: number):
   justify-content: space-between;
   gap: 10px;
   font-size: 11px;
-  color: var(--t2);
+  color: var(--c-i-5E5270);
 }
 
 .ai-usage__pop-row strong {
