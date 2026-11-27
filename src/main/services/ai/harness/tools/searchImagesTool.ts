@@ -8,7 +8,7 @@ import { defineTool, isToolError, parseToolJson, truncateLabel } from '../toolRe
 
 const BRIEF_MAX = 8
 const CLOSEST_TAGS_MAX = 6
-const NO_MATCH_HINT = '没有直接命中的图，可以看看这些相近标签，或换个说法再试。'
+const NO_MATCH_HINT = '没有直接命中的图，可以看看这些相近标签，或换个说法再试；如果还是 0 张，就用诺诺熟人拌嘴的大白话直接告诉用户，别用舞台腔。'
 
 const ORIENTATION_LABEL: Record<string, string> = {
   portrait: '竖图',
@@ -43,6 +43,7 @@ function formatSearchStart(args: Record<string, unknown>): string {
     push(ORIENTATION_LABEL[args.orientation])
   }
   if (args.recent === true) push('最近导入')
+  if (args.onlyR18 === true) push('R-18')
   if (parts.length < 2) push(args.semantic, 12)
 
   const summary = parts.slice(0, 3).join('、')
@@ -211,6 +212,10 @@ export const searchImagesTool = defineTool({
       },
       orientation: { type: 'string', enum: ['portrait', 'landscape', 'square'], description: '竖图、横图、方图' },
       recent: { type: 'boolean', description: '只要最近 30 天导入的' },
+      onlyR18: {
+        type: 'boolean',
+        description: '可选。仅在用户已开启“包含 R-18”且明确只想看 R-18 图片时设为 true；未开启“包含 R-18”时严禁设为 true。'
+      },
       browseScope: { type: 'boolean', description: '用户已选定某个类目录并想直接列出或浏览其中图片时设为 true。' },
       excludeShown: {
         type: 'boolean',
@@ -225,7 +230,7 @@ export const searchImagesTool = defineTool({
       answerFromResults: { type: 'boolean', description: '用户明确要求根据检索结果比较、解读或按指定格式回答时设为 true。只找图时省略。' },
       onMatch: {
         type: 'string',
-        description: '可选。确实找到图时随卡片说的一句简短回应，可以呼应用户语气、写个颜文字。不要提前描述图片、统计数量或复述条件。'
+        description: '可选。确实找到图时随卡片说的一句自然口语短句（像熟人拌嘴/小恶魔损两句，别用“本小姐”或舞台腔）。不要提前描述图片、统计数量或复述条件。'
       },
       semantic: { type: 'string', description: '一句话的画面描述，按画面相似度再找一路' },
       contrast: {
@@ -239,7 +244,23 @@ export const searchImagesTool = defineTool({
   async execute(rawArgs, env, state) {
     const pending = state.awaitingContrast
     const args = pending ? { ...pending, contrast: rawArgs.contrast } : rawArgs
-    const { spec, conds } = specFromArgs(args, env.tags, env.query)
+    if (args.onlyR18 === true && !env.includeR18) {
+      return {
+        content: JSON.stringify({
+          total: 0,
+          images: [],
+          r18SwitchOff: true,
+          hint: '当前未开启“包含 R-18”开关，看不到也不检索 R-18 图片；直接用诺诺口吻提醒用户先打开输入框下方的 R-18 开关就行，绝不编造任何 R-18 图片。'
+        }),
+        outcome: { type: 'none' }
+      }
+    }
+    const visibleTags = env.tags.filter((t) => env.includeR18 || t.general)
+    const { spec, conds } = specFromArgs(args, visibleTags, env.query)
+    if (args.onlyR18 === true && env.includeR18) {
+      spec.onlyR18 = true
+      conds.push(['分级', 'R-18'])
+    }
     const semanticText = typeof args.semantic === 'string' ? args.semantic.trim().slice(0, 100) : ''
     if (semanticText && !pending && !contrastDescriptions(semanticText, args.contrast).length) {
       return {
@@ -247,7 +268,7 @@ export const searchImagesTool = defineTool({
         outcome: { type: 'awaiting_contrast', args }
       }
     }
-    const semantic = await semanticVector(semanticText, args.contrast)
+    const semantic = spec.onlyR18 ? undefined : await semanticVector(semanticText, args.contrast)
     // 即使普通图可按向量检索，画面描述也要参与本地元数据匹配，覆盖无向量和 R-18 图片。
     if (semanticText && !spec.keywordGroups.length && !spec.visualInclude?.length) {
       spec.keywordGroups.push([semanticText.toLowerCase()])
@@ -261,7 +282,8 @@ export const searchImagesTool = defineTool({
       !!spec.visualExclude?.length ||
       !!spec.orientation ||
       !!spec.recent ||
-      !!spec.untagged
+      !!spec.untagged ||
+      !!spec.onlyR18
     const canBrowseScope = Boolean(env.selectedCategory) || (args.browseScope === true && Boolean(env.dirs?.length))
     if (!literal && !semantic && !canBrowseScope) {
       return {
@@ -274,8 +296,8 @@ export const searchImagesTool = defineTool({
       const allowed = new Set(env.modelReferences.map((ref) => ref.imageId))
       candidates = candidates ? candidates.filter((id) => allowed.has(id)) : [...allowed]
     }
-    const outcome = await runSearch(spec, env.dirs, env.includeR18, env.tags, semantic, candidates)
-    if (semanticText && !semantic && (await hasSearchableImage(env.dirs, false))) {
+    const outcome = await runSearch(spec, env.dirs, env.includeR18, visibleTags, semantic, candidates, env.includeOrganized)
+    if (semanticText && !semantic && (await hasSearchableImage(env.dirs, false, env.includeOrganized))) {
       outcome.incomplete ??= '画面相似度检索暂不可用'
     }
     const excludeSet = new Set<number>()
@@ -312,11 +334,11 @@ export const searchImagesTool = defineTool({
     const caption = ordinaryCardCaption(onMatch, outcome)
     const brief = (env.includeR18 ? outcome.imageIds : outcome.ordinaryIds).slice(0, BRIEF_MAX)
     const tagNames = await findTagNamesOf(brief)
-    const items = await itemsOfImages(brief, env.includeR18, env.dirs)
+    const items = await itemsOfImages(brief, env.includeR18, env.dirs, env.includeOrganized)
     const total = env.includeR18 ? outcome.imageIds.length : outcome.ordinaryIds.length
-    const scopeEmpty = total === 0 && !allAlreadyShown && !(await hasSearchableImage(env.dirs, env.includeR18))
+    const scopeEmpty = total === 0 && !allAlreadyShown && !(await hasSearchableImage(env.dirs, env.includeR18, env.includeOrganized))
     const closestTags = total === 0 && !allAlreadyShown && !scopeEmpty ? findClosestTags(args, env.tags, env.includeR18) : []
-    const scopeReason = scopeEmpty ? await emptyScopeText(env.dirs, env.includeR18) : undefined
+    const scopeReason = scopeEmpty ? await emptyScopeText(env.dirs, env.includeR18, env.includeOrganized) : undefined
     return {
       content: JSON.stringify({
         total,
@@ -333,7 +355,7 @@ export const searchImagesTool = defineTool({
           ? {
               scopeEmpty: true,
               scopeReason,
-              hint: '当前可检索范围为空（还没有已确认标签的类目录图片），不必反复换词重搜；请直接用诺诺温暖自然的语气告诉用户没找到的原因并温柔提示。'
+              hint: '当前可检索范围为空（还没有已确认标签的可用图片），不必反复换词重搜；直接用诺诺熟人斗嘴般的自然口语告诉用户原因并轻快提醒就行，别用舞台腔。'
             }
           : {}),
         ...(closestTags.length > 0 ? { closestTags, hint: NO_MATCH_HINT } : {})

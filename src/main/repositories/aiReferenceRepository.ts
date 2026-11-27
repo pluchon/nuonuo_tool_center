@@ -1,4 +1,4 @@
-import type { AiReferencePreview, DirKeyDTO } from '@shared/api'
+import type { AiReferencePreview, AiSearchScope, DirKeyDTO } from '@shared/api'
 import { BizError } from '../common/bizError'
 import { getDatabase } from '../db/client'
 
@@ -10,7 +10,7 @@ export interface ReferenceRecord {
 }
 
 export interface ReferenceScope {
-  scope?: DirKeyDTO | null
+  scope?: AiSearchScope | DirKeyDTO | null
   includeR18?: boolean
 }
 

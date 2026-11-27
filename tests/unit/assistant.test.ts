@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { AI_MARKDOWN_MAX_BYTES, type AiAskDTO, type AiReplyCacheUsage } from '../../src/shared/api'
 import { normalizeChatUsage } from '../../src/main/services/ai/usage'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
+import { PERSONA_FEW_SHOT_MESSAGES } from '../../src/main/services/ai/assistantPrompt'
 import { routeLocally, routeTagRequest, type DictDir, type DictTag } from '../../src/main/services/ai/localRouter'
 
 // 模型调用换成脚本：每次调用从队列里取一个预设的回复，并记下发出去的消息
@@ -232,7 +233,7 @@ describe('诺诺助手', () => {
     for (const text of ['猫娘', '有没有猫娘的图片']) {
       const q = await ask({ conversationId: null, text, scope: { kind: 'category', name: '空目录' }, includeR18: false })
       const reply = await answer(q.conversation.id)
-      expect(reply.text).toContain('归入类目录')
+      expect(reply.text).toContain('放进类目录')
       expect(reply.images).toEqual([])
       expect(reply.how).toBeNull()
     }
@@ -261,7 +262,7 @@ describe('诺诺助手', () => {
     expect((await listMessages(q.conversation.id)).map((m) => m.role)).toEqual(['user', 'assistant'])
     await ask({ conversationId: q.conversation.id, text: '解释文件的第一句', scope: null, includeR18: false })
     await answer(q.conversation.id)
-    expect((calls[1].messages[1] as { content: string }).content).toContain(attachment.text)
+    expect((calls[1].messages[1 + PERSONA_FEW_SHOT_MESSAGES.length] as { content: string }).content).toContain(attachment.text)
   })
 
   it('随 Markdown 提交的标签查询仍会将用户问题和文件正文一并传给模型', async () => {
@@ -352,16 +353,25 @@ describe('诺诺助手', () => {
     expect(toolMsg?.content).not.toContain('私房')
     expect(calls[0].tools).toEqual(calls[1].tools)
 
-    // 下一轮：历史保留诺诺实际说的话（不替换为模板文案），最后一条历史打了标记；前缀和上一轮一致
-    script.push({ content: '不客气呀~' })
+    // 下一轮：历史保留诺诺实际说的话（不替换为模板文案），最后一条历史打了标记；前缀（含少样本语气示范）与上一轮字节一致
+    script.push({ content: '哼，算你还有点眼光嘛～' })
     await ask({ conversationId: q.conversation.id, text: '谢谢诺诺', scope: null, includeR18: false })
     expect((await answer(q.conversation.id)).cacheUsage).toBeUndefined()
     const third = calls[2].messages as Array<{ role: string; content: unknown }>
-    expect(JSON.stringify(third[0])).toBe(JSON.stringify(firstMsgs[0]))
-    expect(third.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'system', 'user'])
-    expect(JSON.stringify(third[2].content)).toContain('ephemeral')
-    expect(JSON.stringify(third[2].content)).toContain('找到一张夜景，「甘雨夜景」。')
-    expect(JSON.stringify(third[2].content)).not.toMatch(/#2|给用户看了/)
+    const prefixLen = 1 + PERSONA_FEW_SHOT_MESSAGES.length
+    expect(JSON.stringify(third.slice(0, prefixLen))).toBe(JSON.stringify(firstMsgs.slice(0, prefixLen)))
+    expect(third.map((m) => m.role)).toEqual([
+      'system',
+      ...PERSONA_FEW_SHOT_MESSAGES.map((m) => m.role),
+      'user',
+      'assistant',
+      'system',
+      'user'
+    ])
+    const lastHistoryMsg = third[prefixLen + 1]
+    expect(JSON.stringify(lastHistoryMsg.content)).toContain('ephemeral')
+    expect(JSON.stringify(lastHistoryMsg.content)).toContain('找到一张夜景，「甘雨夜景」。')
+    expect(JSON.stringify(lastHistoryMsg.content)).not.toMatch(/#2|给用户看了/)
   })
 
   it('普通图和 R-18 命中均完整展示，历史按原开关和当前分级重新读取', async () => {

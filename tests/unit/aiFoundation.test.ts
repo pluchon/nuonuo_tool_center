@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { closeDatabase, getDatabase, openDatabase } from '../../src/main/db/client'
 import { aiEvent, aiJob, aiProfile, apiUsage } from '../../src/main/db/schema'
 import { findRecentUsage, insertApiUsage } from '../../src/main/repositories/apiUsageRepository'
-import { checkHitRate, searchCall } from '../../src/main/services/ai/bailianClient'
+import { checkHitRate, chatCall, getBailianClient, searchCall } from '../../src/main/services/ai/bailianClient'
 import { embed } from '../../src/main/services/ai/embeddingClient'
 import { EMBEDDING_CONFIG } from '../../src/main/config/cloudConfig'
 import { assertCacheMarks, buildMessages, countCacheMarks, markStepCache, stableStringify } from '../../src/main/services/ai/promptPrefix'
@@ -82,6 +82,24 @@ describe('四层前缀', () => {
   it('键序不同的对象序列化结果相同，数组顺序保留', () => {
     expect(stableStringify({ b: 1, a: { d: [2, 1], c: 0 } })).toBe(stableStringify({ a: { c: 0, d: [2, 1] }, b: 1 }))
     expect(stableStringify({ b: 1, a: 2 })).toBe('{"a":2,"b":1}')
+  })
+
+  it('带少样本示范时同时在 system 与示范末尾打标，且多步断点不超 4 个上限', () => {
+    const examples = [
+      { role: 'user' as const, content: '找图' },
+      { role: 'assistant' as const, content: '杂鱼真是拿你没办法' }
+    ]
+    const msgs = buildMessages({ rules: '规则', profile: '档案', examples, history, tail, cache: true })
+    expect(msgs.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user', 'assistant', 'user'])
+    expect(msgs[2].content).toEqual([{ type: 'text', text: '杂鱼真是拿你没办法', cache_control: { type: 'ephemeral' } }])
+    expect(msgs[4].content).toEqual([{ type: 'text', text: '找到 3 张', cache_control: { type: 'ephemeral' } }])
+    expect(countCacheMarks(msgs)).toBe(3)
+    const stepped = markStepCache([
+      ...msgs,
+      { role: 'assistant', content: '', tool_calls: [{ id: 't1' }] },
+      { role: 'tool', tool_call_id: 't1', content: '{"total":1}' }
+    ])
+    expect(countCacheMarks(stepped)).toBe(4)
   })
 })
 
@@ -268,6 +286,31 @@ describe('AI 表和记账', () => {
       expect(res.usage).toMatchObject({ inputTokens: 120, cachedTokens: 40, outputTokens: 18, searchCount: 1 })
     } finally {
       vi.unstubAllGlobals()
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('chatCall 默认角色对话自动启用 Qwen3 角色扮演采样参数（temperature / top_p / presence_penalty）', async () => {
+    vi.stubEnv('DASHSCOPE_API_KEY', 'fixture-sampling')
+    const spy = vi.spyOn(getBailianClient().chat.completions, 'create').mockResolvedValueOnce({
+      choices: [{ message: { role: 'assistant', content: '哼，才没有理你。' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 80, completion_tokens: 12 }
+    } as never)
+    try {
+      await chatCall({
+        kind: 'chat',
+        model: 'qwen3.8-flash',
+        messages: [{ role: 'user', content: '最喜欢你了' }],
+        enableThinking: false
+      })
+      expect(spy).toHaveBeenCalledTimes(1)
+      const payload = spy.mock.calls[0]?.[0] as unknown as Record<string, unknown>
+      expect(payload.temperature).toBe(0.88)
+      expect(payload.top_p).toBe(0.9)
+      expect(payload.presence_penalty).toBe(0.4)
+      expect(payload.enable_thinking).toBe(false)
+    } finally {
+      spy.mockRestore()
       vi.unstubAllEnvs()
     }
   })

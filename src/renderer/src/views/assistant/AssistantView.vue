@@ -112,7 +112,7 @@
                   <AttachmentCard v-for="file in m.attachments" :key="file.kind" :file="file" :message-id="m.id" />
                 </div>
                 <form v-if="editingId === m.id" class="assistant__edit" @submit.prevent="submitEdit(m.id)">
-                  <BubbleEditor v-model="editedText" class="assistant__bubble" @keydown.esc.stop="editingId = null" @keydown.ctrl.enter.prevent="submitEdit(m.id, $event)" />
+                  <BubbleEditor v-model="editedText" class="assistant__edit-box" @keydown.esc.stop="editingId = null" @keydown.ctrl.enter.prevent="submitEdit(m.id, $event)" />
                   <div class="assistant__edit-actions">
                     <button type="button" @click="editingId = null">取消</button>
                     <button type="submit" :disabled="store.changingTurn || store.waiting || (!editedText.trim() && !m.attachments?.length && !m.references?.length)">重新发送</button>
@@ -129,19 +129,23 @@
                 </div>
               </div>
               <article v-else class="assistant__reply">
-                <div v-if="m.how && !m.blocks?.some((b) => b.type === 'action')" class="assistant__how">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-3.5-3.5" /></svg>
+                <div v-if="m.how && !visibleTimelineBlocks(m.blocks).some((b) => b.type === 'action')" class="assistant__how">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-3.5-3.5" /></svg>
                   <span>{{ m.how }}</span>
                 </div>
-                <div v-if="m.blocks?.length" class="assistant__timeline">
-                  <template v-for="(block, idx) in m.blocks" :key="block.type === 'action' ? `${block.id}-${idx}` : `n-${idx}`">
+                <div v-if="visibleTimelineBlocks(m.blocks).length" class="assistant__timeline">
+                  <template v-for="(block, idx) in visibleTimelineBlocks(m.blocks)" :key="block.type === 'action' ? `${block.id}-${idx}` : `n-${idx}`">
                     <div v-if="block.type === 'action'" class="assistant__step" :class="`assistant__step--${block.status}`">
-                      <span class="assistant__step-icon" aria-hidden="true">
-                        <span v-if="block.status === 'running'" class="assistant__step-dot" />
-                        <svg v-else-if="block.status === 'done'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
-                        <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10M17 7L7 17" /></svg>
+                      <span class="assistant__step-kind" aria-hidden="true">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path :d="actionIconPath(block.tool)" /></svg>
                       </span>
-                      <span class="assistant__step-text" :class="{ 'nn-shine': block.status === 'running' }">{{ block.summary }}</span>
+                      <span class="assistant__step-text" :class="{ 'nn-shine': block.status === 'running' }">{{ splitActionSummary(block.summary).label }}</span>
+                      <span v-if="splitActionSummary(block.summary).meta" class="assistant__step-meta">{{ splitActionSummary(block.summary).meta }}</span>
+                      <span class="assistant__step-state" aria-hidden="true">
+                        <span v-if="block.status === 'running'" class="assistant__step-dot" />
+                        <svg v-else-if="block.status === 'done'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                        <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10M17 7L7 17" /></svg>
+                      </span>
                     </div>
                     <MarkdownBody v-else-if="block.text" class="assistant__narration" :text="block.text" />
                   </template>
@@ -222,19 +226,28 @@
                   <time class="assistant__time" :datetime="m.createdAt">{{ fmtDay(m.createdAt) }}</time>
                 </div>
               </article>
+              <div v-if="m.role === 'assistant' && m.compactedAfter" class="assistant__compacted-divider" role="separator" aria-label="上下文已压缩">
+                <span class="assistant__compacted-rule" aria-hidden="true" />
+                <span class="assistant__compacted-label">上下文已压缩</span>
+                <span class="assistant__compacted-rule assistant__compacted-rule--r" aria-hidden="true" />
+              </div>
             </template>
 
             <!-- 流式输出中的回复 -->
-            <article v-if="store.waiting && !store.compacting && (store.streamingBlocks.length || store.streamingText)" class="assistant__reply assistant__reply--streaming" aria-live="polite">
-              <div v-if="store.streamingBlocks.length" class="assistant__timeline">
-                <template v-for="(block, idx) in store.streamingBlocks" :key="block.type === 'action' ? `${block.id}-${idx}` : `sn-${idx}`">
+            <article v-if="store.waiting && !store.compacting && (visibleTimelineBlocks(store.streamingBlocks).length || store.streamingText)" class="assistant__reply assistant__reply--streaming" aria-live="polite">
+              <div v-if="visibleTimelineBlocks(store.streamingBlocks).length" class="assistant__timeline">
+                <template v-for="(block, idx) in visibleTimelineBlocks(store.streamingBlocks)" :key="block.type === 'action' ? `${block.id}-${idx}` : `sn-${idx}`">
                   <div v-if="block.type === 'action'" class="assistant__step" :class="`assistant__step--${block.status}`">
-                    <span class="assistant__step-icon" aria-hidden="true">
-                      <span v-if="block.status === 'running'" class="assistant__step-dot" />
-                      <svg v-else-if="block.status === 'done'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
-                      <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10M17 7L7 17" /></svg>
+                    <span class="assistant__step-kind" aria-hidden="true">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path :d="actionIconPath(block.tool)" /></svg>
                     </span>
-                    <span class="assistant__step-text" :class="{ 'nn-shine': block.status === 'running' }">{{ block.summary }}</span>
+                    <span class="assistant__step-text" :class="{ 'nn-shine': block.status === 'running' }">{{ splitActionSummary(block.summary).label }}</span>
+                    <span v-if="splitActionSummary(block.summary).meta" class="assistant__step-meta">{{ splitActionSummary(block.summary).meta }}</span>
+                    <span class="assistant__step-state" aria-hidden="true">
+                      <span v-if="block.status === 'running'" class="assistant__step-dot" />
+                      <svg v-else-if="block.status === 'done'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                      <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10M17 7L7 17" /></svg>
+                    </span>
                   </div>
                   <MarkdownBody v-else-if="block.text" class="assistant__narration" :text="block.text" />
                 </template>

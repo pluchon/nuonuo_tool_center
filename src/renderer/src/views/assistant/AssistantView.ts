@@ -23,6 +23,7 @@ import CategoryProposal from './CategoryProposal.vue'
 import { hasInteractiveModal } from '@/components/dialogs/modal'
 import { hasMarkdown, insideCodeFence } from './markdown'
 import { isMarkdownFile, readAttachment, readClipboardImage } from './readAttachment'
+import { actionIconPath, splitActionSummary, visibleTimelineBlocks } from '@/utils/actionDisplay'
 
 // 结果图的高度和宽度范围（宽度按原图比例）
 const PIC_H = 132
@@ -64,8 +65,9 @@ export default defineComponent({
     })
     const compactCommand = '/compact'
     const commandSelected = ref(false)
-    const hasCompactSuggestion = computed(() => !commandSelected.value && store.draft.startsWith('/') &&
-      compactCommand.startsWith(store.draft))
+    const hasCompactSuggestion = computed(
+      () => !commandSelected.value && store.draft.startsWith('/') && store.draft.trim() !== compactCommand && compactCommand.startsWith(store.draft)
+    )
     const showCompact = computed(() => store.compacting || hasCompactSuggestion.value)
     watch(() => store.draft, draft => {
       if (draft !== compactCommand) commandSelected.value = false
@@ -73,8 +75,9 @@ export default defineComponent({
     watch(() => store.currentId, () => { commandSelected.value = false })
     const selectCompact = (): void => {
       if (store.compacting || store.waiting || store.changingTurn) return
-      store.draft = compactCommand
       commandSelected.value = true
+      store.draft = ''
+      void store.compact()
       inputRef.value?.focus()
     }
     onBeforeUnmount(onAiCompaction((id, active) => {
@@ -135,20 +138,25 @@ export default defineComponent({
     const hasRunningAction = computed(() => store.streamingBlocks.some((b) => b.type === 'action' && b.status === 'running'))
     const ctxPinned = computed(() => store.conversations.find((c) => c.id === ctx.value?.id)?.pinned ?? false)
 
-    // 范围下拉：全部类目录及可单独选择的类目录
+    // 范围下拉：全部类目录与已整理图片、全部类目录，以及可单独选择的类目录
     const dirOptions = computed<DirOption[]>(() => {
       const ov = library.overview
-      const out: DirOption[] = [{ key: 'all', head: false, label: '全部类目录', icon: ICON.img, ink: 'var(--a)', on: store.scope === null, scope: null }]
+      const out: DirOption[] = [
+        { key: 'organized', head: false, label: '全部类目录与已整理图片', icon: ICON.spark, ink: 'var(--a)', on: store.scope?.kind === 'organized', scope: { kind: 'organized' } },
+        { key: 'all', head: false, label: '全部类目录', icon: ICON.img, ink: 'var(--a)', on: store.scope === null, scope: null }
+      ]
       if (ov?.categories.length) {
         out.push({ key: 'h-cat', head: true, label: '类目录' })
         for (const c of ov.categories) {
           const scope: AiSearchScope = { kind: 'category', name: c.name }
-          out.push({ key: `c${c.name}`, head: false, label: c.name, icon: ICON.heartFolder, ink: 'var(--c-i-C25B85)', on: store.scope?.name === c.name, scope })
+          out.push({ key: `c${c.name}`, head: false, label: c.name, icon: ICON.heartFolder, ink: 'var(--c-i-C25B85)', on: store.scope?.kind === 'category' && store.scope.name === c.name, scope })
         }
       }
       return out
     })
-    const scopeLabel = computed(() => store.scope?.name ?? '全部类目录')
+    const scopeLabel = computed(() =>
+      store.scope?.kind === 'organized' ? '全部类目录与已整理图片' : store.scope?.kind === 'category' ? store.scope.name : '全部类目录'
+    )
     watch(
       () => library.overview?.categories,
       (categories) => {
@@ -337,6 +345,10 @@ export default defineComponent({
 
     function submitComposer() {
       if (reading.value) return
+      if (store.draft.trim() === compactCommand) {
+        void store.compact()
+        return
+      }
       if (store.waiting) {
         store.enqueueCurrent()
         return
@@ -490,7 +502,11 @@ export default defineComponent({
     // 复制回复的文字
     const copyText = async (m: AiMessageVO): Promise<void> => {
       try {
-        await navigator.clipboard.writeText(m.text || m.how || '')
+        const parts = [
+          ...(m.blocks ?? []).flatMap((b) => (b.type === 'narration' && b.text.trim() ? [b.text.trim()] : [])),
+          ...(m.text?.trim() ? [m.text.trim()] : [])
+        ]
+        await navigator.clipboard.writeText(parts.join('\n\n') || m.how || '')
         copied.value = m.id
         if (copiedTimer) {
           clearTimeout(copiedTimer)
@@ -621,7 +637,10 @@ export default defineComponent({
       pick,
       dragOut,
       openViewer,
-      copyText
+      copyText,
+      actionIconPath,
+      splitActionSummary,
+      visibleTimelineBlocks
     }
   }
 })

@@ -51,6 +51,7 @@ export interface ChatCallInput extends CallMeta {
   timeoutMs?: number
   maxTokens?: number
   temperature?: number
+  topP?: number
   presencePenalty?: number
   parallelToolCalls?: boolean
   enableThinking?: boolean
@@ -139,8 +140,9 @@ export async function chatCall(input: ChatCallInput): Promise<ChatCallResult> {
   const t0 = Date.now()
   try {
     const defaultChatSampling = input.kind === 'chat' && !input.requiredTool && !input.enableThinking
-    const temperature = input.temperature ?? (defaultChatSampling ? 0.78 : undefined)
-    const presencePenalty = input.presencePenalty ?? (defaultChatSampling ? 0.25 : undefined)
+    const temperature = input.temperature ?? (defaultChatSampling ? 0.88 : undefined)
+    const topP = input.topP ?? (defaultChatSampling ? 0.9 : undefined)
+    const presencePenalty = input.presencePenalty ?? (defaultChatSampling ? 0.4 : undefined)
     const body = {
       model: input.model,
       messages: input.messages,
@@ -153,6 +155,7 @@ export async function chatCall(input: ChatCallInput): Promise<ChatCallResult> {
       ...(input.requiredTool ? { tool_choice: { type: 'function', function: { name: input.requiredTool } } } : {}),
       ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
       ...(temperature !== undefined ? { temperature } : {}),
+      ...(topP !== undefined ? { top_p: topP } : {}),
       ...(presencePenalty !== undefined ? { presence_penalty: presencePenalty } : {}),
       // 百炼扩展参数放在顶层
       enable_thinking: input.enableThinking === true,

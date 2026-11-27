@@ -11,6 +11,7 @@ export interface ReadCacheOptions {
 let libraryVersion = 1
 const galleryCache = new Map<string, GalleryListVO>()
 let overviewCache: { version: number; cachedAt: number; value: LibraryOverviewVO } | null = null
+const dictionaryCache = new Map<'category' | 'organized', unknown>()
 
 function isDisabled(options?: ReadCacheOptions): boolean {
   return Boolean(process.env.VITEST) && !options?.bypassVitest
@@ -40,6 +41,7 @@ export function bumpLibraryVersion(): number {
   libraryVersion += 1
   galleryCache.clear()
   overviewCache = null
+  dictionaryCache.clear()
   return libraryVersion
 }
 
@@ -92,4 +94,16 @@ export function setCachedOverview(value: LibraryOverviewVO, options?: ReadCacheO
     cachedAt: options?.now ?? Date.now(),
     value
   }
+}
+
+/** 读取版本化检索词典缓存。 */
+export function getCachedDictionary<T>(includeOrganized: boolean, options?: ReadCacheOptions): T | undefined {
+  if (isDisabled(options)) return undefined
+  return dictionaryCache.get(includeOrganized ? 'organized' : 'category') as T | undefined
+}
+
+/** 写入版本化检索词典缓存。 */
+export function setCachedDictionary<T>(includeOrganized: boolean, value: T, options?: ReadCacheOptions): void {
+  if (isDisabled(options)) return
+  dictionaryCache.set(includeOrganized ? 'organized' : 'category', value)
 }

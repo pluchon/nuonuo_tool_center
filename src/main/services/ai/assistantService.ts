@@ -9,6 +9,7 @@ import {
   type AiMessageVO,
   type AiRecalledDraft,
   type AiReplyCacheUsage,
+  type AiSearchScope,
   type AiStatusVO,
   type AiStreamEvent,
   type DirKeyDTO,
@@ -32,6 +33,7 @@ import {
 } from '../../repositories/aiConversationRepository'
 import { cachedSearchValue, searchCacheKey } from '../../repositories/aiSearchCacheRepository'
 import { hasSearchableImage, visibleResultIds } from '../../repositories/aiSearchRepository'
+import { findLookInfo } from '../../repositories/aiResultRepository'
 import { itemsOfImages } from '../galleryService'
 import { checkAttachments, type StoredAttachment } from './assistantAttachment'
 import { cardCaption } from './assistantPrompt'
@@ -40,13 +42,15 @@ import {
   conversationFocus,
   ordinaryReferenceDetails,
   referencedHistory,
-  scopeDirs,
+  scopeQuery,
   visibleReferenceResults
 } from './assistantReferences'
 import { chatCall } from './bailianClient'
 import { classifyCloudError } from './cloudErrors'
-import { workingHistory, type CompactionProgress } from './conversationCompaction'
+import { workingHistory, summaryMessages, type CompactionProgress } from './conversationCompaction'
+import { getEmbeddingThumbsDir } from './embeddingService'
 import { recordEvent } from './eventService'
+import { prepareImage } from './imagePrep'
 import { estimateCompactedUsage, historyTurns } from './harness/context'
 import { requestedSearch, tryFastPath } from './harness/fastPath'
 import { isCloudReady, runAgentLoop, runVisionTurn } from './harness/harness'
@@ -143,8 +147,8 @@ export async function listMessages(conversationId: number): Promise<AiMessageVO[
   if (!conversation) throw new BizError('NOT_FOUND', '这段对话已经不在了')
   const rows = (await findMessages(conversationId)).filter((m) => m.role !== 'TOOL')
   // 同一目录的历史消息共用一次查询，每轮仍按当时的目录和 R-18 开关恢复卡片。
-  const batches = new Map<string, { scope: DirKeyDTO | null; ids: Set<number>; includeR18: boolean; items: Map<number, GalleryItemVO> }>()
-  let scope: DirKeyDTO | null = null
+  const batches = new Map<string, { scope: AiSearchScope | DirKeyDTO | null; ids: Set<number>; includeR18: boolean; items: Map<number, GalleryItemVO> }>()
+  let scope: AiSearchScope | DirKeyDTO | null = null
   let includeR18 = false
   const messages = rows.map((row) => {
     if (row.role === 'USER') {
@@ -163,7 +167,8 @@ export async function listMessages(conversationId: number): Promise<AiMessageVO[
   })
   for (const batch of batches.values()) {
     if (!batch.ids.size || batch.scope?.kind === 'source') continue
-    const items = await itemsOfImages([...batch.ids], batch.includeR18, await scopeDirs(batch.scope))
+    const { dirs, includeOrganized } = await scopeQuery(batch.scope)
+    const items = await itemsOfImages([...batch.ids], batch.includeR18, dirs, includeOrganized)
     for (const item of items) batch.items.set(item.imageId, item)
   }
   const result = messages.map(({ row, ids, batch, includeR18: rowIncludeR18 }) => {
@@ -175,17 +180,24 @@ export async function listMessages(conversationId: number): Promise<AiMessageVO[
     return toMessageVO(row, images)
   })
   const compactions = new Map((await findCompactionsByConversation(conversationId)).map((c) => [c.upToMessageId, c.summary]))
+  for (const vo of result) {
+    if (vo.role === 'assistant' && compactions.has(vo.id)) {
+      vo.compactedAfter = true
+    }
+  }
   const latest = rows.findLastIndex(
-    (row) => row.role === 'ASSISTANT' && Boolean(compactions.get(row.id) || (row.content as AssistantContent).compactSummary || (row.content as AssistantContent).contextUsage)
+    (row) => row.role === 'ASSISTANT' && Boolean(compactions.get(row.id) || (row.content as AssistantContent).compactSummary)
   )
   const summary = latest >= 0 ? compactions.get(rows[latest].id) ?? (rows[latest].content as AssistantContent).compactSummary : undefined
   if (summary) {
     const { turns: tail } = await historyTurns(rows.slice(latest + 1))
-    const lastReply = result.findLast((m) => m.role === 'assistant')!
-    lastReply.contextUsage = await estimateCompactedUsage(conversation, [
-      ...[{ role: 'user' as const, content: '[软件记录] 以下是前文摘要，供继续对话时参考。' }, { role: 'assistant' as const, content: summary }],
-      ...tail.flatMap((t) => t.messages)
-    ])
+    const lastReply = result.findLast((m) => m.role === 'assistant')
+    if (lastReply && (lastReply.id <= rows[latest].id || !lastReply.contextUsage)) {
+      lastReply.contextUsage = await estimateCompactedUsage(conversation, [
+        ...summaryMessages(summary),
+        ...tail.flatMap((t) => t.messages)
+      ])
+    }
   }
   return result
 }
@@ -196,10 +208,11 @@ function checkId(id: unknown): asserts id is number {
   }
 }
 
-function checkScope(scope: unknown): DirKeyDTO | null {
+function checkScope(scope: unknown): AiSearchScope | null {
   if (scope === null || scope === undefined) return null
-  const s = scope as DirKeyDTO
-  if (s.kind === 'source') throw new BizError('BAD_REQUEST', '诺诺助手只能检索类目录')
+  const s = scope as AiSearchScope | DirKeyDTO
+  if (s.kind === 'organized') return { kind: 'organized' }
+  if (s.kind === 'source') throw new BizError('BAD_REQUEST', '诺诺助手只能检索类目录或已整理图片')
   if (s.kind === 'category' && typeof s.name === 'string') {
     const normalized = s.name.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
     const parts = normalized.split('/').filter(Boolean)
@@ -234,7 +247,7 @@ function recalledDraft(row: AiMessageEntity): AiRecalledDraft {
     text: content.text,
     attachments: toMessageVO(row).attachments ?? [],
     references: content.references ?? [],
-    scope: content.scope?.kind === 'category' ? content.scope : null,
+    scope: content.scope?.kind === 'category' || content.scope?.kind === 'organized' ? content.scope : null,
     includeR18: content.includeR18 === true
   }
 }
@@ -344,7 +357,7 @@ async function standalonePlanKey(
   }
   const memories = await relevantMemories(u.text)
   return searchCacheKey('search-plan-v2', [
-    BAILIAN_CONFIG.chatModel,
+    BAILIAN_CONFIG.assistantChatModel,
     u.text.trim(),
     context,
     u.scope,
@@ -359,8 +372,8 @@ export async function compactConversation(id: number): Promise<AiCompactResult> 
   return changeConversation(id, async (conversation) => {
     const { turns } = await historyTurns(await findMessages(id))
     const { changed, messages } = await workingHistory(turns, 0, true)
-    const last = turns.at(-1)
-    const checkpoint = last?.summary ? { messageId: last.id, usage: await estimateCompactedUsage(conversation, messages) } : null
+    const lastCompacted = turns.findLast((t) => Boolean(t.summary))
+    const checkpoint = lastCompacted ? { messageId: lastCompacted.id, usage: await estimateCompactedUsage(conversation, messages) } : null
     return { changed, checkpoint }
   })
 }
@@ -407,12 +420,12 @@ export async function answer(
     const u = user.content as UserContent
     const attachments = attachmentsOf(u)
     const history = rows.slice(0, -1)
-    const dirs = await scopeDirs(u.scope)
+    const { dirs, includeOrganized } = await scopeQuery(u.scope)
     const scopeName = u.scope?.kind === 'category' ? u.scope.name : null
     const scopeConds: Array<[string, string]> = scopeName ? [['范围', scopeName]] : []
 
     const visibleForTurn = async (ids: number[], source?: number) => {
-      if (source === undefined) return visibleResultIds(ids, u.includeR18, await scopeDirs(u.scope))
+      if (source === undefined) return visibleResultIds(ids, u.includeR18, dirs, includeOrganized)
       const origin = rows.findLast((r) => r.id < source && r.role === 'USER')?.content as UserContent | undefined
       return visibleReferenceResults(ids, origin ?? {}, u)
     }
@@ -424,12 +437,13 @@ export async function answer(
       return result
     }
 
-    const dict = await loadDictionary()
+    const dict = await loadDictionary(includeOrganized)
     const fast = await tryFastPath({
       user,
       history,
       attachments,
       dirs,
+      includeOrganized,
       scopeName,
       scopeConds,
       dict,
@@ -481,11 +495,32 @@ export async function answer(
         const visibleIds = await visibleForTurn(shownIdOrder)
         const visibleOrdered = shownIdOrder.filter((id) => visibleIds.has(id))
         if (visibleOrdered.length > 0) {
-          const ordinaryItems = await itemsOfImages(visibleOrdered, false, dirs)
+          const ordinaryItems = await itemsOfImages(visibleOrdered, false, dirs, includeOrganized)
           const nameById = new Map(ordinaryItems.map((item) => [item.imageId, item.name]))
           shownImages = visibleOrdered.map((id) => ({ id, name: nameById.get(id) ?? null }))
         }
       }
+      let referenceImageUrls: string[] | undefined
+      if (u.references?.length && fast.reference?.modelReferences?.length) {
+        const refImages = await Promise.all(
+          fast.reference.modelReferences.slice(0, 4).map(async (ref) => {
+            const info = await findLookInfo(ref.imageId).catch(() => undefined)
+            // 严格遵守上云闸门：仅非 R-18 且已过分级放行的图片才能附带像素给云端
+            if (!info || !info.cloudAllowed) return null
+            return prepareImage(info, getEmbeddingThumbsDir(), 512).catch(() => null)
+          })
+        )
+        const urls = refImages.filter((url): url is string => typeof url === 'string' && url.length > 0)
+        if (urls.length > 0) referenceImageUrls = urls
+      }
+      const rawReferenceNote = fast.reference?.modelNote ?? focusNote
+      const referenceNotes =
+        referenceImageUrls?.length && rawReferenceNote?.startsWith('本轮图库引用的本地记录（仅元数据）：')
+          ? rawReferenceNote.replace(
+              '本轮图库引用的本地记录（仅元数据）：',
+              '本轮用户随消息发来的图库图片（非 R-18 图片画面已直接附在本条消息中，可直接结合画面回答；R-18 仅含元数据）：'
+            )
+          : rawReferenceNote
       const env: ToolEnv = {
         userText: u.text,
         query: fast.query,
@@ -493,6 +528,7 @@ export async function answer(
         compactionProgress,
         tags: dict.tags,
         dirs,
+        includeOrganized,
         selectedCategory: scopeName ?? undefined,
         includeR18: u.includeR18,
         userMessageId: user.id,
@@ -509,7 +545,8 @@ export async function answer(
           const chosen = refs.length ? refs : referencedHistory(history)
           return ordinaryReferenceDetails(chosen, visibleForTurn, !u.references?.length && !!u.scope, u.includeR18)
         },
-        referenceNotes: fast.reference?.modelNote ?? focusNote,
+        referenceNotes,
+        ...(referenceImageUrls ? { referenceImageUrls } : {}),
         modelReferences: fast.reference?.modelReferences
       }
 
@@ -531,7 +568,7 @@ export async function answer(
         }
         if (image) {
           // 上传图像在本地完成分级闸门校验后再检查云端密钥，避免受限图片在离线时被误放行。
-          const vision = await runVisionTurn(turns, user, env, stateRef, async (req) => {
+          const vision = await runVisionTurn(conversation, turns, history, user, env, stateRef, scopeName, async (req) => {
             if (!isCloudReady()) throw new BizError('DEPENDENCY_FAILED', '诺诺还没连上云端')
             return callModel(req)
           }, image, onStream)
@@ -548,7 +585,8 @@ export async function answer(
               u.includeR18,
               dict.tags,
               undefined,
-              fast.candidateIds
+              fast.candidateIds,
+              includeOrganized
             )
             outcome.incomplete = '目前仅完成本地文字检索'
             stateRef.current = {
@@ -651,9 +689,9 @@ export async function answer(
             : {}),
           memoryIds: state.memoryIds ?? []
         }
-        if (outcome && !found && !allAlreadyShown && !(await hasSearchableImage(dirs, u.includeR18))) {
+        if (outcome && !found && !allAlreadyShown && !(await hasSearchableImage(dirs, u.includeR18, includeOrganized))) {
           if (!content.text.trim() || content.text === localReplyText(0) || content.text === '诺诺没想好怎么回答，换个说法再问一次吧。') {
-            content.text = await emptyScopeText(dirs, u.includeR18)
+            content.text = await emptyScopeText(dirs, u.includeR18, includeOrganized)
           }
           content.how = null
           content.incomplete = undefined
@@ -687,7 +725,7 @@ export async function answer(
       content.cardCaption = true
     }
     const saved = await insertMessage(conversationId, 'ASSISTANT', content)
-    return toMessageVO(saved, await itemsOfImages(content.imageIds, u.includeR18, dirs))
+    return toMessageVO(saved, await itemsOfImages(content.imageIds, u.includeR18, dirs, includeOrganized))
   } finally {
     activeAnswers.delete(conversationId)
     resolveDone()
@@ -736,7 +774,7 @@ export function isAnswering(): boolean {
 }
 
 export async function suggestIdeas(random: () => number = Math.random): Promise<string[]> {
-  const dict = await loadDictionary()
+  const dict = await loadDictionary(true)
   const pool = (category: string): string[] => dict.tags.filter((t) => t.category === category && t.general).map((t) => t.name)
   const character = pool('角色')
   const work = pool('作品')

@@ -127,6 +127,7 @@
             :disabled="singleBusy"
             @click="resetSingle"
           >回归源目录</button>
+          <span class="detail-panel__ai-sep" aria-hidden="true" />
           <button
             class="detail-panel__ai-btn detail-panel__ai-btn--main"
             type="button"

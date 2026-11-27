@@ -4,8 +4,9 @@ import { AI_CREDENTIAL_KEYS, type AiCredentialKey } from '@shared/settings'
 export const BAILIAN_CONFIG = {
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   visionSearchModel: 'qwen3.8-flash',
-  // 对话、看图（多模态，base64 传图已实测可用）、做梦共用 flash，前缀才能共用缓存
+  // 看图、整理、精简等共用 qwen3.8-flash；诺诺主对话使用更口语自然的 deepseek-v4.1-flash-1017
   chatModel: 'qwen3.8-flash',
+  assistantChatModel: 'deepseek-v4.1-flash-1017',
   requestTimeoutMs: 300_000,
   // 对话单次超时；看图和以图搜图用 requestTimeoutMs
   chatTimeoutMs: 60_000
@@ -27,6 +28,13 @@ export const MODEL_PRICING = {
   batchDiscount: 0.5,
   webSearchPerCallYuan: 0.004,
   embedInputPerMillionYuan: 0.7
+} as const
+
+// DeepSeek-V4.1-Flash-1017 忙时基准单价（人民币/百万 token）
+export const DEEPSEEK_FLASH_PRICING = {
+  inputPerMillionYuan: 0.283,
+  outputPerMillionYuan: 1.131,
+  cachedInputDiscount: 0.2
 } as const
 
 // 一键整理开始前的费用估算：按每张输入 2300、输出 300 Token 估算，实时按一次联网搜索估算，批量按半价估算

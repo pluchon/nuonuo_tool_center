@@ -4,6 +4,7 @@ import type {
   AiImageReference,
   AiMemoryNotice,
   AiReplyCacheUsage,
+  AiSearchScope,
   AiTimelineBlock,
   DirKeyDTO
 } from '@shared/api'
@@ -23,7 +24,7 @@ export interface UserContent {
   references?: AiImageReference[]
   preparedProposalId?: number
   text: string
-  scope: DirKeyDTO | null
+  scope: AiSearchScope | DirKeyDTO | null
   includeR18: boolean
   attachments?: StoredAttachment[]
   attachment?: AiAttachment
@@ -96,7 +97,7 @@ export function directoryFeedback(error: unknown): { text: string } {
 export interface PreviousSearchState {
   ids: number[]
   includeR18: boolean
-  scope: DirKeyDTO | null
+  scope: AiSearchScope | DirKeyDTO | null
   evidence?: MatchEvidence
   incomplete?: string
 }
@@ -109,6 +110,7 @@ export interface ToolEnv {
   compactionProgress?: CompactionProgress
   tags: Array<DictTag & { general: boolean }>
   dirs: Array<{ rootId: number; prefix: string }> | undefined
+  includeOrganized: boolean
   selectedCategory?: string
   includeR18: boolean
   userMessageId: number
@@ -117,6 +119,7 @@ export interface ToolEnv {
   previousProposal?: { id: number; messageId: number }
   previousResults?: PreviousSearchState
   referenceNotes?: string
+  referenceImageUrls?: string[]
   preferenceIds?: number[]
   shownImages?: Array<{ id: number; name: string | null }>
   signal?: AbortSignal
@@ -181,7 +184,40 @@ export function createInitialHarnessState(hasInputContext: boolean, hasReference
   }
 }
 
-export function reduceToolOutcome(state: HarnessState, toolName: string, outcome?: ToolOutcome): HarnessState {
+function mergeSearchResult(
+  prev: NonNullable<HarnessState['lastSearch']>,
+  nextOutcome: SearchOutcome,
+  nextConds: CondLabel[],
+  nextCaption?: string
+): NonNullable<HarnessState['lastSearch']> {
+  const imageIds = [...new Set([...prev.outcome.imageIds, ...nextOutcome.imageIds])]
+  const ordinaryIds = [...new Set([...prev.outcome.ordinaryIds, ...nextOutcome.ordinaryIds])]
+  const tagConditions = [...new Set([...(prev.outcome.evidence.tagConditions ?? []), ...(nextOutcome.evidence.tagConditions ?? [])])]
+  const conds: CondLabel[] = [...prev.conds]
+  for (const [k, v] of nextConds) {
+    if (!conds.some(([ek, ev]) => ek === k && ev === v)) conds.push([k, v])
+  }
+  return {
+    outcome: {
+      imageIds,
+      ordinaryIds,
+      evidence: {
+        methods: { ...nextOutcome.evidence.methods, ...prev.outcome.evidence.methods },
+        tagConditions
+      },
+      incomplete: prev.outcome.incomplete || nextOutcome.incomplete
+    },
+    conds,
+    caption: prev.caption || nextCaption
+  }
+}
+
+export function reduceToolOutcome(
+  state: HarnessState,
+  toolName: string,
+  outcome?: ToolOutcome,
+  options?: { mergeSearch?: boolean }
+): HarnessState {
   const next: HarnessState = {
     ...state,
     otherToolUsed: state.otherToolUsed || toolName !== 'search_images'
@@ -209,11 +245,19 @@ export function reduceToolOutcome(state: HarnessState, toolName: string, outcome
     return { ...next, awaitingContrast: outcome.args }
   }
   if (outcome.type === 'search') {
+    const prevHasHits = Boolean(state.lastSearch && state.lastSearch.outcome.imageIds.length > 0)
+    const nextHasHits = outcome.outcome.imageIds.length > 0
+    const lastSearch =
+      !nextHasHits && prevHasHits
+        ? state.lastSearch!
+        : options?.mergeSearch && prevHasHits && nextHasHits
+          ? mergeSearchResult(state.lastSearch!, outcome.outcome, outcome.conds, outcome.caption)
+          : { outcome: outcome.outcome, conds: outcome.conds, caption: outcome.caption }
     return {
       ...next,
       otherToolUsed: next.otherToolUsed || state.lastSearch !== null,
       awaitingContrast: undefined,
-      lastSearch: { outcome: outcome.outcome, conds: outcome.conds, caption: outcome.caption },
+      lastSearch,
       needsDetails: state.needsDetails || outcome.needsDetails,
       cacheablePlan: outcome.cacheablePlan ?? state.cacheablePlan
     }

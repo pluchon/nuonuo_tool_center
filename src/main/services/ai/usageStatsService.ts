@@ -7,7 +7,22 @@ import {
   type AiUsageStatsVO,
   type ApiKind
 } from '../../../shared/api'
-import { AI_SETTING_KEYS, MODEL_PRICING } from '../../config/cloudConfig'
+import { AI_SETTING_KEYS, DEEPSEEK_FLASH_PRICING, MODEL_PRICING } from '../../config/cloudConfig'
+
+function chatRatesForModel(model: string | null | undefined): {
+  inputPerMillionYuan: number
+  outputPerMillionYuan: number
+  cachedInputDiscount: number
+} {
+  if (/^deepseek-v4\.1-flash/i.test(model ?? '')) {
+    return DEEPSEEK_FLASH_PRICING
+  }
+  return {
+    inputPerMillionYuan: MODEL_PRICING.chatInputPerMillionYuan,
+    outputPerMillionYuan: MODEL_PRICING.chatOutputPerMillionYuan,
+    cachedInputDiscount: MODEL_PRICING.cachedInputDiscount
+  }
+}
 import { findAllActiveApiUsage, type ActiveApiUsageRow } from '../../repositories/apiUsageRepository'
 import { readSetting } from '../../repositories/appSettingRepository'
 
@@ -85,19 +100,15 @@ function evaluateRow(row: ActiveApiUsageRow): RowMetrics {
     if (!hasActivity && fallbackEstCost > 0) {
       actualCost = fallbackEstCost
     } else {
+      const rates = chatRatesForModel(row.model)
       const discount = row.batch ? MODEL_PRICING.batchDiscount : 1
-      const discountedInput = freshInputTokens + cachedTokens * MODEL_PRICING.cachedInputDiscount
+      const discountedInput = freshInputTokens + cachedTokens * rates.cachedInputDiscount
       const tokenCost =
-        (discountedInput * MODEL_PRICING.chatInputPerMillionYuan +
-          outputTokens * MODEL_PRICING.chatOutputPerMillionYuan) /
-        ONE_MILLION
+        (discountedInput * rates.inputPerMillionYuan + outputTokens * rates.outputPerMillionYuan) / ONE_MILLION
       const searchCost = searchCount * MODEL_PRICING.webSearchPerCallYuan
       actualCost = tokenCost * discount + searchCost
       const fullCost =
-        (inputTokens * MODEL_PRICING.chatInputPerMillionYuan +
-          outputTokens * MODEL_PRICING.chatOutputPerMillionYuan) /
-          ONE_MILLION +
-        searchCost
+        (inputTokens * rates.inputPerMillionYuan + outputTokens * rates.outputPerMillionYuan) / ONE_MILLION + searchCost
       savedCost = Math.max(0, fullCost - actualCost)
     }
   }

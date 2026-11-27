@@ -94,8 +94,8 @@ export const useAssistantStore = defineStore('assistant', {
     recalledMessageId: null as number | null,
     draftsByChat: new Map<number | null, ComposerDraft>(),
     changingTurn: false,
-    // 在哪里找：空表示全部图库
-    scope: null as AiSearchScope | null,
+    // 在哪里找：默认包含全部类目录与已整理图片
+    scope: { kind: 'organized' } as AiSearchScope | null,
     includeR18: false,
     // 正在等回复
     waiting: false,
@@ -269,8 +269,12 @@ export const useAssistantStore = defineStore('assistant', {
         const reply = await compactConversation(this.currentId)
         const checkpoint = reply.checkpoint
         if (checkpoint) {
-          const message = this.messages.find(m => m.id === checkpoint.messageId)
-          if (message) message.contextUsage = checkpoint.usage
+          const message = this.messages.find((m) => m.id === checkpoint.messageId)
+          if (message) {
+            message.contextUsage = checkpoint.usage
+            if (reply.changed) message.compactedAfter = true
+            this.messages = [...this.messages]
+          }
         }
         if (this.draft.trim() === '/compact') this.draft = ''
         useToastStore().show(reply.changed ? '已精简对话上下文' : '没有新的对话需要精简')
@@ -515,6 +519,7 @@ export const useAssistantStore = defineStore('assistant', {
         this.streamingBlocks = [...this.streamingBlocks, { type: 'narration', text: ev.text ?? '' }]
         this.streamingText = ''
       } else if (ev.kind === 'action_start') {
+        this.streamingText = ''
         this.streamingBlocks = [
           ...this.streamingBlocks,
           { type: 'action', id: ev.actionId ?? '', tool: ev.tool ?? '', summary: ev.summary ?? ev.text ?? '', status: 'running' }
@@ -532,6 +537,13 @@ export const useAssistantStore = defineStore('assistant', {
         }
       } else if (ev.kind === 'memory_notice') {
         this.streamingMemoryNotice = ev.memoryNotice ?? null
+      } else if (ev.kind === 'clear_stream') {
+        this.streamingText = ''
+      } else if (ev.kind === 'compacted') {
+        if (ev.messageId) {
+          const target = this.messages.find((m) => m.id === ev.messageId)
+          if (target) target.compactedAfter = true
+        }
       } else if (ev.kind === 'reset') {
         this.streamingText = ''
         this.streamingStatus = null

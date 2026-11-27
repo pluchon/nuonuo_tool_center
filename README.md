@@ -20,7 +20,7 @@
   <img src="https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white" alt="TypeScript 6" />
   <img src="https://img.shields.io/badge/PGlite-%2B%20pgvector-336791?logo=postgresql&logoColor=white" alt="PGlite + pgvector" />
   <img src="https://img.shields.io/badge/onnxruntime-CPU%20%C2%B7%20int8-555555?logo=onnx&logoColor=white" alt="onnxruntime CPU int8" />
-  <img src="https://img.shields.io/badge/%E9%80%9A%E4%B9%89%E5%8D%83%E9%97%AE-%E7%99%BE%E7%82%BC-FF6A00?logo=alibabacloud&logoColor=white" alt="通义千问 · 百炼" />
+  <img src="https://img.shields.io/badge/%E9%98%BF%E9%87%8C%E4%BA%91%E7%99%BE%E7%82%BC-DeepSeek%20%2B%20Qwen-FF6A00?logo=alibabacloud&logoColor=white" alt="阿里云百炼 · DeepSeek + Qwen" />
 </p>
 
 <p align="center">
@@ -47,7 +47,7 @@
 | **分类与整理** | 自定义图片名称、分类标签及别名，并用「类目录」按主题归档；复制、移动和删除均支持撤销，删除走系统回收站；已归档的图片支持在弹窗或详情栏按单图/批量「回归源目录」或让「诺诺重新看」。 |
 | **检索与看图** | 支持按名字、标签、目录、方向、尺寸和导入时间筛选；按月分段网格搭配虚拟滚动，大图查看支持缩放、旋转、翻转与键盘切图。 |
 | **本地 R-18 分级** | 导入后在独立子进程用 CPU（int8 模型）后台慢速判图，明显的自动标上 R-18；你手动改过的分级结果永远优先。 |
-| **诺诺助手** | 可以直接用自然语言聊天或找图（只在类目录的已确认标签范围里检索），也能上传图片按画面找相似，或附带 Markdown 说明看图。 |
+| **诺诺助手** | 对话与看图问答由 DeepSeek 驱动，支持自然语言闲聊、联网检索与按图找相似；支持「全部类目录与已整理图片」范围热感知与缓存复用，开启 R-18 开关时可按已确认标签筛选，支持 `/compact` 上下文压缩与就地编辑重发。 |
 | **AI 建议** | 过了本地分级的非 R-18 新图自动交给诺诺看图，生成名字、标签、角色、作品和出处建议，支持逐条采纳、整张采纳以及单图重看。 |
 | **一键整理与用量统计** | 按你的目录规则拟好建目录和归档方案，批准后执行；「设置 → AI」里可直接查看按自然年切换的年度热力图、7天/15天/30天/6个月/1年趋势柱图、五维效率雷达与费用估算。 |
 | **外观定制** | 支持浅色、深色和跟随系统，多套主题色、主题背景及自定义壁纸，透明度与磨砂效果实时联动。 |

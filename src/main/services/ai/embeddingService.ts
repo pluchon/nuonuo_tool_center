@@ -55,6 +55,10 @@ export function configureEmbedding(next: EmbedConfig): void {
   config = next
 }
 
+export function getEmbeddingThumbsDir(): string {
+  return config?.thumbsDir ?? ''
+}
+
 // 有没有云端凭证
 function cloudReady(): boolean {
   return !!readCloudCredentials().dashscopeApiKey
@@ -229,10 +233,15 @@ export async function prepareRatedUpload(dataUrl: string, originalHash?: string)
   }
 }
 
-export async function uploadVector(dataUrl: string, originalHash?: string, dirs?: AiSearchFilter['dirs']): Promise<number[]> {
+export async function uploadVector(
+  dataUrl: string,
+  originalHash?: string,
+  dirs?: AiSearchFilter['dirs'],
+  includeOrganized = false
+): Promise<number[]> {
   const safe = await prepareRatedUpload(dataUrl, originalHash)
   if (originalHash) {
-    const indexed = await findIndexedUpload(originalHash, EMBEDDING_CONFIG.model, dirs)
+    const indexed = await findIndexedUpload(originalHash, EMBEDDING_CONFIG.model, dirs, includeOrganized)
     if (isEmbeddingVector(indexed)) {
       await recordLocalReuse()
       return indexed

@@ -555,6 +555,8 @@ export interface AiStreamEvent {
     | 'action_start'
     | 'action_end'
     | 'memory_notice'
+    | 'clear_stream'
+    | 'compacted'
     | 'reset'
     | 'done'
     | 'error'
@@ -566,6 +568,7 @@ export interface AiStreamEvent {
   status?: 'running' | 'done' | 'failed' | 'aborted'
   block?: AiTimelineBlock
   memoryNotice?: AiMemoryNotice
+  messageId?: number
 }
 
 export interface AiPolicyVO {
@@ -592,7 +595,7 @@ export interface AiMemoryNotice {
 
 // 对话里的一条消息：你说的话，或诺诺的回复
 export interface AiMessageVO {
-  scope?: DirKeyDTO | null
+  scope?: AiSearchScope | DirKeyDTO | null
   includeR18?: boolean
   canPredict?: boolean
   references?: AiImageReference[]
@@ -601,6 +604,7 @@ export interface AiMessageVO {
   memoryNotice?: AiMemoryNotice
   blocks?: AiTimelineBlock[]
   interrupted?: boolean
+  compactedAfter?: boolean
   id: number
   role: 'user' | 'assistant'
   text: string
@@ -636,7 +640,7 @@ export interface CategoryProposalVO {
   }>
 }
 
-export type AiSearchScope = Extract<DirKeyDTO, { kind: 'category' }>
+export type AiSearchScope = { kind: 'organized' } | Extract<DirKeyDTO, { kind: 'category' }>
 
 export interface AiPredictionDTO {
   selectionCount?: number
@@ -656,7 +660,7 @@ export interface AiRecalledDraft {
   attachments: AiAttachment[]
 }
 
-// 问诺诺：conversationId 为空时新开一段对话，scope 为空时搜索全部类目录。
+// 问诺诺：conversationId 为空时新开一段对话；scope 为 { kind: 'organized' } 时搜索全部类目录与已整理图片，为 null 时搜索全部类目录，为 { kind: 'category', name } 时搜索指定类目录。
 export interface AiAskDTO {
   references?: AiImageReference[]
   conversationId: number | null

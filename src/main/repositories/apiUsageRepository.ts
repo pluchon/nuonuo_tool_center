@@ -4,6 +4,7 @@ import { apiUsage } from '../db/schema'
 
 export interface ActiveApiUsageRow {
   api: string
+  model: string | null
   units: number
   estCost: string | null
   inputTokens: number
@@ -22,6 +23,7 @@ export async function findAllActiveApiUsage(): Promise<ActiveApiUsageRow[]> {
   return getDatabase().db
     .select({
       api: apiUsage.api,
+      model: apiUsage.model,
       units: apiUsage.units,
       estCost: apiUsage.estCost,
       inputTokens: apiUsage.inputTokens,

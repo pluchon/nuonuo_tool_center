@@ -266,7 +266,7 @@ export async function findImageRows(imageId: number): Promise<GalleryRow[]> {
 }
 
 // 这些图在磁盘上的全部位置（没进回收站的）
-export async function findRowsOfImages(imageIds: number[], search?: { includeR18: boolean; dirs?: AiSearchFilter['dirs'] }): Promise<GalleryRow[]> {
+export async function findRowsOfImages(imageIds: number[], search?: { includeR18: boolean; dirs?: AiSearchFilter['dirs']; includeOrganized?: boolean }): Promise<GalleryRow[]> {
   if (imageIds.length === 0) {
     return []
   }
@@ -280,7 +280,7 @@ export async function findRowsOfImages(imageIds: number[], search?: { includeR18
       and(
         sql`${image.id} = any(${sql.param(imageIds)}::bigint[])`,
         search ? confirmedForSearch : undefined,
-        search ? categoryPosition(search.dirs) : undefined,
+        search ? (search.includeOrganized ? undefined : categoryPosition(search.dirs)) : undefined,
         search && !search.includeR18 ? eq(image.isR18, false) : undefined,
         eq(image.deleteState, 0),
         eq(imageFile.deleteState, 0),

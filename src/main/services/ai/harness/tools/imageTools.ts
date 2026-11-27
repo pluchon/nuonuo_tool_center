@@ -1,7 +1,7 @@
 import { addImageExclusion } from '../../../../repositories/aiMemoryRepository'
 import { findImageBrief, findTagNamesOf, findVocabulary, visibleResultIds } from '../../../../repositories/aiSearchRepository'
 import { findCategories } from '../../../../repositories/tagRepository'
-import { scopeDirs } from '../../assistantReferences'
+import { scopeQuery } from '../../assistantReferences'
 import { defineTool, isToolError, parseToolJson, truncateLabel } from '../toolRegistry'
 import type { HarnessState, ToolEnv } from '../types'
 
@@ -37,8 +37,10 @@ async function resolveResultImage(
     return { sourceIds, error: '请指定当前结果中有效的图片序号或编号' }
   }
   const checkIncludeR18 = current ? env.includeR18 : Boolean(env.previousResults?.includeR18 && env.includeR18)
-  const checkDirs = current ? env.dirs : await scopeDirs(env.previousResults?.scope ?? null)
-  const visible = await visibleResultIds([targetId], checkIncludeR18, checkDirs)
+  const prevScope = current ? undefined : await scopeQuery(env.previousResults?.scope ?? null)
+  const checkDirs = current ? env.dirs : prevScope!.dirs
+  const checkIncludeOrganized = current ? env.includeOrganized : prevScope!.includeOrganized
+  const visible = await visibleResultIds([targetId], checkIncludeR18, checkDirs, checkIncludeOrganized)
   if (!visible.has(targetId)) {
     return { sourceIds, error: '这张图已不在原检索范围内' }
   }
@@ -116,12 +118,15 @@ export const getImageTool = defineTool({
         return { content: JSON.stringify({ error: '没有这张图' }), outcome: { type: 'metadata' } }
       }
       id = previous.ids[position - 1]
-      const visible = await visibleResultIds([id], previous.includeR18 && env.includeR18, await scopeDirs(previous.scope))
+      const prevScope = await scopeQuery(previous.scope)
+      const visible = await visibleResultIds([id], previous.includeR18 && env.includeR18, prevScope.dirs, prevScope.includeOrganized)
       if (!visible.has(id)) {
         return { content: JSON.stringify({ error: '这张图已不在原检索范围内' }), outcome: { type: 'metadata' } }
       }
     }
-    const brief = Number.isInteger(id) ? await findImageBrief(id, { dirs: env.dirs, includeR18: env.includeR18 }) : undefined
+    const brief = Number.isInteger(id)
+      ? await findImageBrief(id, { dirs: env.dirs, includeR18: env.includeR18, includeOrganized: env.includeOrganized })
+      : undefined
     if (!brief) {
       return { content: JSON.stringify({ error: '没有这张图' }), outcome: { type: 'metadata' } }
     }
@@ -244,8 +249,10 @@ export const excludeImageTool = defineTool({
     }
     const current = state.lastSearch?.outcome
     const checkIncludeR18 = current ? env.includeR18 : Boolean(env.previousResults?.includeR18 && env.includeR18)
-    const checkDirs = current ? env.dirs : await scopeDirs(env.previousResults?.scope ?? null)
-    const visible = await visibleResultIds(resolved.sourceIds, checkIncludeR18, checkDirs)
+    const prevScope = current ? undefined : await scopeQuery(env.previousResults?.scope ?? null)
+    const checkDirs = current ? env.dirs : prevScope!.dirs
+    const checkIncludeOrganized = current ? env.includeOrganized : prevScope!.includeOrganized
+    const visible = await visibleResultIds(resolved.sourceIds, checkIncludeR18, checkDirs, checkIncludeOrganized)
     const imageIds = resolved.sourceIds.filter((item) => item !== resolved.id && visible.has(item))
     const text = permanent ? '记住了，以后检索时会排除这张图。' : '这次先把这张图收起来。'
     return {

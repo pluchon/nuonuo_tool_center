@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AI_CONTEXT_WINDOW } from '../../src/shared/api'
-import { contextUsage, fitContext } from '../../src/main/services/ai/contextWindow'
+import { contextUsage, estimatePromptTokens, fitContext } from '../../src/main/services/ai/contextWindow'
 import type { PromptMessage } from '../../src/main/services/ai/promptPrefix'
 
 describe('诺诺对话上下文', () => {
@@ -40,5 +40,12 @@ describe('诺诺对话上下文', () => {
     const usage = { inputTokens: 500, outputTokens: 12, cachedTokens: 420, cacheWriteTokens: 6, imageTokens: 22, searchCount: 0 }
     expect(contextUsage(usage, 2000, {})).toEqual({ usedTokens: 512, estimated: false })
     expect(contextUsage(undefined, 100, 'abc')).toEqual({ usedTokens: 105, estimated: true })
+  })
+
+  it('estimatePromptTokens 对中文提示给出贴近真实模型分词的数量级而非 UTF-8 字节膨胀值', () => {
+    const sample = '诺诺是一个白发紫瞳的可爱猫娘助手，会帮用户检索图片并保留对话上下文。'.repeat(20)
+    const tokens = estimatePromptTokens([{ role: 'system', content: sample }, { role: 'user', content: '查一下图库' }])
+    expect(tokens).toBeLessThan(Buffer.byteLength(sample) * 0.4)
+    expect(tokens).toBeGreaterThan(200)
   })
 })

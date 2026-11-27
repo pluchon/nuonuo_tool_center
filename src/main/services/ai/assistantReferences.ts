@@ -1,27 +1,45 @@
-import type { AiImageReference, DirKeyDTO } from '@shared/api'
+import type { AiImageReference, AiSearchScope, DirKeyDTO } from '@shared/api'
 import { BizError } from '../../common/bizError'
 import { currentReferenceRecords, findReferenceOrigins, type ReferenceScope } from '../../repositories/aiReferenceRepository'
 import type { AiMessageEntity } from '../../repositories/aiConversationRepository'
-import { visibleResultIds } from '../../repositories/aiSearchRepository'
+import { visibleResultIds, type AiSearchFilter } from '../../repositories/aiSearchRepository'
 import { findActiveRootsByKind } from '../../repositories/libraryRootRepository'
 
-// “在哪里找”换成检索用的目录条件
-export async function scopeDirs(scope: DirKeyDTO | null): Promise<Array<{ rootId: number; prefix: string }> | undefined> {
+// 统一解析助手范围：指定类目录 / 全部类目录 / 全部类目录与已整理图片
+export async function scopeQuery(
+  scope: AiSearchScope | DirKeyDTO | null | undefined
+): Promise<{ dirs: AiSearchFilter['dirs']; includeOrganized: boolean }> {
   if (!scope) {
-    return undefined
+    return { dirs: undefined, includeOrganized: false }
+  }
+  if (scope.kind === 'organized') {
+    return { dirs: undefined, includeOrganized: true }
   }
   if (scope.kind === 'source') {
-    return []
+    return { dirs: [], includeOrganized: false }
   }
   const [catRoot] = await findActiveRootsByKind('CATEGORY')
-  return [{ rootId: catRoot?.id ?? -1, prefix: scope.name }]
+  return { dirs: [{ rootId: catRoot?.id ?? -1, prefix: scope.name }], includeOrganized: false }
+}
+
+// “在哪里找”换成检索用的目录条件
+export async function scopeDirs(scope: AiSearchScope | DirKeyDTO | null): Promise<Array<{ rootId: number; prefix: string }> | undefined> {
+  return (await scopeQuery(scope)).dirs
 }
 
 export async function visibleReferenceResults(ids: number[], origin: ReferenceScope, current: ReferenceScope): Promise<Set<number>> {
   const allowR18 = origin.includeR18 === true && current.includeR18 === true
-  const allowed = await visibleResultIds(ids, allowR18, await scopeDirs(origin.scope ?? null))
-  if (!current.scope || (current.scope.kind === 'category' && origin.scope?.kind === 'category' && origin.scope.name === current.scope.name)) return allowed
-  return visibleResultIds([...allowed], allowR18, await scopeDirs(current.scope))
+  const originQuery = await scopeQuery(origin.scope ?? null)
+  const currentQuery = await scopeQuery(current.scope ?? null)
+  const allowed = await visibleResultIds(ids, allowR18, originQuery.dirs, originQuery.includeOrganized)
+  if (
+    currentQuery.includeOrganized ||
+    (!current.scope && !originQuery.includeOrganized) ||
+    (current.scope?.kind === 'category' && origin.scope?.kind === 'category' && origin.scope.name === current.scope.name)
+  ) {
+    return allowed
+  }
+  return visibleResultIds([...allowed], allowR18, currentQuery.dirs, currentQuery.includeOrganized)
 }
 
 function resultGroups(refs: AiImageReference[]): Map<number, AiImageReference[]> {

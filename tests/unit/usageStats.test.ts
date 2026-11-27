@@ -208,4 +208,31 @@ describe('getAiUsageStats', () => {
     expect(radarMap.successRate).toBe(75) // 3 / 4 = 75%
     expect(radarMap.costSaved).toBeCloseTo((0.83 / (1.894 + 0.83)) * 100, 1)
   })
+
+  it('按模型单价区分 deepseek-v4.1-flash-1017 与 qwen3.8-flash 费用估算', async () => {
+    const fixedNow = new Date(2026, 10, 27, 10, 0, 0)
+    await getDatabase().db.insert(apiUsage).values([
+      // fresh=500_000, cached=500_000 (0.2x -> 100_000), output=100_000
+      // cost = (600_000 * 0.283 + 100_000 * 1.131) / 1e6 = 0.1698 + 0.1131 = 0.2829
+      {
+        api: 'chat',
+        model: 'deepseek-v4.1-flash-1017',
+        units: 1,
+        estCost: '0',
+        inputTokens: 1_000_000,
+        cachedTokens: 500_000,
+        cacheWriteTokens: 0,
+        imageTokens: 0,
+        outputTokens: 100_000,
+        searchCount: 0,
+        batch: false,
+        latencyMs: 500,
+        error: null,
+        createTime: new Date(2026, 10, 27, 9, 0, 0)
+      }
+    ])
+    const stats = await getAiUsageStats(fixedNow)
+    const chatRow = stats.byKind.find((row) => row.api === 'chat')!
+    expect(chatRow.estCostYuan).toBeCloseTo(0.2829, 6)
+  })
 })

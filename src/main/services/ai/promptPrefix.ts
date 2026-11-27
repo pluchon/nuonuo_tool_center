@@ -23,6 +23,8 @@ export interface PrefixParts {
   rules: string
   // ② 核心档案和标签词表快照（已序列化），最多一天变一次；对话锁定开始时的版本
   profile: string
+  // 固定少样本语气示范对（放在 ①② 之后、③ 之前，整体参与前缀缓存）
+  examples?: readonly PromptMessage[]
   // ③ 这段对话的历史，只往后追加
   history: PromptMessage[]
   // ④ 每次都变的内容：当前时间、检索到的记忆、这句话或这张图，永远放最后
@@ -67,21 +69,25 @@ function withMark(message: PromptMessage): PromptMessage {
   return { ...message, content: parts }
 }
 
-// 按 ①②③④ 的顺序拼出消息；①② 合成一条 system，③ 原样接上，④ 放最后且永不打标记
+// 按 ①② → 少样本示范 → ③ → ④ 的顺序拼出消息；①② 合成一条 system，③ 和示范末尾各打断点，④ 放最后且永不打标记
 export function buildMessages(parts: PrefixParts): PromptMessage[] {
   const systemText = parts.profile ? `${parts.rules}\n\n${parts.profile}` : parts.rules
   const system: PromptMessage = { role: 'system', content: [{ type: 'text', text: systemText }] }
+  const examples = parts.examples ? [...parts.examples] : []
   const history = [...parts.history]
   const messages: PromptMessage[] = []
   if (parts.cache) {
     messages.push(withMark(system))
+    if (examples.length > 0) {
+      examples[examples.length - 1] = withMark(examples[examples.length - 1])
+    }
     if (history.length > 0) {
       history[history.length - 1] = withMark(history[history.length - 1])
     }
   } else {
     messages.push(system)
   }
-  messages.push(...history, ...parts.tail)
+  messages.push(...examples, ...history, ...parts.tail)
   return messages
 }
 

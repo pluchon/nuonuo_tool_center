@@ -491,5 +491,10 @@ describe('assistant store queue, abort & stream events', () => {
     emit({ kind: 'status', text: '收尾中' })
     emit({ kind: 'aborted' })
     expect(store.streamingStatus).toBeNull()
+
+    emit({ kind: 'delta', text: '找到啦，给你看看' })
+    expect(store.streamingText).toBe('找到啦，给你看看')
+    emit({ kind: 'action_start', actionId: 'a3', tool: 'search_images', summary: '检索图库…' })
+    expect(store.streamingText).toBe('')
   })
 })

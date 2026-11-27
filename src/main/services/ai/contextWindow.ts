@@ -42,6 +42,42 @@ export function fitContext(prefix: PromptMessage[], history: PromptMessage[], ta
   }
 }
 
+export function estimateTextTokens(text: string): number {
+  let cjk = 0
+  let other = 0
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0
+    if (
+      (cp >= 0x4e00 && cp <= 0x9fff) ||
+      (cp >= 0x3400 && cp <= 0x4dbf) ||
+      (cp >= 0x3000 && cp <= 0x30ff) ||
+      (cp >= 0xff00 && cp <= 0xffef)
+    ) {
+      cjk++
+    } else {
+      other++
+    }
+  }
+  return Math.ceil(cjk * 0.72 + other * 0.28)
+}
+
+export function estimatePromptTokens(messages: readonly PromptMessage[], tools?: unknown[]): number {
+  let total = tools?.length ? estimateTextTokens(JSON.stringify(tools)) : 0
+  for (const m of messages) {
+    total += 8
+    if (typeof m.content === 'string') {
+      total += estimateTextTokens(m.content)
+    } else {
+      for (const part of m.content) {
+        total += part.type === 'text' ? estimateTextTokens(part.text) : 256
+      }
+    }
+    if (m.tool_call_id) total += estimateTextTokens(m.tool_call_id)
+    if (m.tool_calls?.length) total += estimateTextTokens(JSON.stringify(m.tool_calls))
+  }
+  return Math.max(1, total)
+}
+
 export function contextUsage(usage: NormalizedUsage | undefined, inputBound: number, output: unknown): AiContextUsage {
   if (usage && usage.inputTokens > 0) {
     return { usedTokens: usage.inputTokens + (usage.outputTokens || 0), estimated: false }

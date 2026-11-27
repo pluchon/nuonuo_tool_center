@@ -1,9 +1,10 @@
-import { BAILIAN_CONFIG, EMBEDDING_CONFIG } from '../../../config/cloudConfig'
+import { BAILIAN_CONFIG, EMBEDDING_CONFIG, readCloudCredentials } from '../../../config/cloudConfig'
 import { getLogger } from '../../../common/logger'
-import { readCloudCredentials } from '../../../config/cloudConfig'
+import { getCachedDictionary, setCachedDictionary } from '../../../common/readCache'
 import { excludedImageIds } from '../../../repositories/aiMemoryRepository'
 import { cachedSearchValue, searchCacheKey } from '../../../repositories/aiSearchCacheRepository'
 import {
+  countConfirmedOutsideCategory,
   countEmbeddings,
   findDirNames,
   findVocabulary,
@@ -35,14 +36,21 @@ export interface SearchOutcome {
   allAlreadyShown?: boolean
 }
 
-// 词典：标签（含分类名、别名）和目录名
-export async function loadDictionary() {
-  const [vocab, categories, dirs] = await Promise.all([findVocabulary(true), findCategories(), findDirNames()])
+// 词典：标签（含分类名、别名）和目录名（按范围是否包含已整理图片分槽位走版本化缓存）
+export async function loadDictionary(includeOrganized = false) {
+  const cached = getCachedDictionary<{
+    tags: Array<{ id: number; name: string; aliases: string[]; category: string; general: boolean }>
+    dirs: Awaited<ReturnType<typeof findDirNames>>
+  }>(includeOrganized)
+  if (cached) return cached
+  const [vocab, categories, dirs] = await Promise.all([findVocabulary(true, undefined, false, includeOrganized), findCategories(), findDirNames()])
   const catName = new Map(categories.map((c) => [c.id, c.name]))
-  return {
+  const dict = {
     tags: vocab.map((t) => ({ id: t.id, name: t.name, aliases: t.aliases, category: catName.get(t.categoryId) ?? '标签', general: t.general })),
     dirs
   }
+  setCachedDictionary(includeOrganized, dict)
+  return dict
 }
 
 // “怎么找的”那行字：不用“·”，条件之间用逗号
@@ -55,14 +63,32 @@ export function localReply(found: number): string {
   return found ? '' : '没找到符合条件的图片。'
 }
 
-export async function emptyScopeText(dirs: AiSearchFilter['dirs'], includeR18: boolean): Promise<string> {
-  if (!includeR18 && (await hasSearchableImage(dirs, true))) {
-    return '这个范围里现在只收着标为 R-18 的图片呢，如果想一起找的话，把下面的 R-18 开关打开就行啦~'
+export async function emptyScopeText(
+  dirs: AiSearchFilter['dirs'],
+  includeR18: boolean,
+  includeOrganized = false
+): Promise<string> {
+  if (!includeR18 && (await hasSearchableImage(dirs, true, includeOrganized))) {
+    return '啊？这片范围里只藏着标 R-18 的图，真想看你自己把下面的 R-18 开关打开嘛，杂鱼。'
   }
-  if (dirs?.length && (await hasAnyImageInScope(dirs, includeR18))) {
-    return '诺诺翻了一圈，这个目录里的图片还没确认标签或还在待复核，暂时没法直接搜图，确认好标签再来找我吧~'
+  if (await hasAnyImageInScope(dirs, includeR18, includeOrganized)) {
+    if (includeOrganized) {
+      return '唔…翻了一圈发现图库里的图还没确认标签或还在待复核，没法直接搜呀，先去把标签确认了再来找我。'
+    }
+    return dirs?.length
+      ? '唔…翻了一圈发现这个目录里的图还没确认标签或还在待复核，没法直接搜呀，确认好了再来。'
+      : '诺诺把类目录翻了一遍，里面的图还没确认标签或还在待复核，暂时搜不了，确认好标签再来找我吧。'
   }
-  return '诺诺把类目录翻了一遍，这边还没有已经归档并确认过标签的图片呢；先把喜欢且核对过的图放进类目录，我就能立刻帮你找到啦 ฅ^•ﻌ•^ฅ'
+  if (includeOrganized) {
+    return '啊这……图库翻到底了，连一张确认过标签的图都没有嘛！快去确认标签或者把图放进类目录，我才找得到呀。'
+  }
+  if (!dirs) {
+    const outsideCount = await countConfirmedOutsideCategory(includeR18)
+    if (outsideCount > 0) {
+      return `诺诺把类目录翻了一遍，目前类目录里还是空的嘛；不过有 ${outsideCount} 张已经确认好标签的图还留在源目录里，杂鱼自己挪进类目录我才方便找呀。`
+    }
+  }
+  return '诺诺把类目录翻了一遍，这边还没有归档并确认过标签的图嘛，臭杂鱼先把核对过的图放进类目录再说。'
 }
 
 export function ordinaryCardCaption(value: unknown, outcome: SearchOutcome): string | undefined {
@@ -220,8 +246,12 @@ export async function runSearch(
   includeR18: boolean,
   tags: DictTag[],
   semantic?: AiSearchFilter['vector'],
-  candidateIds?: number[]
+  candidateIds?: number[],
+  includeOrganized = false
 ): Promise<SearchOutcome> {
+  if (spec.onlyR18 && !includeR18) {
+    return { imageIds: [], ordinaryIds: [], evidence: { methods: {}, tagConditions: [] } }
+  }
   const requiredGroups = (spec.requiredWords ?? []).map((word) => [word])
   const base = {
     ids: candidateIds,
@@ -230,7 +260,8 @@ export async function runSearch(
     orientation: spec.orientation,
     recentDays: spec.recent ? RECENT_DAYS : undefined,
     untagged: spec.untagged,
-    dirs
+    dirs,
+    includeOrganized
   }
   const visualInclude = spec.visualInclude ?? []
   const visualExclude = spec.visualExclude ?? []
@@ -238,15 +269,15 @@ export async function runSearch(
   const hasKeywordFilter = spec.keywordGroups.length > 0
   const hasHardFilter =
     base.tagGroups.length > 0 || requiredGroups.length > 0 || !!base.orientation || !!base.recentDays || !!base.untagged
-  const hasLiteral = hasHardFilter || hasKeywordFilter || (!semantic && !hasVisualFilter)
+  const hasLiteral = Boolean(spec.onlyR18) || hasHardFilter || hasKeywordFilter || (!semantic && !hasVisualFilter)
 
   const preferredTagGroups = base.keywordGroups.map((words) =>
     tags.filter((tag) => [tag.name, ...tag.aliases].some((name) => words.includes(name.toLowerCase()))).map((tag) => tag.id)
   )
   const empty: AiSearchHit = { ids: [], total: 0 }
-  const normal = hasLiteral ? await searchImages({ ...base, preferredTagGroups, r18: 'exclude' }) : empty
+  const normal = !spec.onlyR18 && hasLiteral ? await searchImages({ ...base, preferredTagGroups, r18: 'exclude' }) : empty
   const protectedHits =
-    includeR18 && hasLiteral
+    includeR18 && (hasLiteral || Boolean(spec.onlyR18))
       ? await searchImages({
           ...base,
           preferredTagGroups,
@@ -255,7 +286,7 @@ export async function runSearch(
       : empty
 
   const scopeFilter = { ...base, keywordGroups: requiredGroups }
-  const visual = semantic ? await searchImages({ ...scopeFilter, r18: 'exclude', vector: semantic }) : empty
+  const visual = !spec.onlyR18 && semantic ? await searchImages({ ...scopeFilter, r18: 'exclude', vector: semantic }) : empty
 
   let literalOrdinaryIds = normal.ids
   let featureMatches: number[] = []
@@ -263,7 +294,7 @@ export async function runSearch(
   let featureUnavailable = false
   let checkedMissingVectors = false
 
-  if (hasVisualFilter) {
+  if (hasVisualFilter && !spec.onlyR18) {
     const literalSet = new Set(normal.ids)
     // 如果同时给了关键词同义词（如「猫娘」与 cat_ears），已由文字直接确认的普通图无需再耗费推理，
     // 除非显式传了 visualExclude 需要复核排除条件。
@@ -342,13 +373,15 @@ export async function runSearch(
 // 按上传的图找相似的（只在有向量的普通图里找）
 export async function searchByImage(
   image: Extract<StoredAttachment, { kind: 'image' }>,
-  dirs: Array<{ rootId: number; prefix: string }> | undefined
+  dirs: Array<{ rootId: number; prefix: string }> | undefined,
+  includeOrganized = false
 ): Promise<number[]> {
-  const vec = await uploadVector(image.dataUrl, image.originalHash, dirs)
+  const vec = await uploadVector(image.dataUrl, image.originalHash, dirs, includeOrganized)
   const hit = await searchImages({
     tagGroups: [],
     keywordGroups: [],
     dirs,
+    includeOrganized,
     r18: 'exclude',
     vector: { values: vec, model: EMBEDDING_CONFIG.model, minSimilarity: IMAGE_MIN_SIMILARITY }
   })

@@ -50,7 +50,9 @@ export function usePrediction(blocked: () => boolean, revision: () => number) {
         store.changingTurn || store.recalledMessageId !== null || store.draft || store.attachments.length ||
         !store.currentId || reply?.role !== 'assistant' || question?.role !== 'user') return null
     const scope = store.scope ? { ...store.scope } : null
-    const sameScope = (scope?.name ?? null) === (question.scope?.kind === 'category' ? question.scope.name : null) &&
+    const sameScope =
+      (scope?.kind ?? null) === (question.scope?.kind ?? null) &&
+      (scope?.kind === 'category' ? scope.name : null) === (question.scope?.kind === 'category' ? question.scope.name : null) &&
       store.includeR18 === (question.includeR18 === true)
     if (!sameScope) return null
     const references = store.references.slice(0, 3).map(r => ({ ...r, name: '' }))

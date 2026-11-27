@@ -98,9 +98,9 @@ function resolveStateLabel(refCount: number, count: number, picCount: number, al
 
 export async function predictNext(dto: AiPredictionDTO): Promise<string | null> {
   if (!dto || !Number.isSafeInteger(dto.conversationId) || !Number.isSafeInteger(dto.replyId) ||
-      typeof dto.includeR18 !== 'boolean' || (dto.scope !== null && dto.scope?.kind !== 'category') ||
+      typeof dto.includeR18 !== 'boolean' || (dto.scope !== null && dto.scope?.kind !== 'category' && dto.scope?.kind !== 'organized') ||
       (dto.references !== undefined && (!Array.isArray(dto.references) || dto.references.length > SAMPLE))) return null
-  const row = await findPredictionContext(dto.conversationId, dto.replyId, dto.scope?.name ?? null, dto.includeR18)
+  const row = await findPredictionContext(dto.conversationId, dto.replyId, dto.scope?.kind ?? null, dto.scope?.kind === 'category' ? dto.scope.name : null, dto.includeR18)
   if (!row) return null
   const refsInput = dto.references ?? []
   if (!refsInput.length && row.saved) {

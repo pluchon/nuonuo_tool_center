@@ -19,6 +19,7 @@ export interface RecentTurnRow {
 export async function findPredictionContext(
   conversationId: number,
   replyId: number,
+  scopeKind: string | null,
   scopeName: string | null,
   includeR18 = false
 ): Promise<PredictionContextRow | null> {
@@ -39,10 +40,11 @@ export async function findPredictionContext(
     from ai_message a join ai_conversation c on c.id=a.conversation_id and c.delete_state=0
     join lateral (select content from ai_message where conversation_id=c.id and role='USER' and delete_state=0 and id<a.id order by id desc limit 1) q on true
     where c.id=$1 and a.id=$2 and a.delete_state=0 and a.role='ASSISTANT'
-      and q.content->'scope'->>'name' is not distinct from $3::text
-      and coalesce((q.content->>'includeR18')::boolean, false) = $4::boolean
+      and q.content->'scope'->>'kind' is not distinct from $3::text
+      and q.content->'scope'->>'name' is not distinct from $4::text
+      and coalesce((q.content->>'includeR18')::boolean, false) = $5::boolean
       and not exists (select 1 from ai_message where conversation_id=c.id and delete_state=0 and id>a.id)`,
-    [conversationId, replyId, scopeName, includeR18]
+    [conversationId, replyId, scopeKind, scopeName, includeR18]
   )
   return row ?? null
 }

@@ -38,6 +38,7 @@ export interface FastPathInput {
   history: AiMessageEntity[]
   attachments: StoredAttachment[]
   dirs: AiSearchFilter['dirs']
+  includeOrganized: boolean
   scopeName: string | null
   scopeConds: CondLabel[]
   dict: { tags: Array<DictTag & { general: boolean }>; dirs: DictDir[] }
@@ -57,7 +58,7 @@ export interface FastPathResult {
 
 // 确定性零成本快路径：只拦截 100% 明确的指令（结果追问、引用读取、显式提案、纯以图搜图、空范围保护和离线降级）
 export async function tryFastPath(input: FastPathInput): Promise<FastPathResult> {
-  const { user, history, attachments, dirs, scopeName, scopeConds, dict, cloudReady, callModel, visibleForTurn } = input
+  const { user, history, attachments, dirs, includeOrganized, scopeName, scopeConds, dict, cloudReady, callModel, visibleForTurn } = input
   const u = user.content as UserContent
 
   const followup = attachments.length ? null : await resultFollowup(u.text, u.references ?? [], history, user.id, visibleForTurn)
@@ -99,9 +100,13 @@ export async function tryFastPath(input: FastPathInput): Promise<FastPathResult>
 
   const image = attachments.find((a) => a.kind === 'image')
   const imageLookup = image && !u.text.trim() && attachments.length === 1 && !reference?.modelNote
-  if (imageLookup && !(await hasSearchableImage(dirs, false))) {
+  if (imageLookup && !(await hasSearchableImage(dirs, false, includeOrganized))) {
     return {
-      content: { text: '当前类目录范围内没有可按画面检索的普通图片。', how: null, imageIds: [] },
+      content: {
+        text: includeOrganized ? '当前还没有可按画面检索的已整理普通图片。' : '当前类目录范围内没有可按画面检索的普通图片。',
+        how: null,
+        imageIds: []
+      },
       hasInputContext,
       query: u.text,
       reference
@@ -110,7 +115,7 @@ export async function tryFastPath(input: FastPathInput): Promise<FastPathResult>
   if (imageLookup) {
     let imageIds: number[]
     try {
-      imageIds = await searchByImage(image, dirs)
+      imageIds = await searchByImage(image, dirs, includeOrganized)
     } catch (err) {
       throw classifyCloudError(err)
     }
@@ -120,7 +125,7 @@ export async function tryFastPath(input: FastPathInput): Promise<FastPathResult>
         how: `按你传的图找了相似的${scopeConds.length ? `（${scopeConds.map(([k, v]) => `${k}「${v}」`).join('，')}）` : ''}，找到 ${imageIds.length} 张`,
         imageIds,
         evidence: { methods: Object.fromEntries(imageIds.map((id) => [id, 'vector' as const])) },
-        incomplete: (await missingSearchVector(EMBEDDING_CONFIG.model, { dirs, tagGroups: [], keywordGroups: [] }))
+        incomplete: (await missingSearchVector(EMBEDDING_CONFIG.model, { dirs, includeOrganized, tagGroups: [], keywordGroups: [] }))
           ? '部分图片尚无画面向量'
           : undefined
       },
@@ -155,10 +160,11 @@ export async function tryFastPath(input: FastPathInput): Promise<FastPathResult>
     }
   }
 
-  const explicit = hasInputContext ? null : routeTagRequest(rawInput, dict.tags, dict.dirs)
+  const visibleTags = dict.tags.filter((t) => u.includeR18 || t.general)
+  const explicit = hasInputContext ? null : routeTagRequest(rawInput, visibleTags, dict.dirs)
   const lastReply = history.findLast((row) => row.role === 'ASSISTANT')?.content as AssistantContent | undefined
   const implicitLookup = !lastReply || !!lastReply.how || !!refinement || requestedSearch(rawInput) !== null || !cloudReady
-  const routed = hasInputContext ? null : explicit ?? (implicitLookup ? routeLocally(rawInput, dict.tags, dict.dirs) : null)
+  const routed = hasInputContext ? null : explicit ?? (implicitLookup ? routeLocally(rawInput, visibleTags, dict.dirs) : null)
 
   // 空范围保护：用户在空目录里直接发找图请求或短特征词时，不浪费云端请求（对话指代语句除外）
   const likelyEmptyScopeLookup =
@@ -168,9 +174,9 @@ export async function tryFastPath(input: FastPathInput): Promise<FastPathResult>
       (scopeName !== null &&
         Array.from(rawInput.trim()).length <= 8 &&
         !/[？?]|刚才|上次|这|那|什么|怎么|为什么|聊聊|讲讲/u.test(rawInput)))
-  if (likelyEmptyScopeLookup && !(await hasSearchableImage(dirs, u.includeR18))) {
+  if (likelyEmptyScopeLookup && !(await hasSearchableImage(dirs, u.includeR18, includeOrganized))) {
     return {
-      content: { text: await emptyScopeText(dirs, u.includeR18), how: null, imageIds: [] },
+      content: { text: await emptyScopeText(dirs, u.includeR18, includeOrganized), how: null, imageIds: [] },
       hasInputContext,
       query,
       refinement,
@@ -197,13 +203,15 @@ export async function tryFastPath(input: FastPathInput): Promise<FastPathResult>
       }
     }
     if (supplement?.visualExclude?.length) spec.visualExclude = supplement.visualExclude
+    const routeIncludeOrganized = routeDirs ? false : includeOrganized
     const { imageIds, evidence, incomplete } = await runSearch(
       spec,
       routeDirs,
       u.includeR18,
       dict.tags,
       supplement?.vector,
-      candidateIds
+      candidateIds,
+      routeIncludeOrganized
     )
     const conds = [...scopeConds, ...routed.conds.filter((c) => !(dirs && c[0] === '范围'))]
     if (supplement) conds.push(['画面', supplement.text])
@@ -215,7 +223,7 @@ export async function tryFastPath(input: FastPathInput): Promise<FastPathResult>
         evidence,
         incomplete:
           incomplete ??
-          (spec.keywordGroups.length && !supplement && (await hasSearchableImage(routeDirs, false))
+          (spec.keywordGroups.length && !supplement && (await hasSearchableImage(routeDirs, false, routeIncludeOrganized))
             ? '画面相似度检索暂不可用'
             : undefined)
       },

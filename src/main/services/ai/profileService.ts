@@ -8,9 +8,9 @@ import { stableStringify } from './promptPrefix'
 // 词表里每个分类最多带多少个标签
 const PER_CATEGORY_MAX = 80
 
-// 当前图库的标签词表：仅取类目录里已确认（无待审 AI 建议）且用在非 R-18 图上的标签
+// 当前图库的标签词表：覆盖类目录与已整理图片中已确认（无待审 AI 建议）且用在非 R-18 图上的标签
 export async function currentVocab(): Promise<TagVocab> {
-  const [tags, categories] = await Promise.all([findVocabulary(true), findCategories()])
+  const [tags, categories] = await Promise.all([findVocabulary(true, undefined, false, true), findCategories()])
   const catName = new Map(categories.map((c) => [c.id, c.name]))
   const vocab: TagVocab = {}
   for (const t of tags) {

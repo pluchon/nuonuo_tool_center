@@ -46,6 +46,5 @@ onMounted(() => {
   overflow-wrap: anywhere;
   outline: none;
   cursor: text;
-  box-shadow: inset 0 0 0 1px var(--a-line);
 }
 </style>

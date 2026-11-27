@@ -344,8 +344,13 @@ async function withAiOrder(items: GalleryItemVO[]): Promise<GalleryItemVO[]> {
 }
 
 // 按给定顺序把图片 id 换成网格项（诺诺回复里的结果图）；已经删掉、没有位置的图跳过
-export async function itemsOfImages(imageIds: number[], includeR18 = false, dirs?: AiSearchFilter['dirs']): Promise<GalleryItemVO[]> {
-  const rows = await findRowsOfImages(imageIds, { includeR18, dirs })
+export async function itemsOfImages(
+  imageIds: number[],
+  includeR18 = false,
+  dirs?: AiSearchFilter['dirs'],
+  includeOrganized = false
+): Promise<GalleryItemVO[]> {
+  const rows = await findRowsOfImages(imageIds, { includeR18, dirs, includeOrganized })
   const offline = await offlineRoots(rows)
   const byImage = new Map<number, GalleryRow[]>()
   for (const row of rows) {

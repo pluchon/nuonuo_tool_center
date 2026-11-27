@@ -30,6 +30,7 @@ export interface SearchSpec {
   orientation?: 'portrait' | 'landscape' | 'square'
   recent?: boolean
   untagged?: boolean
+  onlyR18?: boolean
 }
 
 // 一条给人看的条件：如 ["角色", "甘雨"]、["方向", "竖图"]
